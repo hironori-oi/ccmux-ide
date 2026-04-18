@@ -28,6 +28,45 @@
 import { runAgentQuery, type AgentQueryOptions } from "./agent.js";
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
+// --- crash diagnostics ---
+// Tauri spawn 経由で Node.js が uncaught exception crash するケースの診断用。
+// stack trace を短く stderr に書き出し、toast 側に流す。
+process.on("uncaughtException", (err: Error) => {
+  try {
+    process.stderr.write(
+      `UNCAUGHT: ${err?.stack ? err.stack.split("\n").slice(0, 5).join(" | ") : String(err)}\n`
+    );
+  } catch {
+    // stderr も書けない場合はあきらめ
+  }
+});
+process.on("unhandledRejection", (reason: unknown) => {
+  try {
+    process.stderr.write(`UNHANDLED_REJECTION: ${String(reason).slice(0, 500)}\n`);
+  } catch {}
+});
+process.on("exit", (code: number) => {
+  try {
+    process.stderr.write(`EXIT: code=${code}\n`);
+  } catch {}
+});
+// stdout の write 時エラー (EPIPE 等) を握りつぶさず stderr に出す
+const __origStdoutWrite = process.stdout.write.bind(process.stdout);
+(process.stdout as unknown as { write: typeof __origStdoutWrite }).write = ((
+  chunk: string | Uint8Array,
+  ...rest: unknown[]
+): boolean => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return __origStdoutWrite(chunk as any, ...(rest as any[]));
+  } catch (err) {
+    try {
+      process.stderr.write(`STDOUT_WRITE_ERR: ${String(err).slice(0, 300)}\n`);
+    } catch {}
+    return false;
+  }
+}) as typeof process.stdout.write;
+
 interface PromptRequest {
   type: "prompt";
   id: string;
