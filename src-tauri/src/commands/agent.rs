@@ -77,6 +77,27 @@ fn resolve_sidecar_entry(app: &AppHandle) -> Result<(std::path::PathBuf, Sidecar
         }
     }
 
+    // --- 3b) `.exe` ディレクトリの直接ジョイン (Windows packaged app の実配置向け) ---
+    // 実測: `C:\Program Files\ccmux-ide\ccmux-ide.exe` の隣に `_up_\sidecar\dist\index.mjs`
+    // が置かれる。`BaseDirectory::Resource` が `/` -> `\` 変換で解決失敗するケースへの保険。
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let candidates = [
+                "_up_/sidecar/dist/index.mjs",
+                "_up_\\sidecar\\dist\\index.mjs",
+                "resources/_up_/sidecar/dist/index.mjs",
+                "resources/sidecar/dist/index.mjs",
+                "sidecar/dist/index.mjs",
+            ];
+            for rel in &candidates {
+                let p = exe_dir.join(rel);
+                if p.exists() {
+                    return Ok((p, SidecarMode::Bundled));
+                }
+            }
+        }
+    }
+
     // --- 4) dev fallback: src/index.ts (プロジェクトルート) ---
     let src_entry = cwd.join("sidecar/src/index.ts");
     if src_entry.exists() {
@@ -105,8 +126,9 @@ fn resolve_sidecar_entry(app: &AppHandle) -> Result<(std::path::PathBuf, Sidecar
     }
 
     Err(format!(
-        "sidecar entry not found. tried dist/index.mjs and src/index.ts from cwd={}",
-        cwd.display()
+        "sidecar entry not found. cwd={}, exe={:?}. tried: cwd-based (dist/index.mjs, src/index.ts), Tauri resource (_up_/sidecar/dist/index.mjs, sidecar/dist/index.mjs), exe-dir-based (_up_/sidecar/dist/index.mjs ほか)",
+        cwd.display(),
+        std::env::current_exe().ok().map(|p| p.display().to_string())
     ))
 }
 
