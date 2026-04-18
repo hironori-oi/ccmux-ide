@@ -38,7 +38,8 @@
     ],
     "resources": [
       "../sidecar/dist/**/*",
-      "../sidecar/package.json"
+      "../sidecar/package.json",
+      "../sidecar/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**/*"
     ],
     "windows": {
       "nsis": {

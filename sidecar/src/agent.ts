@@ -19,6 +19,39 @@
  */
 
 import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import path from "node:path";
+import fs from "node:fs";
+
+/**
+ * Claude Code native binary の実パスを解決する。
+ *
+ * Agent SDK v0.2.114 は platform-specific optional deps
+ * `@anthropic-ai/claude-agent-sdk-{platform}-{arch}` として native binary
+ * (Linux=`claude` ELF / Windows=`claude.exe` 236MB) を同梱する。
+ * esbuild で JS バンドルしてもこの binary は bundle 内に含められないため、
+ * packaged app では Tauri resources 経由で sidecar/node_modules に物理配置し、
+ * ここで絶対パスを解決して SDK に `pathToClaudeCodeExecutable` で明示渡しする。
+ */
+function findClaudeExecutable(): string | undefined {
+  const platform = process.platform; // "win32" | "darwin" | "linux"
+  const arch = process.arch;         // "x64" | "arm64"
+  const ext = platform === "win32" ? ".exe" : "";
+
+  const pkgRel = path.join(
+    "node_modules",
+    "@anthropic-ai",
+    `claude-agent-sdk-${platform}-${arch}`,
+    `claude${ext}`
+  );
+
+  // Tauri packaged app では cwd = sidecar_dir (_up_/sidecar/) にしているので
+  // cwd 基準で resolve する。
+  const candidate = path.join(process.cwd(), pkgRel);
+  if (fs.existsSync(candidate)) {
+    return candidate;
+  }
+  return undefined;
+}
 
 export type AgentQueryOptions = Pick<
   Options,
@@ -48,7 +81,26 @@ export async function* runAgentQuery(
   prompt: string,
   options: AgentQueryOptions
 ): AsyncGenerator<SDKMessage, void, unknown> {
-  const stream = query({ prompt, options });
+  // pathToClaudeCodeExecutable が未指定なら auto-detect して明示設定する。
+  // これがないと packaged app で "Native CLI binary for ... not found" エラー。
+  const opts: AgentQueryOptions = { ...options };
+  if (!opts.pathToClaudeCodeExecutable) {
+    const claudePath = findClaudeExecutable();
+    if (claudePath) {
+      opts.pathToClaudeCodeExecutable = claudePath;
+      try {
+        process.stderr.write(`AUTO_CLAUDE_PATH: ${claudePath}\n`);
+      } catch {}
+    } else {
+      try {
+        process.stderr.write(
+          `AUTO_CLAUDE_PATH: not found (cwd=${process.cwd()}, platform=${process.platform}-${process.arch})\n`
+        );
+      } catch {}
+    }
+  }
+
+  const stream = query({ prompt, options: opts });
   for await (const ev of stream) {
     yield ev;
   }
