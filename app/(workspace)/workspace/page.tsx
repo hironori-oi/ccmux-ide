@@ -28,6 +28,9 @@ export default function WorkspacePage() {
   const [sending, setSending] = useState(false);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("起動中...");
+  // sidecar stderr 履歴 (デバッグ用に全件蓄積、折畳みで表示・コピー可能)
+  const [stderrLog, setStderrLog] = useState<string[]>([]);
+  const [logOpen, setLogOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -55,17 +58,19 @@ export default function WorkspacePage() {
       });
 
       // agent:stderr - sidecar の log / error
-      // UI にも toast で最近の stderr 行を出す（デバッグ用途、productionは console のみに縮退予定）
+      // 全ログを stderrLog state に蓄積 (画面下部のパネルからまとめてコピー可)
+      // toast は要約で 1〜2 行だけ出す (UX 阻害しない)
       unlistenStderr = await onTauriEvent<string>("agent:stderr", (payload) => {
         // eslint-disable-next-line no-console
         console.warn("[sidecar stderr]", payload);
         const trimmed = payload.trim();
-        // 起動ログ "sidecar ready" 等の成功系は info、それ以外は error で目立たせる
         if (!trimmed) return;
+        const ts = new Date().toISOString().slice(11, 19);
+        setStderrLog((prev) => [...prev, `[${ts}] ${trimmed}`]);
         if (/ready$|sidecar starting|parent disconnected|stdin closed/i.test(trimmed)) {
           toast.message(`sidecar: ${trimmed}`);
         } else {
-          toast.error(`sidecar stderr: ${trimmed.slice(0, 300)}`);
+          toast.error(`sidecar stderr (先頭1行): ${trimmed.split("\n")[0].slice(0, 200)}`);
         }
       });
 
@@ -256,6 +261,55 @@ export default function WorkspacePage() {
           </div>
         )}
       </div>
+
+      {/* sidecar stderr デバッグパネル: 蓄積ログをまとめてコピー可能 */}
+      {stderrLog.length > 0 && (
+        <section className="border-t bg-muted/30 px-4 py-2 text-xs">
+          <div className="mx-auto max-w-3xl">
+            <button
+              type="button"
+              onClick={() => setLogOpen((v) => !v)}
+              className="flex w-full items-center justify-between text-left font-mono text-muted-foreground hover:text-foreground"
+            >
+              <span>
+                sidecar stderr ({stderrLog.length} 行)
+                {!logOpen && ` — 最新: ${stderrLog[stderrLog.length - 1].slice(0, 80)}...`}
+              </span>
+              <span>{logOpen ? "▲" : "▼"}</span>
+            </button>
+            {logOpen && (
+              <div className="mt-2 flex flex-col gap-2">
+                <textarea
+                  readOnly
+                  value={stderrLog.join("\n")}
+                  className="h-40 w-full resize-y rounded border bg-background p-2 font-mono text-[11px] leading-tight"
+                  onFocus={(e) => e.currentTarget.select()}
+                />
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      void navigator.clipboard
+                        .writeText(stderrLog.join("\n"))
+                        .then(() => toast.success("stderr ログをコピーしました"));
+                    }}
+                  >
+                    全コピー
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setStderrLog([])}
+                  >
+                    クリア
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
 
       <footer className="border-t p-4">
         <div className="mx-auto flex max-w-3xl gap-2">
