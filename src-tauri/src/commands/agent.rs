@@ -61,12 +61,19 @@ fn resolve_sidecar_entry(app: &AppHandle) -> Result<(std::path::PathBuf, Sidecar
     }
 
     // --- 3) Tauri resource (packaged app) ---
-    if let Ok(p) = app
-        .path()
-        .resolve("sidecar/dist/index.mjs", tauri::path::BaseDirectory::Resource)
-    {
-        if p.exists() {
-            return Ok((p, SidecarMode::Bundled));
+    // Tauri v2 は `"../sidecar/..."` を bundle 時に `_up_/sidecar/...` に変換する仕様。
+    // 両方試す (`_up_` 優先、古い想定の no-prefix も fallback として残す)。
+    for rel in &[
+        "_up_/sidecar/dist/index.mjs",
+        "sidecar/dist/index.mjs",
+    ] {
+        if let Ok(p) = app
+            .path()
+            .resolve(rel, tauri::path::BaseDirectory::Resource)
+        {
+            if p.exists() {
+                return Ok((p, SidecarMode::Bundled));
+            }
         }
     }
 
@@ -82,13 +89,18 @@ fn resolve_sidecar_entry(app: &AppHandle) -> Result<(std::path::PathBuf, Sidecar
         return Ok((src_entry2, SidecarMode::Dev));
     }
 
-    // resource 側の src/index.ts もダメ元で
-    if let Ok(p) = app
-        .path()
-        .resolve("sidecar/src/index.ts", tauri::path::BaseDirectory::Resource)
-    {
-        if p.exists() {
-            return Ok((p, SidecarMode::Dev));
+    // resource 側の src/index.ts もダメ元で (_up_ prefix も試す)
+    for rel in &[
+        "_up_/sidecar/src/index.ts",
+        "sidecar/src/index.ts",
+    ] {
+        if let Ok(p) = app
+            .path()
+            .resolve(rel, tauri::path::BaseDirectory::Resource)
+        {
+            if p.exists() {
+                return Ok((p, SidecarMode::Dev));
+            }
         }
     }
 
