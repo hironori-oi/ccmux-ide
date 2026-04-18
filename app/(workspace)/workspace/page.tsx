@@ -55,9 +55,18 @@ export default function WorkspacePage() {
       });
 
       // agent:stderr - sidecar の log / error
+      // UI にも toast で最近の stderr 行を出す（デバッグ用途、productionは console のみに縮退予定）
       unlistenStderr = await onTauriEvent<string>("agent:stderr", (payload) => {
         // eslint-disable-next-line no-console
         console.warn("[sidecar stderr]", payload);
+        const trimmed = payload.trim();
+        // 起動ログ "sidecar ready" 等の成功系は info、それ以外は error で目立たせる
+        if (!trimmed) return;
+        if (/ready$|sidecar starting|parent disconnected|stdin closed/i.test(trimmed)) {
+          toast.message(`sidecar: ${trimmed}`);
+        } else {
+          toast.error(`sidecar stderr: ${trimmed.slice(0, 300)}`);
+        }
       });
 
       // agent:terminated - 子プロセス終了
