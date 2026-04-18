@@ -1,0 +1,56 @@
+[package]
+name = "ccmux-ide"
+version = "0.1.0"
+description = "Japanese-first Claude Code desktop client"
+edition = "2021"
+license = "MIT"
+authors = ["hironori-oi <ai-lab@improver.jp>"]
+repository = "https://github.com/hironori-oi/ccmux-ide"
+rust-version = "1.77"
+
+[lib]
+name = "ccmux_ide_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.1", features = [] }
+
+[dependencies]
+# --- Tauri 2.1 本体 ---
+tauri = { version = "2.1", features = ["devtools"] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+
+# --- Serde / async ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+
+# --- ccmux-ide 由来の資産 ---
+arboard = "3.6"
+image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
+keyring = "2"
+notify = "6"
+rusqlite = { version = "0.31", features = ["bundled"] }
+similar = "2"
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
+time = { version = "0.3", features = ["formatting", "macros"] }
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+# v2 (DEC-017) で学んだ rustc ICE 対策: 当面 opt-level=0 を維持し、
+# CI 側で opt-level=3 + lto=thin を再試行する。ローカル開発では差を体感しない。
+opt-level = 0
+# 以下は CI で有効化検討:
+# lto = "thin"
+# codegen-units = 1
+# strip = true

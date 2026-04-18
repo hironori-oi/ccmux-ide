@@ -1,0 +1,246 @@
+# ============================================================================
+# ccmux-ide / Windows Native Build (CI)
+# ----------------------------------------------------------------------------
+# 目的:
+#   WSL2 Ubuntu-24.04 では WebKitGTK の Linux IME (fcitx5 / ibus) 統合が難しく、
+#   日本語入力がコピペでしか不可。Windows ネイティブの WebView2 は OS IME を
+#   そのまま透過するため、Windows 実行バイナリ (.exe / .msi) を GitHub Actions
+#   の `windows-latest` runner 上で生成し、Artifact として配布する。
+#
+#   ローカル Windows でビルドできない背景: オーナー環境は WDAC (Windows Defender
+#   Application Control) で rustc が制約される (DEC-018 / v2 実績)。GitHub の
+#   windows-latest runner は WDAC 無しのクリーン環境なので通る。
+#
+# トリガ方針:
+#   - workflow_dispatch: 手動 trigger、オーナーが GitHub UI から実行
+#   - push は敢えて未設定。private リポで Artifact が溜まるのを避けるため
+#     (free tier の storage quota / retention を食わない)
+#   - 将来的に `release` イベントで自動ビルドしたい場合は下記コメント参照
+# ----------------------------------------------------------------------------
+
+name: Build Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build profile (release / debug)'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+  # 将来: release タグを打ったときに自動ビルド + GitHub Release 添付したい場合
+  # release:
+  #   types: [published]
+
+# 複数回押されたときに古い run をキャンセル (Artifact storage 節約)
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Tauri Windows build
+    runs-on: windows-latest
+    # オーナー環境でテストしていないため、初回実行時の失敗は十分あり得る。
+    # 下記 timeout は rustc ICE 再発や npm install 長時間化への保険。
+    timeout-minutes: 45
+
+    # ------------------------------------------------------------------------
+    # 環境変数
+    # ------------------------------------------------------------------------
+    env:
+      # DEC-013 継承: updater の署名鍵はまだ発行していない。Tauri 2 では
+      # 空文字列を渡すと updater が disabled になるだけで build 自体は通る。
+      TAURI_SIGNING_PRIVATE_KEY: ''
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+      # npm の peer 競合 (React 19 / Next 15.0.3 時点の現実) に備える
+      NPM_CONFIG_LEGACY_PEER_DEPS: 'true'
+      # rustc の backtrace。初回ビルド失敗時の原因究明に有用。
+      RUST_BACKTRACE: '1'
+      # Tauri CLI の verbose ログ
+      TAURI_CLI_VERBOSE: '1'
+
+    steps:
+      # --------------------------------------------------------------------
+      # 1. checkout
+      # --------------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # submodule は未使用だが将来 ccmux origin を submodule 化する余地あり
+          submodules: false
+          fetch-depth: 1
+
+      # --------------------------------------------------------------------
+      # 2. Node.js 24 LTS
+      # --------------------------------------------------------------------
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          # setup-node 組み込みの npm キャッシュを利用。
+          # (後述の actions/cache@v4 と重複するが、node_modules 側のキャッシュは
+          #  別軸でも欲しいので両方有効にしている)
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            sidecar/package-lock.json
+
+      # --------------------------------------------------------------------
+      # 3. Rust 1.94.0 (rust-toolchain.toml と揃える)
+      # --------------------------------------------------------------------
+      # 注意: rust-toolchain.toml が既にあるので通常は自動で 1.94.0 が入るが、
+      # dtolnay/rust-toolchain の `toolchain:` 明示で確実を期す。
+      - name: Setup Rust 1.94.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.0'
+          components: rustfmt, clippy
+          # Windows ターゲットは runner デフォルトで x86_64-pc-windows-msvc
+          targets: x86_64-pc-windows-msvc
+
+      # --------------------------------------------------------------------
+      # 4. Cargo キャッシュ (Swatinem/rust-cache)
+      # --------------------------------------------------------------------
+      # src-tauri/target を丸ごとキャッシュ。初回は 10-15 分かかる Rust ビルドが
+      # 2 回目以降 3-5 分に縮む想定。オーナーは DEC-017 で opt-level=0 にしている
+      # ので ICE は起きにくいが、キャッシュ hit するならそれに越したことはない。
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          # Cargo.lock は .gitignore されているので cache key は Cargo.toml から
+          # 生成される。rust-toolchain.toml も key に含まれる (Swatinem の default)。
+
+      # --------------------------------------------------------------------
+      # 5. npm キャッシュ (node_modules 含む)
+      # --------------------------------------------------------------------
+      # setup-node の cache と独立に node_modules 自体もキャッシュ。
+      # 疑問: Windows の ~/.npm は %AppData%/npm-cache のほうが正確かもしれない。
+      # 初回実行時のログで調整が必要になる可能性あり (cache miss で落ちるわけではない)。
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+            sidecar/node_modules
+          key: ${{ runner.os }}-node24-${{ hashFiles('package.json', 'sidecar/package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node24-
+
+      # --------------------------------------------------------------------
+      # 6. Frontend (Next.js) の依存解決
+      # --------------------------------------------------------------------
+      # --legacy-peer-deps: React 19 と Next 15.0.3 の peer 衝突 (DEC-021 時点)。
+      # npm ci ではなく install を使うのは package-lock.json を同梱していないため
+      # (TBD: CI 安定化のために将来 lock file も commit する)。
+      - name: Install frontend dependencies
+        run: npm install --legacy-peer-deps
+
+      # --------------------------------------------------------------------
+      # 7. Sidecar の依存解決
+      # --------------------------------------------------------------------
+      # sidecar/ は別 npm ワークスペース扱い (ルートの package.json とは独立)。
+      # Claude Agent SDK を bundle するため devDependency に esbuild が入っている。
+      - name: Install sidecar dependencies
+        working-directory: sidecar
+        run: npm install
+
+      # --------------------------------------------------------------------
+      # 8. Sidecar を esbuild で bundle
+      # --------------------------------------------------------------------
+      # 出力: sidecar/dist/index.mjs (ESM, Node 22+ target)
+      # 設定: external = [] (Agent SDK 含め全部 inline) → Tauri resources を
+      #        dist/ ディレクトリだけに絞れるため配布が単純化する。
+      # 疑問: Windows 上で esbuild がネイティブ deps を bundle できない依存
+      #       (例: keyring 系) が出た場合は external 追加で対処。初回は external=[]
+      #       で試し、落ちたら sidecar/build.mjs を調整する。
+      - name: Bundle sidecar (esbuild)
+        working-directory: sidecar
+        run: npm run build
+
+      - name: Verify sidecar bundle exists
+        shell: pwsh
+        run: |
+          if (-Not (Test-Path "sidecar/dist/index.mjs")) {
+            Write-Error "sidecar/dist/index.mjs not found after build!"
+            exit 1
+          }
+          Get-Item "sidecar/dist/index.mjs" | Select-Object Name, Length, LastWriteTime
+
+      # --------------------------------------------------------------------
+      # 9. Tauri ビルド (Next.js static export + Rust release build + bundle)
+      # --------------------------------------------------------------------
+      # `npm run tauri:build` は内部で:
+      #   1. beforeBuildCommand: npm run build (Next.js → out/)
+      #   2. cargo build --release
+      #   3. bundler (nsis, msi) で out/ を wrap
+      # TAURI_SIGNING_PRIVATE_KEY が空 → updater 無効化のまま通る (DEC-013)。
+      # WDAC のない runner なので rustc は落ちない想定だが、万一 ICE が出たら
+      # src-tauri/Cargo.toml の [profile.release] opt-level を 0 で維持。
+      - name: Build Tauri app
+        run: npm run tauri:build
+        env:
+          # cargo のコンパイル並列度を runner 標準 (2 core) に合わせる
+          CARGO_BUILD_JOBS: '2'
+
+      # --------------------------------------------------------------------
+      # 10. Artifact upload
+      # --------------------------------------------------------------------
+      # NSIS installer (.exe) - ユーザが最も触りやすい形式
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ccmux-ide-nsis-installer
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: warn
+          retention-days: 14
+
+      # MSI installer (.msi) - 企業配布向け
+      - name: Upload MSI installer
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ccmux-ide-msi-installer
+          path: src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: warn
+          retention-days: 14
+
+      # portable .exe (インストール不要、ダブルクリック起動)
+      # 疑問: productName = "ccmux-ide" なので出力名は ccmux-ide.exe の可能性あり。
+      #       tauri.conf.json の productName を尊重し glob で両方拾う。
+      - name: Upload portable exe
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ccmux-ide-portable
+          path: |
+            src-tauri/target/release/ccmux-ide.exe
+            src-tauri/target/release/ccmux-ide.exe
+          if-no-files-found: warn
+          retention-days: 14
+
+      # --------------------------------------------------------------------
+      # 11. 失敗時のデバッグ情報 (初回実行で必須)
+      # --------------------------------------------------------------------
+      - name: Dump build directory tree on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          Write-Host "=== src-tauri/target/release (top level) ==="
+          if (Test-Path "src-tauri/target/release") {
+            Get-ChildItem "src-tauri/target/release" -Depth 1 | Format-Table Name, Length, LastWriteTime
+          }
+          Write-Host "=== src-tauri/target/release/bundle ==="
+          if (Test-Path "src-tauri/target/release/bundle") {
+            Get-ChildItem "src-tauri/target/release/bundle" -Recurse | Format-Table FullName, Length
+          }
+          Write-Host "=== sidecar/dist ==="
+          if (Test-Path "sidecar/dist") {
+            Get-ChildItem "sidecar/dist" -Recurse | Format-Table FullName, Length
+          }
