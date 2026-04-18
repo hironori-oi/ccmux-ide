@@ -173,18 +173,27 @@ pub async fn start_agent_sidecar(
         "tsx/esm".to_string()
     };
 
-    // mode ごとに node 引数を組み立てる
+    // mode ごとに node 引数を組み立てる。
+    //
+    // 重要 (2026-04-18 実測): Tauri plugin-shell v2 の CreateProcess escaping は
+    // 引数内の空白 (例 "C:\Program Files\..." の "Program Files") を正しくクォート
+    // しない場合がある。Windows installer 配置 `C:\Program Files\ccmux-ide\_up_\...`
+    // を absolute で渡すと node が `C:` だけを main path として受け取り
+    // `lstat('C:') EISDIR` で crash する。
+    //
+    // 対策: current_dir() を sidecar_dir にしているので、**relative path** で渡す。
+    // これで Linux / macOS / Windows 全 OS で安全、空白問題も回避。
     let args: Vec<String> = match mode {
         SidecarMode::Bundled => {
-            // pure node: 単一ファイル実行
-            vec![entry_str.clone()]
+            // relative: sidecar/dist/index.mjs を cwd=sidecar_dir から解決
+            vec!["dist/index.mjs".to_string()]
         }
         SidecarMode::Dev => {
-            // node --import <tsx/esm loader> <src/index.ts>
+            // dev も relative で統一
             vec![
                 "--import".to_string(),
-                tsx_arg.clone(),
-                entry_str.clone(),
+                "node_modules/tsx/dist/esm/index.mjs".to_string(),
+                "src/index.ts".to_string(),
             ]
         }
     };
