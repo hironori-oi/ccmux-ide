@@ -2,13 +2,12 @@
 
 import type { ReactNode } from "react";
 
-// NOTE(M3 切り分け): Inspector (MemoryTreeView watchImmediate + polling / WorktreeTabs)
-// を一時 disable。bypass-Shell 試験で error は Shell 子に特定済、次は Inspector を
-// 除外した状態で再検証する。
+// NOTE(M3 切り分け Round 3): Inspector + Sidebar も一時 disable。
+// 残るのは TitleBar + StatusBar + useClaudeMonitor のみ。
 // import { Inspector } from "@/components/layout/Inspector";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { TitleBar } from "@/components/layout/TitleBar";
-import { Sidebar } from "@/components/sidebar/Sidebar";
+// import { Sidebar } from "@/components/sidebar/Sidebar";
 // import { UpdateNotifier } from "@/components/updates/UpdateNotifier";  // 依然 disable
 import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
 
@@ -39,7 +38,7 @@ export function Shell({ children }: { children: ReactNode }) {
     <div className="flex h-screen flex-col bg-background">
       <TitleBar />
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <Sidebar />
+        {/* <Sidebar />  ← M3 切り分け Round 3 disable */}
         <main
           aria-label="メインチャット"
           className="flex min-w-0 flex-1 flex-col"
