@@ -169,7 +169,7 @@ export function ProjectTree() {
       {!tree.isLoading && !tree.error && (
         <ul className="flex flex-col gap-0.5 text-xs" role="tree">
           {tree.rootFiles.map((f) => (
-            <li key={f.label} role="treeitem">
+            <li key={f.label} role="treeitem" aria-selected={false}>
               <button
                 type="button"
                 className={cn(
@@ -199,7 +199,7 @@ export function ProjectTree() {
           ))}
 
           {/* reports/ フォルダ */}
-          <li role="treeitem" aria-expanded={reportsOpen}>
+          <li role="treeitem" aria-expanded={reportsOpen} aria-selected={false}>
             <button
               type="button"
               className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left hover:bg-accent"
@@ -235,7 +235,7 @@ export function ProjectTree() {
                   </li>
                 ) : (
                   tree.reports.map((r) => (
-                    <li key={r.path} role="treeitem">
+                    <li key={r.path} role="treeitem" aria-selected={false}>
                       <button
                         type="button"
                         className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left hover:bg-accent"

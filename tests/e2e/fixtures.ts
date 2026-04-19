@@ -124,11 +124,11 @@ export async function installTauriMock(
       messagesBySession: Record<string, unknown[]>;
       invokeLog: Array<{ cmd: string; args: unknown }>;
     } = {
-      apiKey: opts.apiKey,
+      apiKey: opts.apiKey as string | null,
       sessions: [...opts.sessions],
       slashCommands: [...opts.slashCommands],
       searchResults: [...opts.searchResults],
-      clipboardImagePath: opts.clipboardImagePath,
+      clipboardImagePath: opts.clipboardImagePath as string | null,
       messagesBySession: {},
       invokeLog: [],
     };
