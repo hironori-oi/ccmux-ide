@@ -6,7 +6,9 @@ import { Inspector } from "@/components/layout/Inspector";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { Sidebar } from "@/components/sidebar/Sidebar";
-import { UpdateNotifier } from "@/components/updates/UpdateNotifier";
+// NOTE(M3 緊急対応): UpdateNotifier は workspace の無限 render ループ (React error #185)
+// の容疑者として一時 disable。原因切り分け後に再有効化予定。
+// import { UpdateNotifier } from "@/components/updates/UpdateNotifier";
 import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
 
 /**
@@ -46,9 +48,8 @@ export function Shell({ children }: { children: ReactNode }) {
         <Inspector />
       </div>
       <StatusBar />
-      {/* PM-283: 起動時 + 手動の更新チェック & ダウンロード。
-          UI は自身で floating card を出すため、DOM 位置はどこでも可。 */}
-      <UpdateNotifier />
+      {/* PM-283: UpdateNotifier を一時 disable（M3 緊急対応、React error #185 切り分け中） */}
+      {/* <UpdateNotifier /> */}
     </div>
   );
 }
