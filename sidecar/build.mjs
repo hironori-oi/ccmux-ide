@@ -38,18 +38,17 @@ const __dirname = path.dirname(__filename);
 /**
  * bundle 対象外にする module 名。
  *
- * @anthropic-ai/claude-agent-sdk は platform 固有の native CLI binary
- * (@anthropic-ai/claude-agent-sdk-linux-x64 等、各 73MB) を
- * optionalDependencies で持つため、esbuild で inline bundle すると
- * 実行時に「Native CLI binary for linux-x64 not found」エラーになる。
+ * **DEC 追記 (2026-04-19)**: SDK を external にすると packaged app で
+ * `sidecar/node_modules/` が無いため `Cannot find package` エラーになる。
+ * SDK JS は inline bundle に戻し、native CLI binary のパスは
+ * `findClaudeExecutable()` で実行時に解決する戦略に変更
+ * （agent.ts の CLAUDE_CODE_EXECUTABLE / $PATH / pnpm store 探索で対応）。
  *
- * Node の module resolution に委ねる方が確実なので external 扱い。
- * この場合 Tauri resources には sidecar/node_modules も含める必要があるが、
- * dev (tauri dev) では Node が sidecar/node_modules を直接参照するため動く。
- * production bundle 時の対応は M3 (PM-282 配布 CI) で改めて検討。
+ * これで sidecar/dist/index.mjs 1 ファイルだけで SDK JS を実行可能、
+ * native CLI は $PATH の `claude` または環境変数で指定する前提。
  */
 const EXTERNAL = [
-  "@anthropic-ai/claude-agent-sdk",
+  // native binary を持たない deps のみ external にする（現状なし）
 ];
 
 const ENTRY = path.join(__dirname, "src", "index.ts");
