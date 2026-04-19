@@ -9,6 +9,7 @@ import {
   type AppSettings,
   type AppearanceSettings,
   type ThemeMode,
+  type ThemePreset,
 } from "@/lib/types";
 
 /**
@@ -33,6 +34,8 @@ interface SettingsState {
   /** 便宜: よく使う一部キーに特化した setter */
   setTheme: (theme: ThemeMode) => void;
   setAccentColor: (color: AccentColor) => void;
+  /** Week 7 Chunk 2 / PM-251: テーマプリセット切替 */
+  setThemePreset: (preset: ThemePreset) => void;
   setFontSize: (px: number) => void;
   /** すべてをデフォルトへ戻す（Settings ページのリセットボタン想定） */
   resetSettings: () => void;
@@ -82,6 +85,14 @@ export const useSettingsStore = create<SettingsState>()(
           },
         })),
 
+      setThemePreset: (themePreset) =>
+        set((s) => ({
+          settings: {
+            ...s.settings,
+            appearance: { ...s.settings.appearance, themePreset },
+          },
+        })),
+
       setFontSize: (fontSize) => {
         // バリデーション（型で許容値を絞れないため runtime でクランプ）
         const clamped = Math.max(12, Math.min(16, Math.round(fontSize)));
@@ -98,7 +109,26 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: "ccmux-ide-gui:settings",
       storage: safeStorage,
-      version: 1,
+      version: 2,
+      // v1 → v2: Week 7 Chunk 2 / PM-251 で themePreset を追加（デフォルト orange）
+      migrate: (persisted, version) => {
+        const state = persisted as { settings?: AppSettings } | undefined;
+        if (!state?.settings) return { settings: DEFAULT_APP_SETTINGS };
+        if (version < 2) {
+          return {
+            settings: {
+              ...state.settings,
+              appearance: {
+                ...DEFAULT_APP_SETTINGS.appearance,
+                ...state.settings.appearance,
+                themePreset:
+                  state.settings.appearance?.themePreset ?? "orange",
+              },
+            },
+          };
+        }
+        return state;
+      },
     }
   )
 );

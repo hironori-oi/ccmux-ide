@@ -128,16 +128,27 @@ export interface ProjectFileEntry {
 // 設定 (Week 6 Chunk 3 / PM-210〜213)
 // ---------------------------------------------------------------------------
 
-/** アクセントカラーのプリセット（M3 で実際の CSS 変数切替を実装予定）。 */
+/** アクセントカラーのプリセット（Week 7 Chunk 2 / PM-250 で CSS 変数反映）。 */
 export type AccentColor = "orange" | "blue" | "green" | "purple" | "pink";
 
 /** テーマ設定（next-themes の `setTheme` に渡す値）。 */
 export type ThemeMode = "light" | "dark" | "system";
 
+/**
+ * テーマプリセット（Week 7 Chunk 2 / PM-251）。
+ *
+ * - `orange`: ccmux-ide ブランドデフォルト（light / dark 両対応）
+ * - `tokyo-night` / `catppuccin` / `dracula` / `nord`: dark-only プリセット、
+ *   選択時は next-themes 側も `dark` に強制切替する。
+ */
+export type ThemePreset = "orange" | "tokyo-night" | "catppuccin" | "dracula" | "nord";
+
 /** Appearance 設定（`app/settings` の Appearance タブで管理）。 */
 export interface AppearanceSettings {
   theme: ThemeMode;
   accentColor: AccentColor;
+  /** Week 7 Chunk 2 で追加。既定 `orange`（既存 CSS variable 設定相当）。 */
+  themePreset: ThemePreset;
   /** ベースフォントサイズ (px)、12〜16 の範囲。 */
   fontSize: number;
 }
@@ -157,6 +168,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   appearance: {
     theme: "system",
     accentColor: "orange",
+    themePreset: "orange",
     fontSize: 14,
   },
 };

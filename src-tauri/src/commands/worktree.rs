@@ -111,6 +111,31 @@ pub async fn remove_worktree(repo_root: String, id: String) -> Result<(), String
     .map_err(|e| format!("join error: {e}"))?
 }
 
+/// Tauri command: worktree 切替のための軽量ヘルパ（PM-262）。
+///
+/// 内部的には `git worktree list --porcelain` を呼び、指定 id の worktree が存在
+/// するかを確認してから、その `path` を返す。Rust 側で cwd を切替える責務は持たず、
+/// frontend が受け取った path を Zustand state に反映し、sidecar を再起動することで
+/// worktree を切替える設計（DEC: 最小限の backend 変更で済むよう、switch の実体は
+/// frontend 主導）。
+///
+/// `id` は `list_worktrees` が返す `Worktree.id`（= path の最終セグメント）。
+/// メイン worktree（`repo_root` 直下）の id はリポジトリルートのディレクトリ名に
+/// なるので、その点に注意。
+#[tauri::command]
+pub async fn switch_worktree(
+    repo_root: String,
+    id: String,
+) -> Result<Worktree, String> {
+    if id.is_empty() {
+        return Err("id が空です".into());
+    }
+    let list = list_worktrees(repo_root.clone()).await?;
+    list.into_iter()
+        .find(|w| w.id == id)
+        .ok_or_else(|| format!("worktree が見つかりません: id={id}"))
+}
+
 fn is_safe_id(id: &str) -> bool {
     !id.is_empty()
         && id

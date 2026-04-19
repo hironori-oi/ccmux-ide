@@ -48,12 +48,20 @@ import { useSessionStore } from "@/lib/stores/session";
  *  - セッション: 新規 / 最近 5 件（`useSessionStore`）
  *  - チャット: 画像を添付（`save_clipboard_image`）
  *  - 表示: テーマ切替 / 設定を開く（Settings は Week6 実装のため placeholder）
- *  - 検索: 会話検索（Week7 実装のため placeholder）
+ *  - 検索: 会話検索（Week7 PM-231 で SearchPalette を起動）
  *  - Git: 新規 worktree（Week7 実装のため placeholder）
  *
  * 日本語 UI。ショートカットヒントは ⌘ 表記で統一（Windows でも同じ文字を表示）。
+ *
+ * Week7 PM-231: `onOpenSearch` コールバックで兄弟 `SearchPalette` を open する。
+ * 未指定なら従来どおりの placeholder トーストを表示する（Chunk 1 範囲外の
+ * 呼び出し箇所での後方互換）。
  */
-export function CommandPalette() {
+export interface CommandPaletteProps {
+  onOpenSearch?: () => void;
+}
+
+export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
   const router = useRouter();
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
@@ -145,7 +153,12 @@ export function CommandPalette() {
   // ----------------------- 検索 / Git（placeholder）-----------------------
 
   const handleSearch = run(() => {
-    toast.info("会話検索は Week 7 で実装予定です");
+    if (onOpenSearch) {
+      onOpenSearch();
+    } else {
+      // SearchPalette が未接続の環境（従来呼び出し）では placeholder に戻る。
+      toast.info("会話検索パレットが接続されていません");
+    }
   });
 
   const handleNewWorktree = run(() => {
@@ -255,7 +268,7 @@ export function CommandPalette() {
                 onSelect={handleSearch}
               >
                 <FileSearch aria-hidden />
-                <span>会話を検索（Week 7 で実装予定）</span>
+                <span>会話を検索</span>
                 <CommandShortcut>⌘⇧F</CommandShortcut>
               </CommandItem>
             </CommandGroup>

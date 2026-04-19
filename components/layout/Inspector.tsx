@@ -1,46 +1,66 @@
 "use client";
 
+import { useState } from "react";
+
+import { MemoryEditorPanel } from "@/components/inspector/MemoryEditorPanel";
 import { MemoryTreeView } from "@/components/inspector/MemoryTreeView";
+import { WorktreeTabs } from "@/components/inspector/WorktreeTabs";
 
 /**
- * インスペクタ右ペイン（PM-167 基底 + PM-205 統合、Week 6 Chunk 3）。
+ * インスペクタ右ペイン（PM-167 基底 + PM-205 + Week 7 Chunk 2 PM-240/241
+ *   + Week 7 Chunk 3 PM-260/261/262）。
  *
- * ## 構成（縦 flex、将来 Accordion 化予定）
- * 1. MemoryTreeView（PM-205、本 Chunk で追加）
- * 2. WorktreeTabs（PM-260、M3 Week 7 追加予定）
- * 3. MemoryEditor（PM-240、M3 Week 7 追加予定）
- *
- * shadcn `Accordion` が `components/ui/` に未導入のため、当面はシンプルな縦
- * スタックで配置する。各セクションは `<section>` 単位で border-b を引いて
- * 視覚的に区切る（統合コンポーネント側の実装でアクセシブルな折畳は PM-260
- * と合わせて検討）。
+ * ## 構成
+ * - 通常モード: MemoryTreeView（Week 6 Chunk 3）+ WorktreeTabs（Week 7 Chunk 3）
+ *   を縦に並べる。
+ * - 編集モード: MemoryTreeView のノードの編集ボタンが押されたら `editingPath` を
+ *   set し、ツリー / WorktreeTabs を隠して `MemoryEditorPanel` を描画する。
  */
 export function Inspector() {
+  const [editingPath, setEditingPath] = useState<string | null>(null);
+
   return (
     <aside
       aria-label="インスペクタ"
-      className="flex w-80 shrink-0 flex-col overflow-y-auto border-l bg-muted/30"
+      className="flex w-80 shrink-0 flex-col overflow-hidden border-l bg-muted/30"
     >
-      <section
-        aria-labelledby="inspector-memory-tree-heading"
-        className="flex flex-col gap-2 border-b p-3"
-      >
-        <h2
-          id="inspector-memory-tree-heading"
-          className="sr-only"
+      {editingPath ? (
+        <section
+          aria-label="CLAUDE.md 編集"
+          className="flex min-h-0 flex-1 flex-col p-3"
         >
-          CLAUDE.md ツリー
-        </h2>
-        <MemoryTreeView />
-      </section>
+          <MemoryEditorPanel
+            filePath={editingPath}
+            onClose={() => setEditingPath(null)}
+          />
+        </section>
+      ) : (
+        <div className="flex flex-1 flex-col overflow-y-auto">
+          <section
+            aria-labelledby="inspector-memory-tree-heading"
+            className="flex flex-col gap-2 border-b p-3"
+          >
+            <h2
+              id="inspector-memory-tree-heading"
+              className="sr-only"
+            >
+              CLAUDE.md ツリー
+            </h2>
+            <MemoryTreeView onEdit={setEditingPath} />
+          </section>
 
-      {/* M3 で WorktreeTabs / MemoryEditor が入るプレースホルダ */}
-      <section
-        aria-label="今後の拡張（M3 予定）"
-        className="p-3 text-[11px] text-muted-foreground/60"
-      >
-        <p>Worktree / Memory Editor は M3 で追加予定</p>
-      </section>
+          {/* Week 7 Chunk 3 / PM-260〜262: git worktree 一覧・切替 */}
+          <section
+            aria-labelledby="inspector-worktree-heading"
+            className="flex flex-col gap-2 border-b p-3"
+          >
+            <h2 id="inspector-worktree-heading" className="sr-only">
+              Worktree
+            </h2>
+            <WorktreeTabs />
+          </section>
+        </div>
+      )}
     </aside>
   );
 }

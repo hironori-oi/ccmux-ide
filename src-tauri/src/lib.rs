@@ -17,9 +17,9 @@ use commands::{
     },
     image_paste::save_clipboard_image,
     memory_tree::scan_memory_tree,
-    search_fts::{reindex_conversations, search_conversations},
+    search_fts::{reindex_conversations, search_conversations, search_messages},
     slash::list_slash_commands,
-    worktree::{add_worktree, list_worktrees, remove_worktree},
+    worktree::{add_worktree, list_worktrees, remove_worktree, switch_worktree},
 };
 use events::monitor::{self, MonitorHandle};
 
@@ -103,9 +103,11 @@ pub fn run() {
             list_worktrees,
             add_worktree,
             remove_worktree,
-            // FTS5 search (skeleton)
+            switch_worktree,
+            // FTS5 search (skeleton legacy + PM-230 本実装)
             search_conversations,
             reindex_conversations,
+            search_messages,
             // Slash command discovery (PM-200)
             list_slash_commands,
             // Agent sidecar (Node + Claude Agent SDK TS)

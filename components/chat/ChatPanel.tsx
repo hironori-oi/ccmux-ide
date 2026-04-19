@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { callTauri, onTauriEvent } from "@/lib/tauri-api";
@@ -36,6 +36,39 @@ export function ChatPanel() {
 
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("起動中...");
+
+  // Week 7 PM-262 / Chunk 3 申し送り: `useChatStore.cwd` が変化したら sidecar を
+  // 再起動する。worktree 切替側は best-effort で stop → start を呼んでいるが、
+  // ChatPanel マウント側の useEffect とはライフサイクルが独立しているため、
+  // 本 watcher を追加して 2 重起動の race を最小化する。
+  // 初回マウント（cwd=null）では発火させないよう prevCwdRef で diff を取る。
+  const cwd = useChatStore((s) => s.cwd);
+  const prevCwdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevCwdRef.current;
+    prevCwdRef.current = cwd;
+    // 初回 (prev === null かつ cwd === null) は ready 前の start に任せる
+    if (prev === cwd) return;
+    if (prev === null && cwd === null) return;
+    // cwd が明示的に変わった場合のみ再起動する（null → path / path → path）
+    (async () => {
+      try {
+        await callTauri<void>("stop_agent_sidecar");
+      } catch {
+        // 未起動 or 二重停止は無視
+      }
+      try {
+        await callTauri<void>("start_agent_sidecar", { cwd: cwd ?? null });
+        toast.message(
+          cwd
+            ? `cwd を ${cwd} に切替え、sidecar を再起動しました`
+            : "sidecar を再起動しました"
+        );
+      } catch (e) {
+        toast.error(`sidecar 再起動失敗: ${String(e)}`);
+      }
+    })();
+  }, [cwd]);
 
   useEffect(() => {
     let unlistenRaw: (() => void) | null = null;

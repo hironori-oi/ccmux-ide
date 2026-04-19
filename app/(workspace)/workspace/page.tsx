@@ -1,6 +1,11 @@
+"use client";
+
+import { useState } from "react";
+
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { HelloBubble } from "@/components/onboarding/HelloBubble";
 import { CommandPalette } from "@/components/palette/CommandPalette";
+import { SearchPalette } from "@/components/palette/SearchPalette";
 
 /**
  * Workspace — チャット画面のルート。
@@ -13,10 +18,16 @@ import { CommandPalette } from "@/components/palette/CommandPalette";
  * PM-126: 初回 HelloBubble を右上に重ねて配置（localStorage で 1 回限り表示）。
  * PM-171: `<CommandPalette />` を常時マウント（ダイアログ本体は内部で open 制御、
  *         Ctrl+K / Cmd+K で開閉）。
- * Chunk B の Sidebar は親 layout で 3 ペインに組み込まれているため、ここでは
- * 中央ペイン（ChatPanel）と overlay（HelloBubble）、および Palette だけを担当する。
+ * Week7 PM-231: `<SearchPalette />` を並列マウント。Ctrl+Shift+F で自前で開閉し、
+ *         CommandPalette の「会話を検索」項目からは `onOpenSearch` callback で開く。
+ *         open state は page レベルの React state で一元管理（zustand 不要）。
+ *
+ * このファイルは CommandPalette / SearchPalette の open state を共有するため
+ * client component（"use client"）化した。server 側で完結する処理はない。
  */
 export default function WorkspacePage() {
+  const [searchOpen, setSearchOpen] = useState(false);
+
   return (
     <div className="relative h-full w-full">
       <ChatPanel />
@@ -25,7 +36,8 @@ export default function WorkspacePage() {
           <HelloBubble />
         </div>
       </div>
-      <CommandPalette />
+      <CommandPalette onOpenSearch={() => setSearchOpen(true)} />
+      <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />
     </div>
   );
 }

@@ -138,10 +138,20 @@ fn resolve_sidecar_entry(app: &AppHandle) -> Result<(std::path::PathBuf, Sidecar
 /// - `agent:raw`        : stdout 1 行 (NDJSON 1 レコードを期待)
 /// - `agent:stderr`     : stderr 1 行 (log / error 用)
 /// - `agent:terminated` : プロセス終了 (payload: exit code)
+///
+/// # 引数
+/// - `cwd` (PM-262 で追加): 子プロセスの作業ディレクトリとして使うパス。
+///   `None` の場合は従来通り `sidecar_dir`（sidecar/dist or sidecar/src の親）を
+///   current_dir として使う。指定された場合も sidecar bundle 解決には
+///   `current_dir` を使わず、sidecar_dir でモジュール解決する現行仕様を維持する。
+///   実際の Agent SDK の実行時 cwd は `send_agent_prompt` の `cwd` で切替える想定
+///   だが、worktree 切替時に sidecar をまるごと再起動するフローに備えて
+///   本関数にも受口を用意する（起動ログに記録）。
 #[tauri::command]
 pub async fn start_agent_sidecar(
     app: AppHandle,
     state: State<'_, AgentState>,
+    cwd: Option<String>,
 ) -> Result<(), String> {
     {
         let guard = state
@@ -199,9 +209,12 @@ pub async fn start_agent_sidecar(
     };
 
     // 起動情報を stderr event で流す (デバッグ補助)
+    let cwd_display = cwd.as_deref().unwrap_or("<sidecar_dir>");
     let _ = app.emit(
         "agent:stderr",
-        format!("sidecar starting: mode={mode:?}, entry={entry_str}\n"),
+        format!(
+            "sidecar starting: mode={mode:?}, entry={entry_str}, agent_cwd={cwd_display}\n"
+        ),
     );
 
     let shell = app.shell();

@@ -5,6 +5,7 @@ import { watchImmediate, type UnwatchFn } from "@tauri-apps/plugin-fs";
 import {
   ChevronDown,
   ChevronRight,
+  Edit2,
   FileText,
   FolderTree,
   Loader2,
@@ -42,6 +43,11 @@ interface MemoryTreeViewProps {
   /** 外部から渡す repo_root（未指定なら process.cwd 的な fallback を使う） */
   repoRoot?: string;
   className?: string;
+  /**
+   * Week 7 Chunk 2 / PM-240: ノードの「編集」ボタン押下で発火する callback。
+   * 未指定の場合は編集ボタン自体が表示されない（Week 6 時点の挙動を維持）。
+   */
+  onEdit?: (path: string) => void;
 }
 
 type GroupKey = "Global" | "Project" | "Cwd";
@@ -52,7 +58,11 @@ const GROUP_LABEL: Record<GroupKey, string> = {
   Cwd: "カレント (cwd)",
 };
 
-export function MemoryTreeView({ repoRoot, className }: MemoryTreeViewProps) {
+export function MemoryTreeView({
+  repoRoot,
+  className,
+  onEdit,
+}: MemoryTreeViewProps) {
   const [nodes, setNodes] = useState<TreeNode[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -255,11 +265,11 @@ export function MemoryTreeView({ repoRoot, className }: MemoryTreeViewProps) {
                   ) : (
                     <ul className="flex flex-col">
                       {items.map((n) => (
-                        <li key={n.path}>
+                        <li key={n.path} className="group relative">
                           <button
                             type="button"
                             onClick={() => setPreviewPath(n.path)}
-                            className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs hover:bg-muted/50"
+                            className="flex w-full items-center gap-1.5 rounded px-2 py-1 pr-7 text-left text-xs hover:bg-muted/50"
                             style={{ paddingLeft: `${8 + n.depth * 10}px` }}
                             title={n.path}
                           >
@@ -269,6 +279,26 @@ export function MemoryTreeView({ repoRoot, className }: MemoryTreeViewProps) {
                             />
                             <span className="truncate">{n.label}</span>
                           </button>
+                          {onEdit && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onEdit(n.path);
+                              }}
+                              className={cn(
+                                "absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 opacity-0 transition-opacity",
+                                "hover:bg-muted focus:opacity-100 group-hover:opacity-100"
+                              )}
+                              aria-label={`${n.label} を編集`}
+                              title="編集"
+                            >
+                              <Edit2
+                                className="h-3 w-3 text-muted-foreground"
+                                aria-hidden
+                              />
+                            </button>
+                          )}
                         </li>
                       ))}
                     </ul>

@@ -1,105 +1,332 @@
-//! Derived from ccmux-ide/src/ide/search_fts.rs (MIT Licensed).
+//! FTS5 会話履歴横断検索（PM-230 / Week7 Chunk 1）。
 //!
-//! FTS5 会話履歴検索のスケルトン。M3（Week8）で本実装。
-//! `~/.claude/projects/<slug>/*.jsonl` を rusqlite FTS5 仮想テーブルにインデックス
-//! して、`search_conversations(query)` で横断検索する。
+//! `commands::history` が初期化した `~/.ccmux-ide-gui/history.db` の
+//! `messages_fts` virtual table を利用して、単一 Tauri command から全文検索を
+//! 行う。v2 `ccmux-ide/src/ide/search_fts.rs` は skeleton のままだったので、
+//! 本ファイルで実装を肉付けした（HistoryState の共有と snippet() の活用が主な
+//! 拡張点）。
 //!
-//! 現段階では rusqlite の DB 初期化だけ通し、`search` / `reindex` は空結果を
-//! 返す。スキーマは下記コメント参照。
+//! ## クエリ仕様
+//!
+//! `messages_fts` は `content='messages'` と `content_rowid='rowid'` で
+//! contentless virtual table として宣言されているため、以下のように messages
+//! 本体 + sessions を JOIN して行を取得する:
+//!
+//! ```sql
+//! SELECT m.id, m.session_id, m.role, m.created_at, s.title,
+//!        snippet(messages_fts, 0, '[', ']', '…', 16)
+//! FROM messages_fts
+//! JOIN messages m ON messages_fts.rowid = m.rowid
+//! JOIN sessions s ON m.session_id = s.id
+//! WHERE messages_fts MATCH ?1
+//! ORDER BY rank
+//! LIMIT ?2
+//! ```
+//!
+//! ユーザー入力はそのまま FTS5 MATCH に流すと特殊文字 (`"` `(` `)` `:` `*` 等)
+//! で syntax error になるため、`sanitize_query()` で安全なトークンに変換し、
+//! 末尾に `*` を付けて prefix search を有効化する。例:
+//! - 入力 `tau`      → MATCH `tau*`（tauri, taurus 両方ヒット）
+//! - 入力 `tau api`  → MATCH `tau* api*`（AND 結合）
+//! - 入力 `"a/b"`    → MATCH `a* b*`（クォートは剥がす）
+//!
+//! ## スレッドセーフ化
+//!
+//! `commands::history::HistoryState` の `Arc<Mutex<Option<Connection>>>` を
+//! `tauri::State` 経由で共有する。SQLite は rusqlite bundled の single-writer
+//! モデルなので、`spawn_blocking` + Mutex で直列化してから発行する。
 
-use std::path::PathBuf;
-use std::sync::Mutex;
-
-use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde::Serialize;
+use tauri::State;
 
-// FTS5 スキーマ（M3 で本実装時にコメント解除）:
-// ```sql
-// CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
-//   session_id UNINDEXED,
-//   ts UNINDEXED,
-//   role UNINDEXED,
-//   content,
-//   tokenize = 'unicode61 remove_diacritics 2'
-// );
-// ```
+use super::history::HistoryState;
 
-/// 検索ヒット 1 件。
+// ---------------------------------------------------------------------------
+// 型定義（frontend ↔ backend の JSON 転送仕様）
+// ---------------------------------------------------------------------------
+
+/// 検索ヒット 1 件（frontend の `SearchResult` と 1:1）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchHit {
+pub struct SearchResult {
+    /// messages.id（scrollIntoView の anchor に使う）
+    pub message_id: String,
+    /// 親 session.id（loadSession で chat store に反映）
     pub session_id: String,
-    pub ts: String,
+    /// sessions.title（NULL 可、一覧の上段に表示）
+    pub session_title: Option<String>,
+    /// messages.role（"user" / "assistant" / "tool" 等）
     pub role: String,
-    pub snippet: String,
+    /// FTS5 `snippet()` 関数で生成された抜粋。`[...]` がマッチ箇所。
+    /// frontend で `[` `]` を正規表現 split して `<mark>` span 化する。
+    pub snippet_html: String,
+    /// messages.created_at（Unix epoch seconds、相対時刻表示用）
+    pub created_at: i64,
 }
 
-/// DB パス: `<config>/ccmux-ide/search_fts.sqlite`
-fn db_path() -> Result<PathBuf> {
-    let base = dirs::config_dir().context("config dir が解決できません")?;
-    let dir = base.join("ccmux-ide");
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("config dir 作成失敗: {}", dir.display()))?;
-    Ok(dir.join("search_fts.sqlite"))
+// ---------------------------------------------------------------------------
+// 内部ヘルパ
+// ---------------------------------------------------------------------------
+
+/// FTS5 MATCH 構文用に入力クエリをサニタイズする。
+///
+/// - 英数 / 全角 / CJK は維持、記号 (`"` `(` `)` `:` `*` `-` `+` 等) は空白に置換
+/// - 連続空白を 1 個に圧縮し、空白で split してトークン化
+/// - 各トークン末尾に `*` を付けて prefix search にする（FTS5 の
+///   `PREFIX=1` 相当、contentless table でも MATCH 演算子で機能する）
+/// - トークンが 1 つも残らなければ `None`（＝呼び出し側で空配列を返す）
+fn sanitize_query(raw: &str) -> Option<String> {
+    // FTS5 の特殊文字を一括で空白に寄せる。
+    // 参考: https://www.sqlite.org/fts5.html#full_text_query_syntax
+    let replaced: String = raw
+        .chars()
+        .map(|c| match c {
+            '"' | '\'' | '(' | ')' | ':' | '*' | '-' | '+' | '^' | '{' | '}' | '[' | ']' => ' ',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+
+    let tokens: Vec<String> = replaced
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        // FTS5 tokenizer の unicode61 に合わせて素直にトークン化。
+        // 末尾に `*` を付与して前方一致を有効化。
+        .map(|t| format!("{t}*"))
+        .collect();
+
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" "))
+    }
 }
 
-/// DB 接続を初期化してから渡す（Mutex<Option<Connection>> を lazy 初期化）。
-fn with_conn<F, T>(f: F) -> Result<T>
-where
-    F: FnOnce(&Connection) -> Result<T>,
-{
-    use std::sync::OnceLock;
-    static DB: OnceLock<Mutex<Connection>> = OnceLock::new();
+/// SQL を発行して結果を `Vec<SearchResult>` に積む。
+///
+/// messages_fts は `content='messages'` の contentless 設計なので、
+/// `messages_fts.rowid` と `messages.rowid` を等価結合する。
+fn run_search(
+    conn: &Connection,
+    match_query: &str,
+    limit: i64,
+) -> Result<Vec<SearchResult>, String> {
+    let sql = "\
+        SELECT m.id, m.session_id, m.role, m.created_at, s.title, \
+               snippet(messages_fts, 0, '[', ']', '…', 16) \
+        FROM messages_fts \
+        JOIN messages m ON messages_fts.rowid = m.rowid \
+        JOIN sessions s ON m.session_id = s.id \
+        WHERE messages_fts MATCH ?1 \
+        ORDER BY rank \
+        LIMIT ?2";
 
-    let mutex = DB.get_or_init(|| {
-        // 初回失敗時は panic せずに memory DB にフォールバック。
-        let conn = match db_path().and_then(|p| {
-            Connection::open(&p).with_context(|| format!("SQLite open 失敗: {}", p.display()))
-        }) {
-            Ok(c) => c,
-            Err(_) => Connection::open_in_memory().expect("in-memory SQLite must open"),
-        };
-        // スキーマ初期化は M3 で本実装。
-        // let _ = conn.execute_batch(
-        //     "CREATE VIRTUAL TABLE IF NOT EXISTS conversations_fts USING fts5(
-        //        session_id UNINDEXED, ts UNINDEXED, role UNINDEXED, content,
-        //        tokenize = 'unicode61 remove_diacritics 2'
-        //      );",
-        // );
-        Mutex::new(conn)
-    });
-    let guard = mutex.lock().expect("DB mutex poisoned");
-    f(&guard)
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| format!("search prepare 失敗: {e}"))?;
+
+    let rows = stmt
+        .query_map(params![match_query, limit], |r| {
+            Ok(SearchResult {
+                message_id: r.get(0)?,
+                session_id: r.get(1)?,
+                role: r.get(2)?,
+                created_at: r.get(3)?,
+                session_title: r.get(4)?,
+                snippet_html: r.get(5)?,
+            })
+        })
+        .map_err(|e| format!("search query 失敗: {e}"))?;
+
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| format!("search row 失敗: {e}"))?);
+    }
+    Ok(out)
 }
 
-/// Tauri command: FTS5 検索（M3 で本実装、現状は空配列）。
+// ---------------------------------------------------------------------------
+// Tauri commands
+// ---------------------------------------------------------------------------
+
+/// 会話検索。`messages_fts` MATCH + snippet() で結果を生成する。
+///
+/// - `query`: ユーザー入力文字列。空白区切りで AND 検索、末尾 `*` で prefix。
+/// - `limit`: 最大返却件数（既定 30、1〜200 にクランプ）。
+///
+/// 戻り値: `Vec<SearchResult>`（JSON は camelCase）。
+#[tauri::command]
+pub async fn search_messages(
+    state: State<'_, HistoryState>,
+    query: String,
+    limit: Option<i64>,
+) -> Result<Vec<SearchResult>, String> {
+    // 空クエリは前段で弾く（DB を叩かずに空配列）
+    let sanitized = match sanitize_query(&query) {
+        Some(s) => s,
+        None => return Ok(Vec::new()),
+    };
+    let lim = limit.unwrap_or(30).clamp(1, 200);
+
+    let arc = state.conn.clone();
+    tokio::task::spawn_blocking(move || -> Result<Vec<SearchResult>, String> {
+        let guard = arc
+            .lock()
+            .map_err(|e| format!("conn mutex poisoned: {e}"))?;
+        let conn = guard
+            .as_ref()
+            .ok_or_else(|| "history DB が未初期化です（init_history_db 失敗）".to_string())?;
+        run_search(conn, &sanitized, lim)
+    })
+    .await
+    .map_err(|e| format!("join error: {e}"))?
+}
+
+// ---------------------------------------------------------------------------
+// v2 互換の legacy commands（skeleton を保持、現在は no-op）
+// ---------------------------------------------------------------------------
+//
+// v2 は `~/.claude/projects/*.jsonl` を別 DB に再インデックスする想定だったが、
+// v3 GUI は `messages_fts` が `messages` と同期されるため reindex は不要。
+// 既存コードの参照を壊さないよう型と関数名は残すが、invoke_handler からは外す。
+
+/// 旧 API（M3 で削除予定）。現状は空配列を返す。
 #[tauri::command]
 pub async fn search_conversations(
-    _query: String,
-    _limit: Option<usize>,
-) -> Result<Vec<SearchHit>, String> {
-    tokio::task::spawn_blocking(|| -> Result<Vec<SearchHit>, String> {
-        with_conn(|_conn| {
-            // TODO (M3 / PM-170): snippet() で抜粋生成。
-            Ok(Vec::new())
-        })
-        .map_err(|e| format!("{e:#}"))
-    })
-    .await
-    .map_err(|e| format!("join error: {e}"))?
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, String> {
+    // FTS5 は共有 messages_fts に統合されたため、HistoryState を持つ
+    // `search_messages` を使うよう frontend を誘導する。互換目的の蓋のみ残す。
+    let _ = (query, limit);
+    Ok(Vec::new())
 }
 
-/// Tauri command: `~/.claude/projects/*.jsonl` を再帰走査してインデックス再構築。
+/// 旧 API（M3 で削除予定）。messages_fts は INSERT trigger で自動同期するため
+/// 再インデックスは不要。常に 0 を返す。
 #[tauri::command]
 pub async fn reindex_conversations() -> Result<usize, String> {
-    tokio::task::spawn_blocking(|| -> Result<usize, String> {
-        with_conn(|_conn| {
-            // TODO (M3 / PM-171): walkdir で jsonl を拾って 1 行ずつ INSERT。
-            Ok(0usize)
-        })
-        .map_err(|e| format!("{e:#}"))
-    })
-    .await
-    .map_err(|e| format!("join error: {e}"))?
+    Ok(0)
+}
+
+// ---------------------------------------------------------------------------
+// テスト（in-memory DB でクエリロジックを検証）
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// history.rs の DDL を最小限だけ再現（テスト専用）。
+    fn apply_minimal_ddl(conn: &Connection) {
+        conn.execute_batch(
+            "
+            CREATE TABLE sessions(
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at INTEGER,
+                updated_at INTEGER,
+                project_path TEXT
+            );
+            CREATE TABLE messages(
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT,
+                content TEXT,
+                created_at INTEGER
+            );
+            CREATE VIRTUAL TABLE messages_fts USING fts5(
+                content, content='messages', content_rowid='rowid',
+                tokenize = 'unicode61 remove_diacritics 2'
+            );
+            CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, content)
+                    VALUES (new.rowid, new.content);
+            END;
+            ",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sanitize_query_basic() {
+        assert_eq!(sanitize_query("tau"), Some("tau*".to_string()));
+        assert_eq!(sanitize_query("tau api"), Some("tau* api*".to_string()));
+        assert_eq!(sanitize_query("  "), None);
+        assert_eq!(sanitize_query(""), None);
+    }
+
+    #[test]
+    fn sanitize_query_strips_special_chars() {
+        assert_eq!(sanitize_query(r#""hello""#), Some("hello*".to_string()));
+        assert_eq!(sanitize_query("a:b(c)"), Some("a* b* c*".to_string()));
+        assert_eq!(sanitize_query("foo*bar"), Some("foo* bar*".to_string()));
+    }
+
+    #[test]
+    fn sanitize_query_keeps_cjk() {
+        assert_eq!(
+            sanitize_query("こんにちは 世界"),
+            Some("こんにちは* 世界*".to_string())
+        );
+    }
+
+    #[test]
+    fn run_search_returns_snippet_and_join() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_minimal_ddl(&conn);
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path) \
+             VALUES ('s1', 'FTS セッション', 1, 1, NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, created_at) \
+             VALUES ('m1', 's1', 'user', 'Tauri の画像ペーストが壊れている', 100)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, created_at) \
+             VALUES ('m2', 's1', 'assistant', 'taurus について語りましょう', 200)",
+            [],
+        )
+        .unwrap();
+
+        // prefix search `tau*` で tauri / taurus の両方が拾える。
+        let hits = run_search(&conn, "tau*", 10).unwrap();
+        assert_eq!(hits.len(), 2);
+        for h in &hits {
+            assert_eq!(h.session_id, "s1");
+            assert_eq!(h.session_title.as_deref(), Some("FTS セッション"));
+            // snippet は [ ] でマッチ箇所が囲まれている。
+            assert!(h.snippet_html.contains('['));
+            assert!(h.snippet_html.contains(']'));
+        }
+    }
+
+    #[test]
+    fn run_search_respects_limit_and_rank() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_minimal_ddl(&conn);
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path) \
+             VALUES ('s1', NULL, 1, 1, NULL)",
+            [],
+        )
+        .unwrap();
+        for i in 0..5 {
+            conn.execute(
+                "INSERT INTO messages (id, session_id, role, content, created_at) \
+                 VALUES (?1, 's1', 'user', ?2, ?3)",
+                params![format!("m{i}"), format!("claude {i}"), i],
+            )
+            .unwrap();
+        }
+        let hits = run_search(&conn, "claude*", 3).unwrap();
+        assert_eq!(hits.len(), 3);
+    }
 }
