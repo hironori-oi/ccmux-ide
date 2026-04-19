@@ -1,18 +1,28 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Send, Paperclip } from "lucide-react";
+import { Send, Paperclip, AlertTriangle, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ImageThumb } from "@/components/chat/ImageThumb";
 import { SlashPalette } from "@/components/palette/SlashPalette";
 import { useChatStore, type Attachment } from "@/lib/stores/chat";
 import { callTauri } from "@/lib/tauri-api";
-import { writeFile, mkdir, exists } from "@tauri-apps/plugin-fs";
+import { writeFile, mkdir, exists, stat } from "@tauri-apps/plugin-fs";
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
+import { humanFileSize } from "@/lib/image-utils";
 import { cn } from "@/lib/utils";
 import type { SlashCmd } from "@/lib/types";
+
+/** PRJ-012 Round E1: 「大きい画像」警告の閾値（100KB）。 */
+const LARGE_ATTACHMENT_BYTES = 100 * 1024;
 
 /**
  * PM-132 / PM-142 / PM-143 / PM-201: 送信入力欄。
@@ -36,10 +46,57 @@ export function InputArea() {
   const [text, setText] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [slashOpen, setSlashOpen] = useState(false);
+  /**
+   * Round E1: attachment ごとのファイルサイズ (bytes)。
+   * key は `Attachment.id`。計測失敗時は undefined のまま。
+   * 100KB 超で warn icon + tooltip 表示。
+   */
+  const [attachmentSizes, setAttachmentSizes] = useState<
+    Record<string, number | undefined>
+  >({});
   // slash クエリは textarea の onChange / onKeyUp / onClick 時に再計算する
   const [slashQuery, setSlashQuery] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * attachments 変更時にファイルサイズを計測する。
+   * 既に計測済みの id は skip、削除された id は state から除去。
+   * 100KB 超の判定に使うだけなので失敗は silent。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const updates: Record<string, number | undefined> = {};
+      let changed = false;
+      for (const a of attachments) {
+        // 計測済み（成功/失敗問わずキーが存在）なら skip
+        if (Object.prototype.hasOwnProperty.call(attachmentSizes, a.id)) continue;
+        try {
+          const s = await stat(a.path);
+          if (cancelled) return;
+          updates[a.id] = typeof s.size === "number" ? s.size : undefined;
+          changed = true;
+        } catch {
+          updates[a.id] = undefined;
+          changed = true;
+        }
+      }
+      // 削除された id を掃除
+      const liveIds = new Set(attachments.map((a) => a.id));
+      const pruned: Record<string, number | undefined> = {};
+      for (const [id, v] of Object.entries(attachmentSizes)) {
+        if (liveIds.has(id)) pruned[id] = v;
+        else changed = true;
+      }
+      if (changed && !cancelled) {
+        setAttachmentSizes({ ...pruned, ...updates });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [attachments, attachmentSizes]);
 
   /** 現在の caret で slash 断片を再評価して state に反映する。 */
   function recomputeSlashAt(value: string, caret: number) {
@@ -185,15 +242,52 @@ export function InputArea() {
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-2 p-3">
         {attachments.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2 rounded border border-dashed border-border/60 p-2">
-            <Paperclip
-              className="h-3.5 w-3.5 text-muted-foreground"
-              aria-hidden
-            />
-            {attachments.map((a) => (
-              <ImageThumb key={a.id} attachment={a} />
-            ))}
-          </div>
+          <TooltipProvider delayDuration={200}>
+            <div className="flex flex-wrap items-center gap-2 rounded border border-dashed border-border/60 p-2">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="inline-flex items-center gap-1 text-muted-foreground"
+                    aria-label="添付画像"
+                  >
+                    <Paperclip className="h-3.5 w-3.5" aria-hidden />
+                    <Info className="h-3 w-3" aria-hidden />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="start">
+                  添付画像は現状 1 枚まで。送信で自動クリアされます。
+                </TooltipContent>
+              </Tooltip>
+              {attachments.map((a) => {
+                const size = attachmentSizes[a.id];
+                const isLarge =
+                  typeof size === "number" && size > LARGE_ATTACHMENT_BYTES;
+                return (
+                  <div key={a.id} className="flex items-center gap-1">
+                    <ImageThumb attachment={a} />
+                    {isLarge && typeof size === "number" ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            className="inline-flex h-4 w-4 items-center justify-center text-amber-600 dark:text-amber-500"
+                            aria-label={`大きい画像: ${humanFileSize(size)}`}
+                          >
+                            <AlertTriangle
+                              className="h-3.5 w-3.5"
+                              aria-hidden
+                            />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top">
+                          大きめの画像です（{humanFileSize(size)}）。送信前に内容を確認してください。
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          </TooltipProvider>
         )}
         <div className="flex items-end gap-2">
           <div ref={wrapperRef} className="relative flex-1">

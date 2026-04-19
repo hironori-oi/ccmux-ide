@@ -1,8 +1,16 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useTheme } from "next-themes";
-import { Monitor, Moon, Palette, RefreshCw, Sun } from "lucide-react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import {
+  Image as ImageIcon,
+  Monitor,
+  Moon,
+  Palette,
+  RefreshCw,
+  Sun,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -11,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/lib/stores/settings";
 import {
   applyAccent,
+  applyBackground,
   applyThemePreset,
   readPersistedAppearance,
   type ResolvedMode,
@@ -21,8 +30,10 @@ import {
   type AccentDefinition,
   type ThemePresetDefinition,
 } from "@/lib/theme-presets";
+import { DEFAULT_BACKGROUND_IMAGE } from "@/lib/types";
 import type {
   AccentColor,
+  BackgroundImageSettings,
   ThemeMode,
   ThemePreset,
 } from "@/lib/types";
@@ -45,6 +56,24 @@ const THEME_OPTIONS: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "system", label: "システム", icon: Monitor },
 ];
 
+/** Round E2: 背景画像の表示モード。 */
+const FIT_OPTIONS: {
+  value: BackgroundImageSettings["fit"];
+  label: string;
+  description: string;
+}[] = [
+  { value: "cover", label: "全体", description: "画面全体に拡大（はみ出しトリム）" },
+  { value: "contain", label: "含める", description: "アスペクト維持で全体を収める" },
+  { value: "tile", label: "繰り返し", description: "元サイズのまま並べる" },
+  { value: "center", label: "中央", description: "元サイズで中央配置" },
+];
+
+/** 画像ファイル拡張子。@tauri-apps/plugin-dialog::open のフィルタに渡す。 */
+const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "gif"];
+
+/** 大きい画像の警告閾値（byte）。10 MB 超で警告表示。 */
+const LARGE_IMAGE_WARN_BYTES = 10 * 1024 * 1024;
+
 export function AppearanceSettings() {
   const { setTheme, theme: currentTheme, resolvedTheme } = useTheme();
   const appearance = useSettingsStore((s) => s.settings.appearance);
@@ -52,6 +81,15 @@ export function AppearanceSettings() {
   const setAccentColor = useSettingsStore((s) => s.setAccentColor);
   const setThemePreset = useSettingsStore((s) => s.setThemePreset);
   const setFontSize = useSettingsStore((s) => s.setFontSize);
+  const setBackgroundImage = useSettingsStore((s) => s.setBackgroundImage);
+  const clearBackgroundImage = useSettingsStore((s) => s.clearBackgroundImage);
+
+  // 背景画像設定（v2 以前の persisted で未定義の場合に備え fallback）
+  const bgImage: BackgroundImageSettings =
+    appearance.backgroundImage ?? DEFAULT_BACKGROUND_IMAGE;
+
+  // 選択中画像のファイルサイズ警告メッセージ（null = 警告なし）
+  const [bgSizeWarning, setBgSizeWarning] = useState<string | null>(null);
 
   const initializedRef = useRef(false);
 
@@ -77,10 +115,14 @@ export function AppearanceSettings() {
     if (persisted) {
       applyThemePreset(persisted.themePreset, mode);
       applyAccent(persisted.accentColor, mode);
+      // Round E2: 背景画像も初回同期
+      applyBackground(persisted.backgroundImage);
     } else {
       applyThemePreset(appearance.themePreset, mode);
       applyAccent(appearance.accentColor, mode);
+      applyBackground(bgImage);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appearance.accentColor, appearance.themePreset, resolvedTheme]);
 
   // --- mode（light/dark）切替時: 現在の accent / preset を再適用 -----------
@@ -90,6 +132,19 @@ export function AppearanceSettings() {
     applyThemePreset(appearance.themePreset, mode);
     applyAccent(appearance.accentColor, mode);
   }, [resolvedTheme, appearance.themePreset, appearance.accentColor]);
+
+  // --- Round E2: 背景画像の任意フィールド変更時に即時反映 -----------------
+  useEffect(() => {
+    if (!initializedRef.current) return;
+    applyBackground(bgImage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    bgImage.path,
+    bgImage.opacity,
+    bgImage.blur,
+    bgImage.fit,
+    bgImage.overlayOpacity,
+  ]);
 
   const handleThemeChange = (value: ThemeMode) => {
     setAppearance({ theme: value });
@@ -101,6 +156,91 @@ export function AppearanceSettings() {
     const mode: ResolvedMode = resolvedTheme === "dark" ? "dark" : "light";
     applyAccent(color, mode);
   };
+
+  // ---- Round E2: 背景画像ハンドラ群 -------------------------------------
+  const handlePickBackgroundImage = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const result = await open({
+        multiple: false,
+        directory: false,
+        filters: [
+          {
+            name: "画像",
+            extensions: IMAGE_EXTENSIONS,
+          },
+        ],
+      });
+      if (!result || typeof result !== "string") return;
+      setBackgroundImage({ path: result });
+
+      // 大きい画像の警告（fs plugin 未導入環境ではスキップ）
+      try {
+        const { stat } = await import("@tauri-apps/plugin-fs");
+        const info = await stat(result);
+        if (
+          typeof info?.size === "number" &&
+          info.size > LARGE_IMAGE_WARN_BYTES
+        ) {
+          const mb = (info.size / (1024 * 1024)).toFixed(1);
+          setBgSizeWarning(
+            `選択した画像が大きめです（${mb} MB）。描画性能に影響する可能性があります。`
+          );
+        } else {
+          setBgSizeWarning(null);
+        }
+      } catch {
+        // fs plugin 未導入・アクセス不可の場合は警告を出さない
+        setBgSizeWarning(null);
+      }
+    } catch (err) {
+      // ユーザーキャンセル等は silent
+      console.warn("[AppearanceSettings] 画像選択に失敗", err);
+    }
+  };
+
+  const handleFitChange = (fit: BackgroundImageSettings["fit"]) => {
+    setBackgroundImage({ fit });
+  };
+
+  const handleClearBackgroundImage = () => {
+    clearBackgroundImage();
+    setBgSizeWarning(null);
+  };
+
+  // プレビュー用の URL（path 変更時のみ再計算）
+  const previewUrl = useMemo(() => {
+    if (!bgImage.path) return null;
+    try {
+      return convertFileSrc(bgImage.path);
+    } catch {
+      return null;
+    }
+  }, [bgImage.path]);
+
+  // プレビュー box の inline style（スライダーとリアルタイム連動）
+  const previewImageStyle = useMemo<CSSProperties>(() => {
+    if (!previewUrl) return {};
+    const fit = bgImage.fit;
+    const size = fit === "tile" || fit === "center" ? "auto" : fit;
+    const repeat = fit === "tile" ? "repeat" : "no-repeat";
+    return {
+      backgroundImage: `url("${previewUrl}")`,
+      backgroundSize: size,
+      backgroundRepeat: repeat,
+      backgroundPosition: "center",
+      opacity: bgImage.opacity,
+      filter: bgImage.blur > 0 ? `blur(${bgImage.blur}px)` : undefined,
+    };
+  }, [previewUrl, bgImage.fit, bgImage.opacity, bgImage.blur]);
+
+  // 短縮表示: 絶対パスの末尾 2 セグメントのみ
+  const shortBgPath = useMemo(() => {
+    if (!bgImage.path) return null;
+    const parts = bgImage.path.split(/[\\/]/).filter(Boolean);
+    if (parts.length <= 2) return bgImage.path;
+    return `…/${parts.slice(-2).join("/")}`;
+  }, [bgImage.path]);
 
   const handlePresetChange = (preset: ThemePreset) => {
     const def = THEME_PRESETS[preset];
@@ -288,6 +428,244 @@ export function AppearanceSettings() {
         </div>
       </Card>
 
+      {/* 背景画像（Round E2 / Warp 風） */}
+      <Card className="space-y-4 p-5">
+        <div>
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+            <ImageIcon className="h-4 w-4" aria-hidden />
+            背景画像（Warp 風）
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            アプリ全体の背景に画像を表示します。透過度・ぼかし・オーバーレイで読みやすさを調整できます。
+          </p>
+        </div>
+
+        {/* 画像選択 */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handlePickBackgroundImage}
+            className="gap-2"
+            title="PC の画像ファイルを選択します"
+          >
+            <ImageIcon className="h-3.5 w-3.5" aria-hidden />
+            画像を選択
+          </Button>
+          <div
+            className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+            title={bgImage.path ?? "背景画像は設定されていません"}
+          >
+            {shortBgPath ? (
+              <>
+                現在: <span className="font-mono">{shortBgPath}</span>
+              </>
+            ) : (
+              "背景画像なし"
+            )}
+          </div>
+        </div>
+
+        {bgSizeWarning && (
+          <p
+            role="status"
+            className="rounded-md border border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-[11px] text-yellow-700 dark:text-yellow-300"
+          >
+            {bgSizeWarning}
+          </p>
+        )}
+
+        {/* 表示モード */}
+        <div>
+          <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+            表示モード
+          </div>
+          <div
+            role="radiogroup"
+            aria-label="背景画像の表示モード"
+            className="flex flex-wrap gap-2"
+          >
+            {FIT_OPTIONS.map((opt) => {
+              const selected = bgImage.fit === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected}
+                  aria-pressed={selected}
+                  title={opt.description}
+                  disabled={!bgImage.path}
+                  onClick={() => handleFitChange(opt.value)}
+                  className={cn(
+                    "rounded-md border px-3 py-1.5 text-xs transition",
+                    selected
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border hover:bg-muted/40",
+                    !bgImage.path && "cursor-not-allowed opacity-50"
+                  )}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* スライダー 3 本 */}
+        <div className="space-y-3">
+          {/* 画像の濃さ (opacity) */}
+          <div>
+            <div className="mb-1 flex items-baseline justify-between">
+              <label
+                htmlFor="bg-opacity"
+                className="text-xs font-medium text-muted-foreground"
+                title="背景画像の不透明度。値が高いほど画像がはっきり見えます。"
+              >
+                画像の濃さ
+              </label>
+              <span className="font-mono text-xs tabular-nums">
+                {Math.round(bgImage.opacity * 100)}%
+              </span>
+            </div>
+            <input
+              id="bg-opacity"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              disabled={!bgImage.path}
+              value={Math.round(bgImage.opacity * 100)}
+              onChange={(e) =>
+                setBackgroundImage({ opacity: Number(e.target.value) / 100 })
+              }
+              className="w-full accent-primary disabled:opacity-50"
+              aria-label="背景画像の濃さ"
+            />
+          </div>
+
+          {/* ぼかし (blur) */}
+          <div>
+            <div className="mb-1 flex items-baseline justify-between">
+              <label
+                htmlFor="bg-blur"
+                className="text-xs font-medium text-muted-foreground"
+                title="背景画像にぼかしをかけます。値が大きいほどぼんやりします。"
+              >
+                ぼかし
+              </label>
+              <span className="font-mono text-xs tabular-nums">
+                {bgImage.blur}px
+              </span>
+            </div>
+            <input
+              id="bg-blur"
+              type="range"
+              min={0}
+              max={20}
+              step={1}
+              disabled={!bgImage.path}
+              value={bgImage.blur}
+              onChange={(e) =>
+                setBackgroundImage({ blur: Number(e.target.value) })
+              }
+              className="w-full accent-primary disabled:opacity-50"
+              aria-label="背景画像のぼかし"
+            />
+          </div>
+
+          {/* オーバーレイ (overlayOpacity) */}
+          <div>
+            <div className="mb-1 flex items-baseline justify-between">
+              <label
+                htmlFor="bg-overlay"
+                className="text-xs font-medium text-muted-foreground"
+                title="UI 背景色を被せる濃さ。値が高いほど UI が読みやすく、画像は薄くなります。"
+              >
+                オーバーレイ
+              </label>
+              <span className="font-mono text-xs tabular-nums">
+                {Math.round(bgImage.overlayOpacity * 100)}%
+              </span>
+            </div>
+            <input
+              id="bg-overlay"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              disabled={!bgImage.path}
+              value={Math.round(bgImage.overlayOpacity * 100)}
+              onChange={(e) =>
+                setBackgroundImage({
+                  overlayOpacity: Number(e.target.value) / 100,
+                })
+              }
+              className="w-full accent-primary disabled:opacity-50"
+              aria-label="オーバーレイの濃さ"
+            />
+          </div>
+        </div>
+
+        {/* プレビュー */}
+        <div>
+          <div className="mb-1.5 text-xs font-medium text-muted-foreground">
+            プレビュー
+          </div>
+          <div
+            className="relative overflow-hidden rounded-md border border-border"
+            style={{
+              width: 200,
+              height: 100,
+              backgroundColor: "hsl(var(--background))",
+            }}
+            aria-label="背景画像プレビュー"
+          >
+            {previewUrl ? (
+              <>
+                {/* 画像層 */}
+                <div
+                  className="absolute inset-0"
+                  style={previewImageStyle}
+                  aria-hidden
+                />
+                {/* オーバーレイ層 */}
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    backgroundColor: "hsl(var(--background))",
+                    opacity: bgImage.overlayOpacity,
+                  }}
+                  aria-hidden
+                />
+                {/* サンプル UI（読みやすさ確認用） */}
+                <div className="relative flex h-full items-center justify-center">
+                  <span className="rounded bg-background/60 px-2 py-0.5 text-[11px] text-foreground">
+                    サンプル UI
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="flex h-full items-center justify-center text-[11px] text-muted-foreground">
+                画像未選択
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* リセット */}
+        <div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleClearBackgroundImage}
+            disabled={!bgImage.path}
+          >
+            背景なしに戻す
+          </Button>
+        </div>
+      </Card>
+
       {/* アプリ更新（PM-283） */}
       <Card className="space-y-3 p-5">
         <div>
@@ -322,6 +700,9 @@ export function AppearanceSettings() {
               resolvedTheme === "dark" ? "dark" : "light";
             applyThemePreset("orange", mode);
             applyAccent("orange", mode);
+            // Round E2: 背景画像もデフォルト（画像なし）に戻す
+            applyBackground(DEFAULT_BACKGROUND_IMAGE);
+            setBgSizeWarning(null);
           }}
         >
           デフォルトに戻す

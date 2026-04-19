@@ -19,13 +19,21 @@
  * 側で `resolvedTheme` を dep に入れる）。
  */
 
+import { convertFileSrc } from "@tauri-apps/api/core";
+
 import {
   ACCENT_DEFINITIONS,
   THEME_PRESETS,
   type AccentVariables,
   type ThemePresetVariables,
 } from "@/lib/theme-presets";
-import type { AccentColor, AppSettings, ThemePreset } from "@/lib/types";
+import {
+  DEFAULT_BACKGROUND_IMAGE,
+  type AccentColor,
+  type AppSettings,
+  type BackgroundImageSettings,
+  type ThemePreset,
+} from "@/lib/types";
 
 /** `applyAccent` / `applyThemePreset` が参照する現在のモード。 */
 export type ResolvedMode = "light" | "dark";
@@ -95,9 +103,15 @@ export function applyThemePreset(
  * 失敗時（未保存 / 破損 / SSR）は `null` を返す。AppearanceSettings の
  * useEffect 初回マウント時に呼び、見つかれば applyThemePreset + applyAccent を
  * 即時実行する。
+ *
+ * Round E2: 背景画像（backgroundImage）も返す。旧バージョン（v2 以前）で
+ * 未設定の場合は `DEFAULT_BACKGROUND_IMAGE` を返す。
  */
 export function readPersistedAppearance():
-  | Pick<AppSettings["appearance"], "accentColor" | "themePreset">
+  | Pick<
+      AppSettings["appearance"],
+      "accentColor" | "themePreset" | "backgroundImage"
+    >
   | null {
   if (typeof window === "undefined") return null;
   try {
@@ -111,8 +125,78 @@ export function readPersistedAppearance():
     return {
       accentColor: ap.accentColor ?? "orange",
       themePreset: ap.themePreset ?? "orange",
+      backgroundImage: ap.backgroundImage ?? DEFAULT_BACKGROUND_IMAGE,
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * Round E2: 背景画像設定を DOM へ反映する。
+ *
+ * `app/globals.css` で定義した CSS variable（`--ccmux-bg-*`）を
+ * `document.documentElement` に直接書き込み、html::before / html::after が
+ * それを参照する形で画像 + オーバーレイを描画する（body bg は transparent 化済み）。
+ *
+ * - `settings.path` が null の場合は画像を非表示（`--ccmux-bg-image: none`）、
+ *   オーバーレイは完全不透明に戻す（`--ccmux-bg-overlay: 1`）。
+ * - path は `convertFileSrc` で asset:// URL に変換してから CSS url() に
+ *   埋め込む。Windows パスやスペースを含む場合に備え、url() 内は二重引用符。
+ * - `fit === "tile"` のみ `background-size: auto` + `background-repeat: repeat`
+ *   を採用。それ以外は cover / contain / center（center は "auto"）。
+ */
+export function applyBackground(settings: BackgroundImageSettings): void {
+  if (typeof document === "undefined") return;
+  const root = document.documentElement;
+
+  if (!settings.path) {
+    // 画像なし: 既存 bg-background を維持（overlay=1 で画像層が見えてもフル透過）
+    root.style.setProperty("--ccmux-bg-image", "none");
+    root.style.setProperty("--ccmux-bg-opacity", "0");
+    root.style.setProperty("--ccmux-bg-blur", "0px");
+    root.style.setProperty("--ccmux-bg-overlay", "1");
+    root.style.setProperty("--ccmux-bg-size", "cover");
+    root.style.setProperty("--ccmux-bg-repeat", "no-repeat");
+    return;
+  }
+
+  let url: string;
+  try {
+    url = convertFileSrc(settings.path);
+  } catch {
+    // 変換失敗（SSR / 未 Tauri 環境）は no-op
+    return;
+  }
+
+  // fit → background-size / background-repeat の対応
+  let sizeRule = "cover";
+  let repeatRule = "no-repeat";
+  switch (settings.fit) {
+    case "cover":
+      sizeRule = "cover";
+      repeatRule = "no-repeat";
+      break;
+    case "contain":
+      sizeRule = "contain";
+      repeatRule = "no-repeat";
+      break;
+    case "tile":
+      sizeRule = "auto";
+      repeatRule = "repeat";
+      break;
+    case "center":
+      sizeRule = "auto";
+      repeatRule = "no-repeat";
+      break;
+  }
+
+  // url() の中身はダブルクォート。CSS の仕様上、URL 内の " は稀だが
+  // encodeURI 済みなのでそのまま安全。
+  root.style.setProperty("--ccmux-bg-image", `url("${url}")`);
+  root.style.setProperty("--ccmux-bg-opacity", String(settings.opacity));
+  root.style.setProperty("--ccmux-bg-blur", `${settings.blur}px`);
+  root.style.setProperty("--ccmux-bg-overlay", String(settings.overlayOpacity));
+  root.style.setProperty("--ccmux-bg-size", sizeRule);
+  root.style.setProperty("--ccmux-bg-repeat", repeatRule);
 }

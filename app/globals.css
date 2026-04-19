@@ -66,3 +66,66 @@
     font-feature-settings: "rlig" 1, "calt" 1;
   }
 }
+
+/*
+ * Round E2: Warp 風 背景画像レイヤー。
+ *
+ * `lib/apply-accent.ts::applyBackground` が --ccmux-bg-* CSS variable を
+ * document.documentElement に書き込み、html::before（画像）+ html::after
+ * （bg-background の半透明オーバーレイ）で描画する。
+ *
+ * ## 描画レイヤーの順序（下 → 上）
+ * 1. html::before      : 背景画像（opacity + filter:blur() で調整）
+ * 2. html::after       : 背景色オーバーレイ（hsl(--background) × overlay-opacity）
+ * 3. body 本体         : bg-transparent にして、上記 2 層を透過させる
+ * 4. Shell ほか UI     : 通常フロー
+ *
+ * ## 設計上の注意
+ * - `body { bg-background }` と negative z-index の pseudo-element は共存が
+ *   難しい（body 自身の背景が常に手前に描画される）ため、html 疑似要素で
+ *   描画し、body は透明化する。
+ * - 画像なし時は ::before の background-image: none、::after の opacity: 1 で
+ *   従来の bg-background と完全に同じ見た目になる（レイアウト影響なし）。
+ * - `background-attachment` は使わず position:fixed で常にビューポート追従。
+ * - 印刷時は `-webkit-print-color-adjust` 影響があるが IDE 内部用途のため未対応。
+ */
+@layer base {
+  :root {
+    --ccmux-bg-image: none;
+    --ccmux-bg-opacity: 0;
+    --ccmux-bg-blur: 0px;
+    --ccmux-bg-overlay: 1;
+    --ccmux-bg-size: cover;
+    --ccmux-bg-repeat: no-repeat;
+  }
+
+  /* 画像レイヤー + オーバーレイ層を効かせるため、body 自身の bg を透明化。
+     ::after が opacity=1 / hsl(--background) を塗るので見た目は変わらない。 */
+  body {
+    background-color: transparent;
+  }
+
+  html::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -10;
+    background-image: var(--ccmux-bg-image);
+    background-size: var(--ccmux-bg-size);
+    background-position: center;
+    background-repeat: var(--ccmux-bg-repeat);
+    opacity: var(--ccmux-bg-opacity);
+    filter: blur(var(--ccmux-bg-blur));
+    pointer-events: none;
+  }
+
+  html::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -9;
+    background: hsl(var(--background));
+    opacity: var(--ccmux-bg-overlay);
+    pointer-events: none;
+  }
+}

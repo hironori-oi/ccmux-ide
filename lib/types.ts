@@ -151,7 +151,41 @@ export interface AppearanceSettings {
   themePreset: ThemePreset;
   /** ベースフォントサイズ (px)、12〜16 の範囲。 */
   fontSize: number;
+  /**
+   * Round E2 で追加。Warp 風の背景画像カスタマイズ設定。
+   * 既定 `DEFAULT_BACKGROUND_IMAGE`（path=null = 背景画像なし）。
+   */
+  backgroundImage: BackgroundImageSettings;
 }
+
+/**
+ * Round E2: 背景画像カスタマイズ設定（Warp ターミナル風）。
+ *
+ * アプリ全体の body 背景に画像を表示し、透過度・ぼかし・オーバーレイで
+ * UI の視認性を担保する。path は localStorage に絶対パスで保存し、
+ * 起動時に `@tauri-apps/api/core::convertFileSrc` で asset:// URL に変換する。
+ */
+export interface BackgroundImageSettings {
+  /** local file の絶対パス（null = 背景画像なし） */
+  path: string | null;
+  /** 0..1（0 = 透明、1 = 完全表示） */
+  opacity: number;
+  /** 0..20 (px)、UI レイヤーの backdrop-filter blur */
+  blur: number;
+  /** 表示モード */
+  fit: "cover" | "contain" | "tile" | "center";
+  /** 0..1、UI 上に重ねる背景色レイヤーの濃さ（高いほど画像が薄く、UI 視認性 up） */
+  overlayOpacity: number;
+}
+
+/** 背景画像設定のデフォルト（背景画像なし、Overlay やや濃いめ）。 */
+export const DEFAULT_BACKGROUND_IMAGE: BackgroundImageSettings = {
+  path: null,
+  opacity: 0.85,
+  blur: 0,
+  fit: "cover",
+  overlayOpacity: 0.7,
+};
 
 /**
  * アプリ全体の永続化設定。
@@ -170,6 +204,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     accentColor: "orange",
     themePreset: "orange",
     fontSize: 14,
+    backgroundImage: DEFAULT_BACKGROUND_IMAGE,
   },
 };
 
