@@ -7,14 +7,14 @@ import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { ContextGauge } from "@/components/sidebar/ContextGauge";
-// NOTE(M3 切り分け Round 4): ProjectSwitcher + ProjectTree を一時 disable。
-// Sidebar は特定済（Round 3）、内部の Project 系が最有力候補。
+// NOTE(M3 切り分け Round 5): Project 無罪確定、Monitor 3 つ (ContextGauge /
+// SubAgentsList / TodosList) を disable して SessionList 単独で検証。
+// import { ContextGauge } from "@/components/sidebar/ContextGauge";
 // import { ProjectSwitcher } from "@/components/sidebar/ProjectSwitcher";
 // import { ProjectTree } from "@/components/sidebar/ProjectTree";
 import { SessionList } from "@/components/sidebar/SessionList";
-import { SubAgentsList } from "@/components/sidebar/SubAgentsList";
-import { TodosList } from "@/components/sidebar/TodosList";
+// import { SubAgentsList } from "@/components/sidebar/SubAgentsList";
+// import { TodosList } from "@/components/sidebar/TodosList";
 // import { useProjectStore } from "@/lib/stores/project";
 import { cn } from "@/lib/utils";
 
@@ -88,9 +88,8 @@ export function Sidebar() {
           {/* セッション一覧（中央、伸縮） */}
           <SessionList />
 
+          {/* M3 切り分け Round 5: Monitor 3 つ を一時 disable
           <Separator />
-
-          {/* モニタ領域（下半分、ScrollArea で overflow 対応） */}
           <ScrollArea className="shrink-0 max-h-[45%] basis-auto">
             <ContextGauge />
             <Separator className="mx-2 my-1" />
@@ -98,6 +97,7 @@ export function Sidebar() {
             <Separator className="mx-2 my-1" />
             <TodosList />
           </ScrollArea>
+          */}
         </div>
       )}
     </motion.aside>
