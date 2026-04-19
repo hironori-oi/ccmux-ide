@@ -2,9 +2,17 @@
 
 import { create } from "zustand";
 import { readDir, readTextFile, exists } from "@tauri-apps/plugin-fs";
-import { homeDir, join } from "@tauri-apps/api/path";
+import { homeDir, join, basename } from "@tauri-apps/api/path";
 
 import type { ProjectSummary } from "@/lib/types";
+
+/**
+ * localStorage に保存する「手動追加プロジェクト」の絶対パス一覧の key。
+ * fetchProjects() が workspace 配下だけを走査するのに対し、
+ * addProjectFromPath() はワークスペース外の任意ディレクトリも登録できるので
+ * 永続化は分離して持つ（Round B 追加）。
+ */
+const EXTRA_PROJECTS_STORAGE_KEY = "ccmux-ide.projects.extra-paths";
 
 /**
  * PRJ-XXX プロジェクト管理ドメインの Zustand store (Week 6 Chunk 2 / PM-203)。
@@ -39,6 +47,15 @@ interface ProjectState {
   fetchProjects: () => Promise<void>;
   /** 選択変更。id が見つからない場合は no-op */
   setActiveProject: (id: string) => void;
+  /**
+   * 任意のディレクトリをプロジェクトとして手動追加する（PRJ-012 Round B）。
+   *
+   * - `brief.md` の有無は不問。無い場合も `id = basename(path)` で仮登録する
+   * - 同一 `path` が既に登録済なら skip（冪等）
+   * - 追加した project は activeProjectId にも設定する
+   * - 絶対パス一覧を localStorage に persist（リロード後も復元）
+   */
+  addProjectFromPath: (path: string) => Promise<void>;
 }
 
 /** projects 配列から activeProjectId と match するものを返す補助 */
@@ -90,6 +107,58 @@ function parseBrief(contents: string): { title?: string; phase?: string } {
 async function resolveDefaultWorkspaceRoot(): Promise<string> {
   const home = await homeDir();
   return await join(home, "Desktop", "claude-code-company");
+}
+
+/**
+ * localStorage から extra projects の絶対パス一覧を読む。
+ * SSR/初期ロード時の `window` 未定義にも耐える。
+ */
+function loadExtraPaths(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(EXTRA_PROJECTS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === "string");
+  } catch {
+    return [];
+  }
+}
+
+/** localStorage に extra projects の絶対パス一覧を保存。 */
+function saveExtraPaths(paths: string[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      EXTRA_PROJECTS_STORAGE_KEY,
+      JSON.stringify(paths)
+    );
+  } catch {
+    // quota 超過等は無視（UI 側で toast を出す）
+  }
+}
+
+/**
+ * 絶対パスから `ProjectSummary` を作る（`brief.md` があれば中身も読む）。
+ * どこから呼ばれても reusable にするためヘルパ化。
+ */
+async function buildExtraSummary(path: string): Promise<ProjectSummary> {
+  const id = await basename(path);
+  let title: string | undefined;
+  let phase: string | undefined;
+  try {
+    const briefPath = await join(path, "brief.md");
+    if (await exists(briefPath)) {
+      const contents = await readTextFile(briefPath);
+      const parsed = parseBrief(contents);
+      title = parsed.title;
+      phase = parsed.phase;
+    }
+  } catch {
+    // brief が読めなくても id / path だけで登録
+  }
+  return { id, path, title, phase };
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -152,6 +221,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         });
       }
 
+      // Round B: workspace 外から手動追加した extra projects を復元・合流
+      const extraPaths = loadExtraPaths();
+      const knownPaths = new Set(summaries.map((s) => s.path));
+      for (const p of extraPaths) {
+        if (knownPaths.has(p)) continue;
+        try {
+          const extra = await buildExtraSummary(p);
+          if (summaries.some((s) => s.id === extra.id)) continue;
+          summaries.push(extra);
+        } catch {
+          // 読めないパスは黙って skip（次回 fetch でも再試行）
+        }
+      }
+
       // id 昇順（PRJ-001 ～ PRJ-012 ～ COMPANY-WEBSITE）
       summaries.sort((a, b) => a.id.localeCompare(b.id, "ja"));
 
@@ -174,5 +257,47 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const found = get().projects.some((p) => p.id === id);
     if (!found) return;
     set({ activeProjectId: id });
+  },
+
+  addProjectFromPath: async (path: string) => {
+    try {
+      // 既に path が登録済みなら activeProjectId 切替のみ
+      const existing = get().projects.find((p) => p.path === path);
+      if (existing) {
+        set({ activeProjectId: existing.id });
+        return;
+      }
+
+      const summary = await buildExtraSummary(path);
+
+      // id 衝突（別 path だが同名ディレクトリ）の場合はサフィックスを付与
+      let finalId = summary.id;
+      let suffix = 2;
+      const existingIds = new Set(get().projects.map((p) => p.id));
+      while (existingIds.has(finalId)) {
+        finalId = `${summary.id} (${suffix})`;
+        suffix++;
+      }
+      const finalSummary: ProjectSummary = { ...summary, id: finalId };
+
+      const next = [...get().projects, finalSummary].sort((a, b) =>
+        a.id.localeCompare(b.id, "ja")
+      );
+
+      // localStorage に絶対パスを persist（id はパス basename から都度再生成）
+      const extraPaths = loadExtraPaths();
+      if (!extraPaths.includes(path)) {
+        saveExtraPaths([...extraPaths, path]);
+      }
+
+      set({
+        projects: next,
+        activeProjectId: finalSummary.id,
+        error: null,
+      });
+    } catch (e) {
+      set({ error: String(e) });
+      throw e;
+    }
   },
 }));

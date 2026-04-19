@@ -70,7 +70,7 @@ export function ProjectSwitcher() {
             variant="outline"
             size="sm"
             className="w-full justify-between gap-2 px-2"
-            aria-label="プロジェクトを選択"
+            aria-label="現在のプロジェクト"
           >
             <span className="flex min-w-0 items-center gap-2">
               <FolderOpen
@@ -84,7 +84,7 @@ export function ProjectSwitcher() {
                     : active.id
                   : projects.length === 0
                     ? "案件なし"
-                    : "プロジェクトを選択"}
+                    : "現在のプロジェクト"}
               </span>
             </span>
             <ChevronDown

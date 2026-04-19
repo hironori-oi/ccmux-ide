@@ -67,6 +67,26 @@ pub struct UsageEntry {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
+    /// JSONL ファイルパス（session 単位 heuristic に利用、集計結果には含めない）
+    #[serde(skip)]
+    pub session_path: String,
+    /// subagent 由来 message か（JSONL の `parentToolUseId` or `tool_use_id==Task` 検出）
+    #[serde(skip)]
+    pub is_subagent: bool,
+}
+
+/// per-model breakdown（weekly / session 両方で使う）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelBreakdown {
+    /// 正規化済みモデル名（"claude-opus-4-7" / "others" 等）
+    pub model: String,
+    pub messages: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cost_usd: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -82,6 +102,11 @@ pub struct UsageWindow {
     pub window_start: String,
     /// ISO8601 UTC
     pub window_end: String,
+    /// top 5 + "others" に集約した model 別内訳（cost 降順）。
+    ///
+    /// Round C で追加。既存 consumer は無視して良い（optional field 扱い）。
+    #[serde(default)]
+    pub by_model: Vec<ModelBreakdown>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +117,27 @@ pub struct DailyUsage {
     pub messages: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub cost_usd: f64,
+}
+
+/// 直近 24h セッションの detail（Round C）。
+///
+/// 「長時間」「background/loop」「subagent」は heuristic ベースのため
+/// 絶対値は保証せず、UI では「目安」として提示する。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Last24h {
+    /// 24h 内に少なくとも 1 メッセージがあった JSONL ファイル数（= unique セッション数）
+    pub session_count: u64,
+    /// 24h 内の total assistant messages
+    pub message_count: u64,
+    /// 長時間セッション: 1 ファイル内の最古〜最新 timestamp 差が 30 分以上のもの
+    pub long_sessions: u64,
+    /// background/loop セッション: 連続メッセージ間隔が 5 分以内で続くペアが 10 組以上
+    pub background_sessions: u64,
+    /// subagent メッセージ数（parentToolUseId / tool_use_id=="Task" 検出ベース、heuristic）
+    pub subagent_messages: u64,
+    /// 過去 24h total cost (USD)
     pub cost_usd: f64,
 }
 
@@ -108,6 +154,9 @@ pub struct UsageStats {
     pub session_reset_at: Option<String>,
     /// 集計対象 JSONL ファイル数（デバッグ用）
     pub source_files: u64,
+    /// 直近 24h の detail（Round C 追加）
+    #[serde(default)]
+    pub last_24h: Last24h,
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +244,27 @@ fn extract_entry(v: &serde_json::Value) -> Option<UsageEntry> {
         .and_then(|n| n.as_u64())
         .unwrap_or(0);
 
+    // subagent 検出: `parentToolUseId` が非 null、あるいは assistant message.content
+    // に tool_use で name=="Task" が含まれる。どちらかを満たせば subagent と判定。
+    // これは heuristic だが、ccusage OSS も同等の手法を使っている。
+    let is_subagent = {
+        let has_parent_tool = v
+            .get("parentToolUseId")
+            .map(|x| !x.is_null())
+            .unwrap_or(false);
+        let has_task_tool = msg
+            .get("content")
+            .and_then(|c| c.as_array())
+            .map(|arr| {
+                arr.iter().any(|item| {
+                    item.get("type").and_then(|t| t.as_str()) == Some("tool_use")
+                        && item.get("name").and_then(|n| n.as_str()) == Some("Task")
+                })
+            })
+            .unwrap_or(false);
+        has_parent_tool || has_task_tool
+    };
+
     // すべて 0 なら記録価値なし（ただし 0 tokens の assistant message も数 messages
     // にはカウントしたいので、entry は返す）。
     Some(UsageEntry {
@@ -204,6 +274,8 @@ fn extract_entry(v: &serde_json::Value) -> Option<UsageEntry> {
         output_tokens,
         cache_read_tokens,
         cache_creation_tokens,
+        session_path: String::new(),
+        is_subagent,
     })
 }
 
@@ -243,11 +315,99 @@ fn parse_jsonl_file(path: &PathBuf) -> Vec<UsageEntry> {
                 continue;
             }
         };
-        if let Some(entry) = extract_entry(&v) {
+        if let Some(mut entry) = extract_entry(&v) {
+            // session 単位の detection で使うため、JSONL ファイルパスを記録。
+            entry.session_path = path.to_string_lossy().into_owned();
             out.push(entry);
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// model 名正規化（per-model 集計の key）
+// ---------------------------------------------------------------------------
+
+/// "claude-opus-4-7[1m]" → "opus-4.7" 形式に正規化。
+///
+/// per-model breakdown の key に使う。Opus 4.7 の 1M variant は同じ opus-4.7
+/// にまとめる（価格は同一、UI では合算するのが自然）。
+fn normalize_model_name(model: &str) -> String {
+    let m = model.to_lowercase();
+    if m.contains("opus-4-7") || m.contains("opus-4.7") {
+        "opus-4.7".to_string()
+    } else if m.contains("opus-4-6") || m.contains("opus-4.6") {
+        "opus-4.6".to_string()
+    } else if m.contains("opus-4-5") || m.contains("opus-4.5") {
+        "opus-4.5".to_string()
+    } else if m.contains("opus") {
+        "opus".to_string()
+    } else if m.contains("sonnet-4-6") || m.contains("sonnet-4.6") {
+        "sonnet-4.6".to_string()
+    } else if m.contains("sonnet-4-5") || m.contains("sonnet-4.5") {
+        "sonnet-4.5".to_string()
+    } else if m.contains("sonnet") {
+        "sonnet".to_string()
+    } else if m.contains("haiku-4") {
+        "haiku-4".to_string()
+    } else if m.contains("haiku-3-5") || m.contains("haiku-3.5") {
+        "haiku-3.5".to_string()
+    } else if m.contains("haiku") {
+        "haiku".to_string()
+    } else {
+        // 未知モデルはそのまま（短縮）
+        let s = m.trim_start_matches("claude-").to_string();
+        if s.len() > 24 {
+            s[..24].to_string()
+        } else {
+            s
+        }
+    }
+}
+
+/// `HashMap<model, breakdown>` を cost 降順 top 5 + "others" にまとめる。
+fn collapse_breakdown(map: HashMap<String, ModelBreakdown>) -> Vec<ModelBreakdown> {
+    let mut items: Vec<ModelBreakdown> = map.into_values().collect();
+    items.sort_by(|a, b| {
+        b.cost_usd
+            .partial_cmp(&a.cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    if items.len() <= 5 {
+        return items;
+    }
+    let top: Vec<ModelBreakdown> = items.iter().take(5).cloned().collect();
+    let rest = &items[5..];
+    let mut others = ModelBreakdown {
+        model: "others".to_string(),
+        ..Default::default()
+    };
+    for r in rest {
+        others.messages += r.messages;
+        others.input_tokens += r.input_tokens;
+        others.output_tokens += r.output_tokens;
+        others.cache_read_tokens += r.cache_read_tokens;
+        others.cache_creation_tokens += r.cache_creation_tokens;
+        others.cost_usd += r.cost_usd;
+    }
+    let mut out = top;
+    out.push(others);
+    out
+}
+
+/// UsageEntry を ModelBreakdown マップに足し込む。
+fn accumulate_model(map: &mut HashMap<String, ModelBreakdown>, e: &UsageEntry, cost: f64) {
+    let key = normalize_model_name(&e.model);
+    let slot = map.entry(key.clone()).or_insert(ModelBreakdown {
+        model: key,
+        ..Default::default()
+    });
+    slot.messages += 1;
+    slot.input_tokens += e.input_tokens;
+    slot.output_tokens += e.output_tokens;
+    slot.cache_read_tokens += e.cache_read_tokens;
+    slot.cache_creation_tokens += e.cache_creation_tokens;
+    slot.cost_usd += cost;
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +440,7 @@ fn add_to_window(win: &mut UsageWindow, e: &UsageEntry) {
 fn compute_stats(now: DateTime<Utc>, entries: Vec<UsageEntry>, source_files: u64) -> UsageStats {
     let five_h_ago = now - Duration::hours(5);
     let seven_d_ago = now - Duration::days(7);
+    let twenty_four_h_ago = now - Duration::hours(24);
 
     // timestamp 昇順にして window_start 判定を容易にする。
     let mut parsed: Vec<(DateTime<Utc>, UsageEntry)> = entries
@@ -299,9 +460,29 @@ fn compute_stats(now: DateTime<Utc>, entries: Vec<UsageEntry>, source_files: u64
     // 問題は承知の上で簡潔さを優先）。
     let mut daily_map: HashMap<String, DailyUsage> = HashMap::new();
 
+    // per-model 集計（Round C）
+    let mut session_models: HashMap<String, ModelBreakdown> = HashMap::new();
+    let mut weekly_models: HashMap<String, ModelBreakdown> = HashMap::new();
+
+    // Last 24h の session 単位 detection 用に、session_path ごとに timestamps を
+    // 貯める。message_count / subagent_messages / total_cost もここで集計。
+    let mut last24h_sessions: HashMap<String, Vec<DateTime<Utc>>> = HashMap::new();
+    let mut last24h_message_count: u64 = 0;
+    let mut last24h_subagent_messages: u64 = 0;
+    let mut last24h_cost: f64 = 0.0;
+
     for (t, e) in &parsed {
+        let cost = estimate_cost(
+            &e.model,
+            e.input_tokens,
+            e.output_tokens,
+            e.cache_read_tokens,
+            e.cache_creation_tokens,
+        );
+
         if *t >= five_h_ago && *t <= now {
             add_to_window(&mut session_5h, e);
+            accumulate_model(&mut session_models, e, cost);
             if session_start.map(|s| *t < s).unwrap_or(true) {
                 session_start = Some(*t);
             }
@@ -311,6 +492,7 @@ fn compute_stats(now: DateTime<Utc>, entries: Vec<UsageEntry>, source_files: u64
         }
         if *t >= seven_d_ago && *t <= now {
             add_to_window(&mut weekly_7d, e);
+            accumulate_model(&mut weekly_models, e, cost);
             if weekly_start.map(|s| *t < s).unwrap_or(true) {
                 weekly_start = Some(*t);
             }
@@ -328,13 +510,21 @@ fn compute_stats(now: DateTime<Utc>, entries: Vec<UsageEntry>, source_files: u64
             d.messages += 1;
             d.input_tokens += e.input_tokens;
             d.output_tokens += e.output_tokens;
-            d.cost_usd += estimate_cost(
-                &e.model,
-                e.input_tokens,
-                e.output_tokens,
-                e.cache_read_tokens,
-                e.cache_creation_tokens,
-            );
+            d.cost_usd += cost;
+        }
+
+        if *t >= twenty_four_h_ago && *t <= now {
+            last24h_message_count += 1;
+            last24h_cost += cost;
+            if e.is_subagent {
+                last24h_subagent_messages += 1;
+            }
+            if !e.session_path.is_empty() {
+                last24h_sessions
+                    .entry(e.session_path.clone())
+                    .or_default()
+                    .push(*t);
+            }
         }
     }
 
@@ -347,6 +537,9 @@ fn compute_stats(now: DateTime<Utc>, entries: Vec<UsageEntry>, source_files: u64
     session_5h.window_end = session_end.to_rfc3339();
     weekly_7d.window_start = weekly_start.to_rfc3339();
     weekly_7d.window_end = weekly_end.to_rfc3339();
+
+    session_5h.by_model = collapse_breakdown(session_models);
+    weekly_7d.by_model = collapse_breakdown(weekly_models);
 
     // session reset = 最初のメッセージから 5h 後（messages=0 なら None）
     let session_reset_at = if session_5h.messages > 0 {
@@ -374,12 +567,50 @@ fn compute_stats(now: DateTime<Utc>, entries: Vec<UsageEntry>, source_files: u64
         }
     }
 
+    // Last 24h の per-session detection
+    //
+    // - long_sessions: 最古〜最新 timestamp 差 >= 30 分
+    // - background_sessions: 連続メッセージ間隔 <= 5 分のペアが 10 組以上
+    //
+    // どちらも heuristic。session_path が空（古い parse 結果）なら skip される。
+    let mut long_sessions: u64 = 0;
+    let mut background_sessions: u64 = 0;
+    let session_count = last24h_sessions.len() as u64;
+    for (_path, mut ts_list) in last24h_sessions {
+        ts_list.sort();
+        if let (Some(first), Some(last)) = (ts_list.first(), ts_list.last()) {
+            if *last - *first >= Duration::minutes(30) {
+                long_sessions += 1;
+            }
+        }
+        let mut short_gap_pairs: u64 = 0;
+        for pair in ts_list.windows(2) {
+            let gap = pair[1] - pair[0];
+            if gap <= Duration::minutes(5) && gap >= Duration::zero() {
+                short_gap_pairs += 1;
+            }
+        }
+        if short_gap_pairs >= 10 {
+            background_sessions += 1;
+        }
+    }
+
+    let last_24h = Last24h {
+        session_count,
+        message_count: last24h_message_count,
+        long_sessions,
+        background_sessions,
+        subagent_messages: last24h_subagent_messages,
+        cost_usd: last24h_cost,
+    };
+
     UsageStats {
         session_5h,
         weekly_7d,
         daily,
         session_reset_at,
         source_files,
+        last_24h,
     }
 }
 
@@ -466,6 +697,28 @@ mod tests {
             output_tokens: output,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
+            session_path: String::new(),
+            is_subagent: false,
+        }
+    }
+
+    fn mk_entry_session(
+        ts: &str,
+        model: &str,
+        input: u64,
+        output: u64,
+        session: &str,
+        subagent: bool,
+    ) -> UsageEntry {
+        UsageEntry {
+            timestamp: ts.to_string(),
+            model: model.to_string(),
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            session_path: session.to_string(),
+            is_subagent: subagent,
         }
     }
 
@@ -557,5 +810,87 @@ mod tests {
         )
         .unwrap();
         assert!(extract_entry(&v).is_none());
+    }
+
+    #[test]
+    fn normalize_model_name_known() {
+        assert_eq!(normalize_model_name("claude-opus-4-7[1m]"), "opus-4.7");
+        assert_eq!(normalize_model_name("claude-sonnet-4-6"), "sonnet-4.6");
+        assert_eq!(normalize_model_name("claude-haiku-4-5"), "haiku-4");
+    }
+
+    #[test]
+    fn collapse_breakdown_top5_others() {
+        let mut map: HashMap<String, ModelBreakdown> = HashMap::new();
+        for (i, cost) in [10.0, 8.0, 6.0, 4.0, 2.0, 1.0, 0.5].iter().enumerate() {
+            let k = format!("m{i}");
+            map.insert(
+                k.clone(),
+                ModelBreakdown {
+                    model: k,
+                    cost_usd: *cost,
+                    messages: 1,
+                    ..Default::default()
+                },
+            );
+        }
+        let out = collapse_breakdown(map);
+        assert_eq!(out.len(), 6); // top 5 + others
+        assert_eq!(out[0].cost_usd, 10.0);
+        assert_eq!(out[5].model, "others");
+        assert!((out[5].cost_usd - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn compute_stats_by_model_sorted() {
+        let now = Utc::now();
+        let t0 = (now - Duration::hours(1)).to_rfc3339();
+        let t1 = (now - Duration::hours(2)).to_rfc3339();
+        let entries = vec![
+            // Opus: input 1M → $15 + output 1M → $75 = $90
+            mk_entry(&t0, "claude-opus-4-7", 1_000_000, 1_000_000),
+            // Sonnet: 小額
+            mk_entry(&t1, "claude-sonnet-4-6", 1000, 500),
+        ];
+        let s = compute_stats(now, entries, 2);
+        assert_eq!(s.session_5h.by_model.len(), 2);
+        // cost 降順: Opus が先
+        assert_eq!(s.session_5h.by_model[0].model, "opus-4.7");
+        assert!(s.session_5h.by_model[0].cost_usd > s.session_5h.by_model[1].cost_usd);
+    }
+
+    #[test]
+    fn compute_stats_last24h_long_and_background() {
+        let now = Utc::now();
+        // session A: 60 分にわたる 15 点、3 分間隔
+        //  → 最古〜最新 = 42 分（>=30 分）で long にカウント
+        //  → 連続 5 分以内のペア 14 組 (>=10) で background にカウント
+        let mut entries = Vec::new();
+        for i in 0..15 {
+            let ts = (now - Duration::minutes(60) + Duration::minutes(i * 3)).to_rfc3339();
+            entries.push(mk_entry_session(
+                &ts,
+                "claude-sonnet-4-6",
+                100,
+                50,
+                "/tmp/sessionA.jsonl",
+                false,
+            ));
+        }
+        // session B: 24h 内、subagent フラグ ON のみ 1 件
+        entries.push(mk_entry_session(
+            &(now - Duration::minutes(10)).to_rfc3339(),
+            "claude-sonnet-4-6",
+            100,
+            50,
+            "/tmp/sessionB.jsonl",
+            true,
+        ));
+        let s = compute_stats(now, entries, 2);
+        assert_eq!(s.last_24h.session_count, 2);
+        assert_eq!(s.last_24h.long_sessions, 1);
+        assert_eq!(s.last_24h.background_sessions, 1);
+        assert_eq!(s.last_24h.subagent_messages, 1);
+        assert_eq!(s.last_24h.message_count, 16);
     }
 }

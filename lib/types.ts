@@ -196,6 +196,23 @@ export interface UsageEntry {
   cacheCreationTokens: number;
 }
 
+/**
+ * モデル別内訳 1 要素（Round C 追加）。
+ *
+ * `UsageWindow.byModel` に session / weekly それぞれ top 5 + `"others"`
+ * のリストで入る。cost_usd 降順。`model` は正規化済み名前
+ * （例: `"opus-4.7"` / `"sonnet-4.6"` / `"haiku-4"` / `"others"`）。
+ */
+export interface ModelBreakdown {
+  model: string;
+  messages: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  costUsd: number;
+}
+
 /** 1 ウィンドウ分の集計値。 */
 export interface UsageWindow {
   messages: number;
@@ -208,6 +225,28 @@ export interface UsageWindow {
   windowStart: string;
   /** ISO8601 UTC */
   windowEnd: string;
+  /**
+   * top 5 + "others" に集約した model 別内訳（cost 降順）。
+   * Round C で追加。空配列なら model 情報なし（古い backend）。
+   */
+  byModel: ModelBreakdown[];
+}
+
+/**
+ * 直近 24h セッション detail（Round C 追加）。
+ *
+ * Heuristic ベース:
+ *  - `longSessions`: 1 JSONL 内の最古〜最新 timestamp 差 >= 30 分
+ *  - `backgroundSessions`: 連続メッセージ間隔 <= 5 分のペアが 10 組以上
+ *  - `subagentMessages`: `parentToolUseId` or `tool_use.name=="Task"` 検出
+ */
+export interface Last24h {
+  sessionCount: number;
+  messageCount: number;
+  longSessions: number;
+  backgroundSessions: number;
+  subagentMessages: number;
+  costUsd: number;
 }
 
 /** 1 日分の集計値（日別 bar chart 用）。 */
@@ -232,6 +271,8 @@ export interface UsageStats {
   sessionResetAt: string | null;
   /** 集計対象 JSONL ファイル数（デバッグ用） */
   sourceFiles: number;
+  /** 直近 24h の detail（Round C 追加） */
+  last24h: Last24h;
 }
 
 // ---------------------------------------------------------------------------
