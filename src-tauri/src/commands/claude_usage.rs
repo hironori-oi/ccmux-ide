@@ -148,8 +148,17 @@ const RAW_SAMPLE_MAX: usize = 2048;
 /// sidecar 側では Agent SDK のネイティブバイナリ同梱パスも探していたが、
 /// 本コマンドは Tauri バックエンドから直接 `claude /usage` を spawn するだけ
 /// なので、PATH と環境変数だけで十分。
+/// SDK 同梱 CLI（`claude-agent-sdk-{platform}-{arch}/claude{.exe}`）のパスか判定。
+///
+/// これは Agent SDK がチャット用に同梱する native binary で、**`/usage` サブコマンド
+/// を持たない**。ccmux-ide の起動直後に `AUTO_CLAUDE_PATH` として選ばれがちで、
+/// `claude /usage` タイムアウトの原因になる。本モジュールは明示的に除外する。
+fn is_sdk_bundled(path: &PathBuf) -> bool {
+    path.to_string_lossy().contains("claude-agent-sdk-")
+}
+
 fn resolve_claude_path() -> Option<PathBuf> {
-    // 1. 環境変数で明示指定
+    // 1. 環境変数で明示指定（SDK bundled でも尊重）
     if let Ok(p) = std::env::var("CLAUDE_CODE_EXECUTABLE") {
         let pb = PathBuf::from(&p);
         if pb.exists() {
@@ -157,20 +166,41 @@ fn resolve_claude_path() -> Option<PathBuf> {
         }
     }
 
-    // 2. $PATH 上の claude を where/which で探す
+    // 2. $PATH 上の claude を where/which で探し、SDK bundled を除外
+    //    Windows は `.cmd` shim を優先（npm global install の形）。
     let finder = if cfg!(windows) { "where" } else { "which" };
     if let Ok(out) = std::process::Command::new(finder).arg("claude").output() {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout);
-            for line in s.lines() {
-                let candidate = line.trim();
-                if candidate.is_empty() {
-                    continue;
+            let candidates: Vec<PathBuf> = s
+                .lines()
+                .filter_map(|l| {
+                    let t = l.trim();
+                    if t.is_empty() {
+                        return None;
+                    }
+                    let pb = PathBuf::from(t);
+                    if pb.exists() && !is_sdk_bundled(&pb) {
+                        Some(pb)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if cfg!(windows) {
+                // Windows npm global install は `claude.cmd` が定番。優先する。
+                if let Some(cmd) = candidates.iter().find(|p| {
+                    p.extension()
+                        .map(|e| e.eq_ignore_ascii_case("cmd"))
+                        .unwrap_or(false)
+                }) {
+                    return Some(cmd.clone());
                 }
-                let pb = PathBuf::from(candidate);
-                if pb.exists() {
-                    return Some(pb);
-                }
+            }
+
+            if let Some(first) = candidates.first() {
+                return Some(first.clone());
             }
         }
     }
@@ -188,16 +218,26 @@ fn resolve_claude_path() -> Option<PathBuf> {
             }
         }
         for c in candidates {
-            if c.exists() {
+            if c.exists() && !is_sdk_bundled(&c) {
                 return Some(c);
             }
         }
     } else {
-        // Windows: ~/.local/bin/claude.exe / claude (Git Bash) も候補
+        // Windows: npm global bin (`%APPDATA%\npm\claude.cmd`) を明示探索。
+        // `where` が `$PATH` に Roaming\npm を含まないケース（スタンドアロン
+        // ccmux-ide の PowerShell 起動環境等）に備える。
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            for name in ["claude.cmd", "claude.ps1", "claude"] {
+                let p = PathBuf::from(&appdata).join("npm").join(name);
+                if p.exists() && !is_sdk_bundled(&p) {
+                    return Some(p);
+                }
+            }
+        }
         if let Ok(home) = std::env::var("USERPROFILE") {
-            for name in ["claude.exe", "claude"] {
+            for name in ["claude.cmd", "claude.exe", "claude"] {
                 let p = PathBuf::from(&home).join(".local").join("bin").join(name);
-                if p.exists() {
+                if p.exists() && !is_sdk_bundled(&p) {
                     return Some(p);
                 }
             }
@@ -226,15 +266,48 @@ fn resolve_claude_path() -> Option<PathBuf> {
 async fn spawn_claude_usage(claude: &PathBuf) -> Result<String, String> {
     use std::process::Stdio;
 
-    let mut child = Command::new(claude)
-        .arg("/usage")
+    // Windows で `.cmd` / `.ps1` を tokio::process::Command で直接 spawn すると
+    // 「指定されたファイルが見つかりません」になる（Win32 CreateProcess は batch
+    // を直接実行できない）。cmd.exe /C 経由に包む。
+    let is_windows_shim = cfg!(windows)
+        && claude
+            .extension()
+            .map(|e| {
+                let e = e.to_string_lossy().to_ascii_lowercase();
+                e == "cmd" || e == "bat" || e == "ps1"
+            })
+            .unwrap_or(false);
+
+    let mut cmd = if is_windows_shim {
+        let mut c = Command::new("cmd");
+        c.arg("/C")
+            .arg(claude)
+            .arg("/usage");
+        c
+    } else {
+        let mut c = Command::new(claude);
+        c.arg("/usage");
+        c
+    };
+
+    // 環境変数: TTY 判定を避けるためのヒント（CLI が尊重する場合がある）
+    cmd.env("NO_COLOR", "1")
+        .env("FORCE_COLOR", "0")
+        .env("CI", "1");
+
+    let mut child = cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        // Windows で別 console window が開かないようにする
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("claude CLI 起動失敗: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "claude CLI 起動失敗 ({}): {}",
+                claude.display(),
+                e
+            )
+        })?;
 
     // 即座に Ctrl+C と 'q' を送って interactive モードを抜けさせる。
     if let Some(mut stdin) = child.stdin.take() {
