@@ -46,6 +46,9 @@ uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 time = { version = "0.3", features = ["formatting", "macros"] }
 dirs = "5"
+# PRJ-012 Stage B: ~/.claude/projects/**/*.jsonl の ISO8601 timestamp を DateTime<Utc>
+# として parse し、5h / 7d window に振り分けるため chrono を追加。
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3"

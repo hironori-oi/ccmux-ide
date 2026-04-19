@@ -13,6 +13,7 @@ import { ProjectTree } from "@/components/sidebar/ProjectTree";
 import { SessionList } from "@/components/sidebar/SessionList";
 import { SubAgentsList } from "@/components/sidebar/SubAgentsList";
 import { TodosList } from "@/components/sidebar/TodosList";
+import { UsageStatsCard } from "@/components/sidebar/UsageStatsCard";
 import { useProjectStore } from "@/lib/stores/project";
 import { cn } from "@/lib/utils";
 
@@ -95,6 +96,8 @@ export function Sidebar() {
             <SubAgentsList />
             <Separator className="mx-2 my-1" />
             <TodosList />
+            <Separator className="mx-2 my-1" />
+            <UsageStatsCard />
           </ScrollArea>
         </div>
       )}

@@ -1,14 +1,20 @@
 "use client";
 
 import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
 
 /**
  * Chat ドメインの Zustand store。
  *
  * PM-135 で設計。Agent SDK sidecar から stream で流れてくる message / tool_use /
  * done イベントを appendMessage / updateStreamingMessage / appendToolUse 経由で
- * state に積む。永続化は Chunk B（src-tauri の SQLite history）で行うので、
- * persist middleware は使わない（メモリ上のセッション状態のみ保持）。
+ * state に積む。messages / attachments / streaming 等の揮発性 state は
+ * persist 対象外（session ごとにリセット）。
+ *
+ * PRJ-012 Stage 1: GUI から指定された作業ディレクトリ (`cwd`) のみを
+ * localStorage key `ccmux-ide-gui:chat-cwd` に persist し、アプリ再起動後も
+ * 同じ作業ディレクトリで Claude を起動できるようにする（partialize で cwd
+ * 以外を除外）。SQLite history（Chunk B）は別経路で永続化される。
  */
 
 /** 添付画像 1 件分 */
@@ -124,87 +130,101 @@ interface ChatState {
   setCwd: (path: string | null) => void;
 }
 
-export const useChatStore = create<ChatState>((set) => ({
-  messages: [],
-  streaming: false,
-  attachments: [],
-  currentSessionId: null,
-  scrollTargetMessageId: null,
-  highlightedMessageId: null,
-  cwd: null,
-
-  appendMessage: (message) =>
-    set((state) => ({ messages: [...state.messages, message] })),
-
-  updateStreamingMessage: (id, delta) =>
-    set((state) => ({
-      messages: state.messages.map((m) =>
-        m.id === id
-          ? { ...m, content: m.content + delta, streaming: true }
-          : m
-      ),
-    })),
-
-  setStreaming: (streaming) => set({ streaming }),
-
-  finalizeStreamingMessage: (id) =>
-    set((state) => ({
-      messages: state.messages.map((m) =>
-        m.id === id ? { ...m, streaming: false } : m
-      ),
-    })),
-
-  appendToolUse: (id, event) =>
-    set((state) => ({
-      messages: [
-        ...state.messages,
-        {
-          id,
-          role: "tool",
-          content: "",
-          toolUse: event,
-        },
-      ],
-    })),
-
-  updateToolUseStatus: (id, status, output) =>
-    set((state) => ({
-      messages: state.messages.map((m) =>
-        m.id === id && m.toolUse
-          ? { ...m, toolUse: { ...m.toolUse, status, output } }
-          : m
-      ),
-    })),
-
-  appendAttachment: (attachment) =>
-    set((state) => ({ attachments: [...state.attachments, attachment] })),
-
-  removeAttachment: (id) =>
-    set((state) => ({
-      attachments: state.attachments.filter((a) => a.id !== id),
-    })),
-
-  clearAttachments: () => set({ attachments: [] }),
-
-  clearSession: () =>
-    set({
+export const useChatStore = create<ChatState>()(
+  persist(
+    (set) => ({
       messages: [],
-      attachments: [],
       streaming: false,
+      attachments: [],
+      currentSessionId: null,
       scrollTargetMessageId: null,
       highlightedMessageId: null,
+      cwd: null,
+
+      appendMessage: (message) =>
+        set((state) => ({ messages: [...state.messages, message] })),
+
+      updateStreamingMessage: (id, delta) =>
+        set((state) => ({
+          messages: state.messages.map((m) =>
+            m.id === id
+              ? { ...m, content: m.content + delta, streaming: true }
+              : m
+          ),
+        })),
+
+      setStreaming: (streaming) => set({ streaming }),
+
+      finalizeStreamingMessage: (id) =>
+        set((state) => ({
+          messages: state.messages.map((m) =>
+            m.id === id ? { ...m, streaming: false } : m
+          ),
+        })),
+
+      appendToolUse: (id, event) =>
+        set((state) => ({
+          messages: [
+            ...state.messages,
+            {
+              id,
+              role: "tool",
+              content: "",
+              toolUse: event,
+            },
+          ],
+        })),
+
+      updateToolUseStatus: (id, status, output) =>
+        set((state) => ({
+          messages: state.messages.map((m) =>
+            m.id === id && m.toolUse
+              ? { ...m, toolUse: { ...m.toolUse, status, output } }
+              : m
+          ),
+        })),
+
+      appendAttachment: (attachment) =>
+        set((state) => ({
+          attachments: [...state.attachments, attachment],
+        })),
+
+      removeAttachment: (id) =>
+        set((state) => ({
+          attachments: state.attachments.filter((a) => a.id !== id),
+        })),
+
+      clearAttachments: () => set({ attachments: [] }),
+
+      clearSession: () =>
+        set({
+          messages: [],
+          attachments: [],
+          streaming: false,
+          scrollTargetMessageId: null,
+          highlightedMessageId: null,
+        }),
+
+      setSessionId: (currentSessionId) => set({ currentSessionId }),
+
+      setMessages: (messages) => set({ messages }),
+
+      scrollToMessageId: (id) =>
+        set({ scrollTargetMessageId: id, highlightedMessageId: id }),
+
+      clearHighlight: () => set({ highlightedMessageId: null }),
+
+      clearScrollTarget: () => set({ scrollTargetMessageId: null }),
+
+      setCwd: (cwd) => set({ cwd }),
     }),
-
-  setSessionId: (currentSessionId) => set({ currentSessionId }),
-
-  setMessages: (messages) => set({ messages }),
-
-  scrollToMessageId: (id) =>
-    set({ scrollTargetMessageId: id, highlightedMessageId: id }),
-
-  clearHighlight: () => set({ highlightedMessageId: null }),
-
-  clearScrollTarget: () => set({ scrollTargetMessageId: null }),
-
-  setCwd: (cwd) => set({ cwd }),
-}));
+    {
+      // PRJ-012 Stage 1: cwd だけを localStorage に永続化する。messages /
+      // attachments / streaming 等の session 状態は揮発のまま維持する
+      // （起動時は常に空セッションから始まるのが従来挙動と一致）。
+      name: "ccmux-ide-gui:chat-cwd",
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({ cwd: state.cwd }),
+    }
+  )
+);

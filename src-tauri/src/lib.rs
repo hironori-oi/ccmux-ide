@@ -19,6 +19,7 @@ use commands::{
     memory_tree::scan_memory_tree,
     search_fts::{reindex_conversations, search_conversations, search_messages},
     slash::list_slash_commands,
+    usage::get_usage_stats,
     worktree::{add_worktree, list_worktrees, remove_worktree, switch_worktree},
 };
 use events::monitor::{self, MonitorHandle};
@@ -125,6 +126,8 @@ pub fn run() {
             get_session_messages,
             delete_session,
             rename_session,
+            // Usage stats (PRJ-012 Stage B)
+            get_usage_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

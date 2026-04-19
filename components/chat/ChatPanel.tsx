@@ -100,7 +100,15 @@ export function ChatPanel() {
       );
 
       try {
-        await callTauri<void>("start_agent_sidecar");
+        // PRJ-012 Stage 1: TitleBar から選択され localStorage に persist された
+        // 作業ディレクトリを初回起動時に反映する。zustand/persist の rehydrate
+        // は initial render 前後に同期的に行われるため、ここで getState() 参照
+        // すると既に復元済の cwd を取得できる。未設定（null）なら従来通り
+        // Rust 側のデフォルト（sidecar_dir）にフォールバック。
+        const initialCwd = useChatStore.getState().cwd;
+        await callTauri<void>("start_agent_sidecar", {
+          cwd: initialCwd ?? null,
+        });
         if (!cancelled) {
           setReady(true);
           setStatus("Claude と接続中");

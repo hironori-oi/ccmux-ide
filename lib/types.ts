@@ -177,6 +177,63 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 // Slash commands（Week 6 Chunk 1 / PM-200〜202）
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Usage stats（PRJ-012 Stage B）
+//
+// Rust `commands::usage` の struct と 1:1 対応（camelCase）。
+// ~/.claude/projects/**/*.jsonl を集計して Claude Pro/Max の 5h / 7d 使用量を
+// 推定する。公式 API では取得できないため、あくまで「実測値」として扱う。
+// ---------------------------------------------------------------------------
+
+/** JSONL 1 行分の usage entry（現状は frontend では未使用、将来拡張用）。 */
+export interface UsageEntry {
+  /** ISO8601 UTC */
+  timestamp: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
+/** 1 ウィンドウ分の集計値。 */
+export interface UsageWindow {
+  messages: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  costUsd: number;
+  /** ISO8601 UTC */
+  windowStart: string;
+  /** ISO8601 UTC */
+  windowEnd: string;
+}
+
+/** 1 日分の集計値（日別 bar chart 用）。 */
+export interface DailyUsage {
+  /** "YYYY-MM-DD" */
+  date: string;
+  messages: number;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+}
+
+/** `get_usage_stats` 戻り値。 */
+export interface UsageStats {
+  /** 直近 5 時間ウィンドウ */
+  session5h: UsageWindow;
+  /** 直近 7 日ウィンドウ（ローリング） */
+  weekly7d: UsageWindow;
+  /** 過去 7 日分の日別集計（古い→新しい、末尾が今日） */
+  daily: DailyUsage[];
+  /** 5 時間ウィンドウのリセット時刻（window_start + 5h） */
+  sessionResetAt: string | null;
+  /** 集計対象 JSONL ファイル数（デバッグ用） */
+  sourceFiles: number;
+}
+
 /**
  * Slash command 1 件（`list_slash_commands` 戻り値の要素、Rust
  * `commands::slash::SlashCmd` と 1:1）。

@@ -18,4 +18,5 @@ pub mod image_paste;
 pub mod memory_tree;
 pub mod search_fts;
 pub mod slash;
+pub mod usage;
 pub mod worktree;
