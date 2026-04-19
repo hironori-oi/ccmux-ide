@@ -8,22 +8,22 @@ import {
   useMonitorStore,
 } from "@/lib/stores/monitor";
 import { useUsageStore } from "@/lib/stores/usage";
+import { useOAuthUsageStore } from "@/lib/stores/oauth-usage";
+import type { OAuthUsageWindow } from "@/lib/types";
 
 /**
- * PRJ-012 Round C: ステータスバー（画面下端・28px 固定）。
+ * PRJ-012 Round D': ステータスバー（画面下端・28px 固定）。
  *
- * Round A（`claude /usage` TUI parse）は Windows 環境で 10 秒 timeout が常態化
- * したため、ここではミニゲージを廃止し、代わりに **Stage B（ローカル JSONL
- * 集計）の「今日の推定コスト」** を表示する。
- *
- * 4 カラム:
+ * 5 カラム:
  *  - 左:    model 名 + CPU アイコン（未設定時は "Claude"）
  *  - 中央L: context % 簡易ゲージ（色 dot + % テキスト、<60 緑 / <85 黄 / ≥85 赤）
- *  - 中央R: 今日の推定コスト（`$` アイコン + USD、色段階 <$1 緑 / <$5 黄 / ≥$5 赤）
+ *  - 中央M: **公式 OAuth ゲージ（Round D' 復活）** 5h / 7d の % + リセット
+ *  - 中央R: 今日の推定コスト（Stage B、`$` アイコン + USD）
  *  - 右:    git branch + hotkey ヒント（⌘K コマンド / ⌘/ ヘルプ）
  *
- * 集計 fetch 自体は `UsageStatsCard` の `useUsageStats()` が担うため、本 component
- * は store を参照するだけ。Stage B が未ロード・エラー時は `—` placeholder を出す。
+ * fetch 自体は `UsageStatsCard` の hook 群（`useUsageStats` +
+ * `useClaudeOAuthUsage`）が担うため、本 component は store を参照するだけ。
+ * OAuth 取得未完了 / エラー時は `—` placeholder を出し、tooltip で状態を案内する。
  */
 export function StatusBar() {
   const monitor = useMonitorStore((s) => s.monitor);
@@ -31,6 +31,9 @@ export function StatusBar() {
 
   const stats = useUsageStore((s) => s.stats);
   const usageError = useUsageStore((s) => s.error);
+
+  const oauthUsage = useOAuthUsageStore((s) => s.usage);
+  const oauthError = useOAuthUsageStore((s) => s.error);
 
   const model = monitor?.model && monitor.model.length > 0
     ? shortModel(monitor.model)
@@ -75,6 +78,13 @@ export function StatusBar() {
         )}
       </div>
 
+      {/* 中央M: 公式 OAuth ゲージ（Round D'） */}
+      <OAuthGaugeSection
+        fiveHour={oauthUsage?.fiveHour ?? null}
+        sevenDay={oauthUsage?.sevenDay ?? null}
+        error={oauthError}
+      />
+
       {/* 中央R: 今日の推定コスト（Stage B） */}
       <TodayCostSection cost={todayCost} error={usageError} />
 
@@ -99,6 +109,149 @@ export function StatusBar() {
       </div>
     </footer>
   );
+}
+
+// ---------------------------------------------------------------------------
+// 公式 OAuth 使用率ゲージ（Round D'）
+// ---------------------------------------------------------------------------
+
+interface OAuthGaugeSectionProps {
+  fiveHour: OAuthUsageWindow | null;
+  sevenDay: OAuthUsageWindow | null;
+  error: string | null;
+}
+
+/**
+ * 5h / 7d の使用率 % + リセット時刻の mini-gauge。
+ *
+ * - 値あり: `5h: 45% ▓▓░░ ~19:00  |  7d: 62% ▓▓▓░ 4/24` 形式
+ * - 値なし: `5h: —  |  7d: —` placeholder（tooltip で状態説明）
+ * - `hidden lg:flex` でナローウィンドウでは省略
+ *
+ * color は <60 緑 / <85 黄 / >=85 赤 の 3 段階。
+ */
+function OAuthGaugeSection({ fiveHour, sevenDay, error }: OAuthGaugeSectionProps) {
+  const tooltip = error
+    ? `公式 OAuth API 取得失敗: ${error}`
+    : "Claude OAuth Usage API から 5 分 cache で取得";
+
+  return (
+    <div
+      className="hidden items-center gap-2 lg:flex"
+      title={tooltip}
+      aria-label="公式 OAuth レート制限"
+    >
+      <OAuthMiniGauge label="5h" window={fiveHour} showTime />
+      <span className="text-muted-foreground/40" aria-hidden>|</span>
+      <OAuthMiniGauge label="7d" window={sevenDay} showDate />
+    </div>
+  );
+}
+
+/**
+ * `label: NN% ▓▓░ HH:mm` の mini gauge。
+ *
+ * `window` が null の場合は `label: —` placeholder。
+ */
+function OAuthMiniGauge({
+  label,
+  window,
+  showTime,
+  showDate,
+}: {
+  label: string;
+  window: OAuthUsageWindow | null;
+  showTime?: boolean;
+  showDate?: boolean;
+}) {
+  if (!window) {
+    return (
+      <span className="inline-flex items-center gap-1 opacity-60" aria-label={`${label} 取得未完了`}>
+        <span className="tabular-nums">{label}:</span>
+        <span>—</span>
+      </span>
+    );
+  }
+
+  const pct = clampPercent(window.utilization);
+  const resetText = formatShortResetTime(window.resetsAt, {
+    withTime: showTime,
+    withDate: showDate,
+  });
+
+  return (
+    <span className="inline-flex items-center gap-1" aria-label={`${label} 使用率 ${pct.toFixed(0)}%`}>
+      <span className="tabular-nums text-muted-foreground">{label}:</span>
+      <span className={cn("tabular-nums font-medium", utilizationTextColor(pct))}>
+        {pct.toFixed(0)}%
+      </span>
+      <span
+        className="h-1 w-8 overflow-hidden rounded bg-muted"
+        aria-hidden
+      >
+        <span
+          className={cn("block h-full rounded", utilizationBarBg(pct))}
+          style={{ width: `${pct}%` }}
+        />
+      </span>
+      {resetText && (
+        <span className="text-[10px] text-muted-foreground/80 tabular-nums">{resetText}</span>
+      )}
+    </span>
+  );
+}
+
+function clampPercent(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  if (v < 0) return 0;
+  if (v > 100) return 100;
+  return v;
+}
+
+function utilizationTextColor(p: number): string {
+  if (p >= 85) return "text-red-500 dark:text-red-400";
+  if (p >= 60) return "text-yellow-600 dark:text-yellow-400";
+  return "text-emerald-600 dark:text-emerald-400";
+}
+
+function utilizationBarBg(p: number): string {
+  if (p >= 85) return "bg-red-500";
+  if (p >= 60) return "bg-yellow-500";
+  return "bg-emerald-500";
+}
+
+/**
+ * StatusBar 用の短い reset 時刻表記。
+ * - `withTime=true`: `~HH:mm`（5h 用）
+ * - `withDate=true`: `M/D`（7d 用）
+ *
+ * どちらも無効 / null なら null を返す。
+ */
+function formatShortResetTime(
+  iso: string | null,
+  { withTime, withDate }: { withTime?: boolean; withDate?: boolean },
+): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  const d = new Date(ms);
+
+  if (withTime) {
+    const fmt = new Intl.DateTimeFormat("ja-JP", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    return `~${fmt.format(d)}`;
+  }
+  if (withDate) {
+    const fmt = new Intl.DateTimeFormat("ja-JP", {
+      month: "numeric",
+      day: "numeric",
+    });
+    return fmt.format(d);
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

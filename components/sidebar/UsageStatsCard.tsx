@@ -3,51 +3,55 @@
 import { useMemo } from "react";
 import {
   Activity,
+  AlertTriangle,
   CalendarDays,
   Clock,
-  ExternalLink,
   Layers,
+  RefreshCw,
   ShieldCheck,
   Users,
 } from "lucide-react";
-import { open as openExternal } from "@tauri-apps/plugin-shell";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useUsageStats } from "@/hooks/useUsageStats";
+import { useClaudeOAuthUsage } from "@/hooks/useClaudeOAuthUsage";
 import { useUsageStore } from "@/lib/stores/usage";
+import { useOAuthUsageStore } from "@/lib/stores/oauth-usage";
 import type {
+  ClaudeOAuthUsage,
   DailyUsage,
   Last24h,
   ModelBreakdown,
+  OAuthExtraUsage,
+  OAuthUsageWindow,
   UsageWindow,
 } from "@/lib/types";
 
 /**
- * Claude Pro/Max 使用量カード（PRJ-012 Round C）。
+ * Claude Pro/Max 使用量カード（PRJ-012 Round D'）。
  *
- * サイドバー下段（TodosList の下）に配置。`~/.claude/projects/**\/*.jsonl`
- * から Rust backend が集計した session 5h / weekly 7d / daily 使用量を表示する。
+ * サイドバー下段（TodosList の下）に配置。2 系統のデータを統合表示する:
  *
- * ## Round C での変更点
- *
- * - Round A の `claude /usage` 自動取得は Windows で 10 秒タイムアウト常態化
- *   のため **廃止**。代わりに `公式レート制限` ブロックは Anthropic Console
- *   への外部リンクカードに格下げ。
- * - Stage B（ローカル JSONL 集計）を強化:
- *   - モデル別内訳（top 5 + others の横棒）を週次の下に追加
- *   - Last 24h セッション detail（長時間 / 背景ループ / subagent 検出）を追加
+ * 1. **公式 OAuth Usage API**（Round D' 新設、正規値）
+ *    - `https://api.anthropic.com/api/oauth/usage`（anthropic-beta:
+ *      oauth-2025-04-20）から 5 時間 / 週次 / 追加クレジット残量を取得。
+ *    - 最上部の `OfficialRateLimitsBlock` に実値で表示。
+ * 2. **Stage B ローカル JSONL 集計**（Round C 以降、実測値）
+ *    - `~/.claude/projects/**\/*.jsonl` の使用量を Rust backend が計算。
+ *    - 下段でセッション / 週次 / モデル別内訳 / 日別 bar を表示。
  *
  * ## 設計方針
  *
- * - Anthropic 公式の Pro/Max 「5h / weekly limit」の絶対値は公開されていない
- *   ため、**残量パーセント表示はしない**。絶対値（tokens / cost USD /
- *   message count）と「次のリセット時刻」を表示する。
+ * - 公式 API は Anthropic 側で合算済みの正規値（全デバイス反映、リセット時刻
+ *   も厳密）。Beta API のため仕様変更リスクあり、エラー時は Stage B が単独
+ *   表示として生き残る設計。
+ * - Stage B は絶対値（tokens / cost USD）+ heuristic 分析を提供。
  * - 料金は推定値（2026-04 時点）。ツールチップ + footer で明示する。
- * - Last 24h の long/background/subagent は heuristic。「目安」として提示。
  */
 export function UsageStatsCard() {
   useUsageStats();
+  useClaudeOAuthUsage();
 
   const stats = useUsageStore((s) => s.stats);
   const isLoading = useUsageStore((s) => s.isLoading);
@@ -77,37 +81,12 @@ export function UsageStatsCard() {
     return stats.daily.filter((d) => d.messages > 0).length;
   }, [stats]);
 
-  if (isLoading && !stats) {
-    return <UsageStatsSkeleton />;
-  }
-
-  if (error && !stats) {
-    return (
-      <section
-        className="flex flex-col gap-1 px-2 py-3 text-[10px] text-muted-foreground"
-        aria-label="Claude 使用状況"
-      >
-        <div className="text-xs font-medium">使用状況</div>
-        <div
-          className="rounded-md border border-dashed px-2 py-1.5 text-[10px]"
-          title={error}
-        >
-          取得失敗: {error.slice(0, 60)}
-        </div>
-      </section>
-    );
-  }
-
-  if (!stats) {
-    return <UsageStatsSkeleton />;
-  }
-
   return (
     <section
       className="flex flex-col gap-3 px-2 py-3"
       aria-label="Claude 使用状況"
     >
-      {/* Section 0: 公式レート制限（Round C で外部リンクカードに格下げ） */}
+      {/* Section 0: 公式 OAuth レート制限（Round D' 実値表示） */}
       <OfficialRateLimitsBlock />
 
       {/* 区切り: ここから先は自前の JSONL 集計 */}
@@ -117,95 +96,389 @@ export function UsageStatsCard() {
         <span className="h-px flex-1 bg-border" aria-hidden />
       </div>
 
-      {/* Section 1: セッション 5h */}
-      <WindowBlock
-        icon={<Clock className="h-3 w-3" aria-hidden />}
-        title="セッション (5h)"
-        remainLabel={sessionRemain ?? undefined}
-        window={stats.session5h}
-        tooltip="最初のメッセージから 5 時間経過でリセット（推定）。Claude Pro/Max の公式 5h window を ~/.claude/projects の JSONL log から近似。"
-      />
+      {/* Stage B: Loading / Error / 値あり の分岐を inline で */}
+      {isLoading && !stats ? (
+        <UsageStatsSkeleton />
+      ) : error && !stats ? (
+        <div
+          className="rounded-md border border-dashed px-2 py-1.5 text-[10px] text-muted-foreground"
+          title={error}
+        >
+          Stage B 取得失敗: {error.slice(0, 60)}
+        </div>
+      ) : !stats ? (
+        <UsageStatsSkeleton />
+      ) : (
+        <>
+          {/* Section 1: セッション 5h */}
+          <WindowBlock
+            icon={<Clock className="h-3 w-3" aria-hidden />}
+            title="セッション (5h)"
+            remainLabel={sessionRemain ?? undefined}
+            window={stats.session5h}
+            tooltip="最初のメッセージから 5 時間経過でリセット（推定）。Claude Pro/Max の公式 5h window を ~/.claude/projects の JSONL log から近似。"
+          />
 
-      {/* Section 2: 週次 7d */}
-      <WindowBlock
-        icon={<CalendarDays className="h-3 w-3" aria-hidden />}
-        title="週次 (7 日)"
-        remainLabel={`${activeDays} / 7 日`}
-        window={stats.weekly7d}
-        tooltip="過去 7 日間のローリングウィンドウ。Anthropic 公式の weekly limit 値は非公開のため、実測値として表示する。"
-      />
+          {/* Section 2: 週次 7d */}
+          <WindowBlock
+            icon={<CalendarDays className="h-3 w-3" aria-hidden />}
+            title="週次 (7 日)"
+            remainLabel={`${activeDays} / 7 日`}
+            window={stats.weekly7d}
+            tooltip="過去 7 日間のローリングウィンドウ。Anthropic 公式の weekly limit 値は非公開のため、実測値として表示する。"
+          />
 
-      {/* Section 3: モデル別内訳（週次ベース、Round C 追加） */}
-      <ModelBreakdownBlock
-        models={stats.weekly7d.byModel ?? []}
-        totalCost={stats.weekly7d.costUsd}
-      />
+          {/* Section 3: モデル別内訳（週次ベース、Round C 追加） */}
+          <ModelBreakdownBlock
+            models={stats.weekly7d.byModel ?? []}
+            totalCost={stats.weekly7d.costUsd}
+          />
 
-      {/* Section 4: Last 24h セッション（Round C 追加） */}
-      <Last24hBlock last24h={stats.last24h} />
+          {/* Section 4: Last 24h セッション（Round C 追加） */}
+          <Last24hBlock last24h={stats.last24h} />
 
-      {/* Section 5: 日別 bar chart */}
-      <DailyBars daily={stats.daily} maxCost={dailyMaxCost} />
+          {/* Section 5: 日別 bar chart */}
+          <DailyBars daily={stats.daily} maxCost={dailyMaxCost} />
 
-      {/* デバッグ: 集計ファイル数（hover で出す） */}
-      <div
-        className="text-[9px] text-muted-foreground/60"
-        title={`集計対象 JSONL: ${stats.sourceFiles} 件（~/.claude/projects/）`}
-      >
-        推定値 · log {stats.sourceFiles} 件から集計
-      </div>
+          {/* デバッグ: 集計ファイル数（hover で出す） */}
+          <div
+            className="text-[9px] text-muted-foreground/60"
+            title={`集計対象 JSONL: ${stats.sourceFiles} 件（~/.claude/projects/）`}
+          >
+            推定値 · log {stats.sourceFiles} 件から集計
+          </div>
+        </>
+      )}
     </section>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Subcomponent: OfficialRateLimitsBlock（Round C 軽量版）
+// Subcomponent: OfficialRateLimitsBlock（Round D' 実値表示版）
 //
-// Round A の `claude /usage` TUI parse は Windows で 10 秒 timeout が常態化し
-// 実用不可と判明したため、ここは Anthropic Console への外部リンクカードに
-// 格下げ。`useClaudeRateLimits` の自動 poll は呼ばない。
+// Anthropic 公式 OAuth Usage API (`GET /api/oauth/usage`,
+// `anthropic-beta: oauth-2025-04-20`) から取得した Pro/Max プランの
+// 5 時間 / 週次 / 追加クレジットの使用率を表示する。
 //
-// `ClaudeRateLimits` 型 / `useClaudeUsageStore` / `claude_usage.rs` は将来
-// 公式 JSON mode が実装された際に復活させるため、残しておく（dead code）。
+// - `useClaudeOAuthUsage` はカード親 (`UsageStatsCard`) で呼んでいるので
+//   ここでは store だけ参照する。
+// - エラー時は `claude login` 誘導を表示し、retry ボタンで手動 fetch。
+// - キャッシュ age は `fetchedAt` から算出して "N 分前 cache" と小さく出す。
 // ---------------------------------------------------------------------------
 
 function OfficialRateLimitsBlock() {
-  const handleOpen = () => {
-    void openExternal("https://claude.ai/settings/billing").catch((e) => {
-      // plugin-shell が未許可 / 失敗した場合は console.error に留める
-      // （UI 側の表示崩れは起こさない）。
-      console.error("[UsageStatsCard] open billing failed:", e);
-    });
-  };
+  const usage = useOAuthUsageStore((s) => s.usage);
+  const isLoading = useOAuthUsageStore((s) => s.isLoading);
+  const error = useOAuthUsageStore((s) => s.error);
+  const fetchUsage = useOAuthUsageStore((s) => s.fetchUsage);
+
+  // 最初のロード中（usage が無く isLoading）は skeleton
+  if (!usage && isLoading && !error) {
+    return (
+      <div className="flex flex-col gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5">
+        <header className="flex items-center gap-1 text-xs font-medium text-foreground/80">
+          <ShieldCheck className="h-3 w-3 text-primary" aria-hidden />
+          公式レート制限（OAuth API）
+        </header>
+        <Skeleton className="h-3 w-full" />
+        <Skeleton className="h-3 w-full" />
+      </div>
+    );
+  }
+
+  if (error && !usage) {
+    return (
+      <OfficialErrorBlock error={error} onRetry={fetchUsage} isLoading={isLoading} />
+    );
+  }
+
+  if (!usage) {
+    // 初期状態（store 起動直後で fetch がまだ）
+    return (
+      <div className="flex flex-col gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5">
+        <header className="flex items-center gap-1 text-xs font-medium text-foreground/80">
+          <ShieldCheck className="h-3 w-3 text-primary" aria-hidden />
+          公式レート制限（OAuth API）
+        </header>
+        <div className="text-[10px] text-muted-foreground">取得準備中...</div>
+      </div>
+    );
+  }
+
+  return <OfficialUsageContent usage={usage} onRefresh={fetchUsage} isLoading={isLoading} />;
+}
+
+/**
+ * エラー時の表示。メッセージの中身で誘導文言を切替える。
+ *
+ * - `credentials が見つかりません` → `claude login` + 再起動を案内
+ * - `期限切れ` → `claude login` で再認証
+ * - その他 → エラー文をそのまま + retry ボタン
+ */
+function OfficialErrorBlock({
+  error,
+  onRetry,
+  isLoading,
+}: {
+  error: string;
+  onRetry: () => Promise<void>;
+  isLoading: boolean;
+}) {
+  const isCredMissing = error.includes("credentials が見つかりません");
+  const isExpired = error.includes("期限切れ") || error.includes("UNAUTHORIZED");
+
+  const guidance = isCredMissing
+    ? "ターミナルで `claude login` を実行し、ccmux-ide を再起動してください。"
+    : isExpired
+      ? "`claude login` で再認証してください（token の期限が切れている可能性あり）。"
+      : "時間をおいて再試行するか、Anthropic Console から残量を確認してください。";
 
   return (
-    <div className="flex flex-col gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5">
+    <div className="flex flex-col gap-1.5 rounded-md border border-destructive/40 bg-destructive/5 px-2 py-1.5">
       <header className="flex items-center gap-1 text-xs font-medium text-foreground/80">
-        <ShieldCheck className="h-3 w-3 text-primary" aria-hidden />
-        公式レート制限
+        <AlertTriangle className="h-3 w-3 text-destructive" aria-hidden />
+        公式レート制限（取得失敗）
       </header>
-
-      <p className="text-[10px] leading-relaxed text-muted-foreground">
-        Claude Code CLI の <code className="font-mono text-[9px]">/usage</code>{" "}
-        は対話モード専用で、ccmux-ide からは自動取得できません。公式プランの残量は
-        Anthropic Console で確認してください。
+      <p
+        className="text-[10px] leading-relaxed text-muted-foreground"
+        title={error}
+      >
+        {guidance}
       </p>
-
+      <p className="text-[9px] text-muted-foreground/70 line-clamp-2" title={error}>
+        {error.slice(0, 120)}
+      </p>
       <button
         type="button"
-        onClick={handleOpen}
+        onClick={() => void onRetry()}
+        disabled={isLoading}
         className={cn(
-          "inline-flex items-center justify-center gap-1 rounded border border-primary/40 bg-background/60 px-2 py-1 text-[10px] font-medium",
-          "text-foreground/90 transition-colors hover:bg-primary/10 hover:text-foreground",
-          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          "inline-flex items-center justify-center gap-1 rounded border border-destructive/40 bg-background/60 px-2 py-1 text-[10px] font-medium",
+          "text-foreground/90 transition-colors hover:bg-destructive/10 hover:text-foreground",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          "disabled:cursor-not-allowed disabled:opacity-50"
         )}
-        aria-label="Anthropic Console を開いて残量を確認"
+        aria-label="OAuth Usage API を再取得"
       >
-        <ExternalLink className="h-3 w-3" aria-hidden />
-        Console で残量を確認
+        <RefreshCw className={cn("h-3 w-3", isLoading && "animate-spin")} aria-hidden />
+        再試行
       </button>
     </div>
   );
+}
+
+/**
+ * 正常時の content: 5h / 7d / extra_usage を 3 ブロックで表示。
+ */
+function OfficialUsageContent({
+  usage,
+  onRefresh,
+  isLoading,
+}: {
+  usage: ClaudeOAuthUsage;
+  onRefresh: () => Promise<void>;
+  isLoading: boolean;
+}) {
+  const ageLabel = useMemo(() => {
+    const ms = Date.parse(usage.fetchedAt);
+    if (!Number.isFinite(ms)) return null;
+    const diffSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+    if (diffSec < 60) return `${diffSec} 秒前`;
+    const min = Math.floor(diffSec / 60);
+    return `${min} 分前`;
+  }, [usage.fetchedAt]);
+
+  return (
+    <div className="flex flex-col gap-2 rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5">
+      <header className="flex items-center justify-between gap-1 text-xs font-medium text-foreground/80">
+        <span className="inline-flex items-center gap-1">
+          <ShieldCheck className="h-3 w-3 text-primary" aria-hidden />
+          公式レート制限（OAuth API）
+        </span>
+        <button
+          type="button"
+          onClick={() => void onRefresh()}
+          disabled={isLoading}
+          className={cn(
+            "inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[9px] text-muted-foreground",
+            "transition-colors hover:bg-primary/10 hover:text-foreground",
+            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+            "disabled:cursor-not-allowed disabled:opacity-50"
+          )}
+          aria-label="公式レート制限を再取得"
+          title="OAuth Usage API を手動再取得（5 分 cache）"
+        >
+          <RefreshCw
+            className={cn("h-2.5 w-2.5", isLoading && "animate-spin")}
+            aria-hidden
+          />
+          {ageLabel ? `cached ${ageLabel}` : "refresh"}
+        </button>
+      </header>
+
+      <OAuthWindowRow
+        label="5 時間ウィンドウ"
+        window={usage.fiveHour}
+        noneLabel="データなし"
+      />
+      <OAuthWindowRow
+        label="週次ウィンドウ"
+        window={usage.sevenDay}
+        noneLabel="データなし"
+      />
+      {usage.extraUsage && usage.extraUsage.isEnabled && (
+        <OAuthExtraRow extra={usage.extraUsage} />
+      )}
+
+      <footer className="text-[9px] text-muted-foreground/70">
+        5 分 cache · OAuth Bearer (anthropic-beta: oauth-2025-04-20)
+      </footer>
+    </div>
+  );
+}
+
+/** 5h / 7d 共通の 1 行（使用率 bar + % + reset 時刻）。 */
+function OAuthWindowRow({
+  label,
+  window,
+  noneLabel,
+}: {
+  label: string;
+  window: OAuthUsageWindow | null;
+  noneLabel: string;
+}) {
+  if (!window) {
+    return (
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-center justify-between text-[10px]">
+          <span className="text-muted-foreground">{label}</span>
+          <span className="text-muted-foreground/60">{noneLabel}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const pct = clampPercent(window.utilization);
+  const resetText = formatResetTime(window.resetsAt);
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="tabular-nums text-foreground/80">
+          {pct.toFixed(1)}%
+          {resetText && (
+            <span className="ml-1.5 text-muted-foreground">リセット {resetText}</span>
+          )}
+        </span>
+      </div>
+      <div
+        className="h-1.5 overflow-hidden rounded bg-muted"
+        role="img"
+        aria-label={`${label} ${pct.toFixed(1)}%`}
+      >
+        <div
+          className={cn("h-full rounded transition-all", utilizationBarColor(pct))}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** 追加クレジット（有効時のみ表示）。 */
+function OAuthExtraRow({ extra }: { extra: OAuthExtraUsage }) {
+  const pct = extra.utilization !== null ? clampPercent(extra.utilization) : null;
+  const used = extra.usedCredits;
+  const limit = extra.monthlyLimit;
+
+  return (
+    <div className="flex flex-col gap-0.5 border-t border-primary/20 pt-1.5">
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-muted-foreground">追加クレジット (有効)</span>
+        <span className="tabular-nums text-foreground/80">
+          {pct !== null ? `${pct.toFixed(1)}%` : "—"}
+          {used !== null && limit !== null && (
+            <span className="ml-1.5 text-muted-foreground">
+              ({used.toFixed(1)} / {limit.toFixed(0)} USD)
+            </span>
+          )}
+        </span>
+      </div>
+      {pct !== null && (
+        <div
+          className="h-1.5 overflow-hidden rounded bg-muted"
+          role="img"
+          aria-label={`追加クレジット ${pct.toFixed(1)}%`}
+        >
+          <div
+            className={cn("h-full rounded transition-all", utilizationBarColor(pct))}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 0 〜 100 の範囲に clamp。 */
+function clampPercent(v: number): number {
+  if (!Number.isFinite(v)) return 0;
+  if (v < 0) return 0;
+  if (v > 100) return 100;
+  return v;
+}
+
+/** 使用率に応じた bar の色（<60 緑 / <85 黄 / >=85 赤）。 */
+function utilizationBarColor(pct: number): string {
+  if (pct >= 85) return "bg-red-500";
+  if (pct >= 60) return "bg-yellow-500";
+  return "bg-emerald-500";
+}
+
+/**
+ * `resets_at` (ISO8601 UTC) を日本語 local 表記に変換する。
+ *
+ * - 今日 → `"今日 HH:mm"`
+ * - 明日 → `"明日 HH:mm"`
+ * - それ以外 → `"M/D HH:mm"`
+ *
+ * 無効 / null は `null`。
+ */
+function formatResetTime(iso: string | null): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+
+  const target = new Date(ms);
+  const now = new Date();
+  const sameDay =
+    target.getFullYear() === now.getFullYear() &&
+    target.getMonth() === now.getMonth() &&
+    target.getDate() === now.getDate();
+
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const isTomorrow =
+    target.getFullYear() === tomorrow.getFullYear() &&
+    target.getMonth() === tomorrow.getMonth() &&
+    target.getDate() === tomorrow.getDate();
+
+  const timeFmt = new Intl.DateTimeFormat("ja-JP", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const hhmm = timeFmt.format(target);
+
+  if (sameDay) return `今日 ${hhmm}`;
+  if (isTomorrow) return `明日 ${hhmm}`;
+
+  const dateFmt = new Intl.DateTimeFormat("ja-JP", {
+    month: "numeric",
+    day: "numeric",
+  });
+  return `${dateFmt.format(target)} ${hhmm}`;
 }
 
 // ---------------------------------------------------------------------------

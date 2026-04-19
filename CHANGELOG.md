@@ -11,13 +11,18 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 ### Added
-- **Claude CLI `/usage` 連携**（PRJ-012 Round A）。`get_claude_rate_limits` Tauri command で `claude /usage` を spawn し、ANSI 除去 + TUI text parser で **Anthropic 公式の 5h セッション / 週次（全モデル）/ 週次（Sonnet only）残量 % と reset 時刻**を取得。30 秒 cache + 10 秒 spawn timeout。
-- StatusBar 中央に 5h reset 時刻 + 週次 Sonnet 使用率 % のミニゲージ（≥85% で AlertTriangle 警告色）。
-- サイドバー `UsageStatsCard` 最上部に「公式レート制限」ブロックを追加（Stage B の JSONL 集計とは別表示）。直近 24h の background/subagent/long セッション数 + `/extra-usage` 有効状態も表示。
+- **公式 OAuth Usage API 連携**（PRJ-012 Round D'）。Anthropic 公式 Beta API (`GET https://api.anthropic.com/api/oauth/usage`, `anthropic-beta: oauth-2025-04-20`) を直接叩いて、Pro/Max プランの **5 時間ウィンドウ / 週次ウィンドウ / 追加クレジット**の正確な使用率と reset 時刻（ISO8601 UTC）を取得。Rust backend `get_oauth_usage` が `~/.claude/.credentials.json` の `claudeAiOauth.accessToken` を Bearer token として利用、5 分 in-memory cache + 10 秒 HTTP timeout + `reqwest` (rustls-tls) 実装。
+- StatusBar 中央に公式 5h / 7d ゲージ復活（Round C で廃止していたミニゲージの後継）。`5h: 45% ▓▓ ~19:00 | 7d: 62% ▓▓▓ 4/24` 形式で色段階（<60 緑 / <85 黄 / ≥85 赤）。
+- サイドバー `UsageStatsCard` 最上部の「公式レート制限」ブロックを **外部リンクカード → 実値表示**に格上げ。5h / 7d の %bar + リセット時刻（`今日 19:00` / `明日 10:00` / `4/24 09:00` の日本語 local 表記）+ `is_enabled` 有効時の追加クレジット（`%` + `used / monthly_limit USD`）を表示、手動 refresh ボタン + キャッシュ age (`cached N 分前`) 表示付き。
+- エラー時の誘導文言: credentials 未検出 → `claude login` 実行案内、OAuth token 期限切れ (HTTP 401) → `claude login` で再認証案内、retry ボタンで手動再取得。
+
+### Changed
+- PRJ-012 Round A の `claude /usage` CLI TUI parse 経路は廃止。`lib/stores/claude-usage.ts` と `hooks/useClaudeRateLimits.ts` を削除し、OAuth API ベースの `lib/stores/oauth-usage.ts` / `hooks/useClaudeOAuthUsage.ts` に置換。Rust 側の `claude_usage.rs` / `get_claude_rate_limits` command は将来の JSON mode 対応に備えて残置（invoke は継続、UI からは未呼出）。
 
 ### Known Issues
-- Claude CLI v2.1.x の `/usage` は **interactive TUI 専用**で `--json` 等の non-interactive 出力モードが存在しない。本実装は TUI 出力を ANSI 除去後に文言ベースで parse しているため、Anthropic 側の文言変更（`Current week (Sonnet only)` のラベルや `Resets ...` フォーマット等）で壊れる可能性がある。parse 失敗時は frontend 側で Stage B（JSONL 集計）を fallback として継続表示する。
-- `claude` CLI 未インストール / 未ログイン時は `get_claude_rate_limits` が `Err("...")` を返し、UI には案内文言を表示する。Stage B は引き続き利用可。
+- OAuth Usage API は Anthropic **Beta**（`anthropic-beta: oauth-2025-04-20`）のため仕様変更の可能性あり。top-level schema 崩壊時は UI 側で 3 ブロックそれぞれ個別に `null` 判定して partial 表示を維持する（`serde_json::from_value::<_>::ok()` で耐性を持たせた）。完全崩壊時はエラーメッセージを表示、Stage B（ローカル JSONL 集計）は引き続き利用可。
+- OAuth access token は `~/.claude/.credentials.json` の `claudeAiOauth.accessToken` 平文 JSON から読む。`claude login` 未実行時はこのファイルが存在せず取得不可（エラーメッセージで誘導）。token 文字列は log / error message に絶対出さない実装。
+- Round A 時代のミニゲージ仕様（AlertTriangle + 週次 Sonnet only）は OAuth API の seven_day 集約値に置き換わった（Anthropic の 7 日ウィンドウは all-models 合算のため Sonnet only は提供されない）。
 
 ## [v0.1.0] - 2026-04-19
 ### Added

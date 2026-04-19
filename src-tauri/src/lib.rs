@@ -18,6 +18,7 @@ use commands::{
     },
     image_paste::save_clipboard_image,
     memory_tree::scan_memory_tree,
+    oauth_usage::{get_oauth_usage, OAuthUsageCache},
     search_fts::{reindex_conversations, search_conversations, search_messages},
     slash::list_slash_commands,
     usage::get_usage_stats,
@@ -40,6 +41,8 @@ pub fn run() {
         .manage(AgentState::default())
         .manage(HistoryState::default())
         .manage(ClaudeUsageCache::new())
+        // PRJ-012 Round D': OAuth Usage API 5 分 cache。
+        .manage(OAuthUsageCache::default())
         .manage::<MonitorHandle>(monitor::new_handle())
         .setup(|app| {
             // PM-150: `~/.ccmux-ide-gui/history.db` を初期化。失敗してもログを残して
@@ -131,6 +134,8 @@ pub fn run() {
             // Usage stats (PRJ-012 Stage B / Round A)
             get_usage_stats,
             get_claude_rate_limits,
+            // PRJ-012 Round D': 公式 OAuth Usage API
+            get_oauth_usage,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

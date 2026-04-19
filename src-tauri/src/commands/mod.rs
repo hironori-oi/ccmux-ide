@@ -17,6 +17,7 @@ pub mod config;
 pub mod history;
 pub mod image_paste;
 pub mod memory_tree;
+pub mod oauth_usage;
 pub mod search_fts;
 pub mod slash;
 pub mod usage;

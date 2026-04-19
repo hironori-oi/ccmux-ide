@@ -52,6 +52,11 @@ dirs = "5"
 # PRJ-012 Stage B: ~/.claude/projects/**/*.jsonl の ISO8601 timestamp を DateTime<Utc>
 # として parse し、5h / 7d window に振り分けるため chrono を追加。
 chrono = { version = "0.4", features = ["serde"] }
+# PRJ-012 Round D': Anthropic 公式 OAuth Usage API
+# (https://api.anthropic.com/api/oauth/usage) を叩くための HTTP client。
+# rustls-tls を選ぶ理由は (1) Windows/macOS/Linux で追加 OS dep 不要、
+# (2) Tauri の bundle size を抑える、(3) OpenSSL 依存を避けて CI を単純化。
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 [dev-dependencies]
 tempfile = "3"

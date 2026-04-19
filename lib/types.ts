@@ -276,40 +276,46 @@ export interface UsageStats {
 }
 
 // ---------------------------------------------------------------------------
-// Claude CLI 公式レート制限（PRJ-012 Round A）
+// Claude OAuth Usage API（PRJ-012 Round D'）
 //
-// Rust `commands::claude_usage::ClaudeRateLimits` と 1:1 対応（camelCase）。
-// `claude /usage` 出力を Tauri backend で TUI parse して取得した、Anthropic
-// 公式の 5h / weekly / Sonnet 残量比率の生スナップショット。Stage B (UsageStats)
-// が JSONL 集計の「実測値」を提供するのに対し、こちらは Anthropic 側で計算済み
-// の **正規値**（ただし local sessions ベースなので他デバイスは含まれない）。
+// Rust `commands::oauth_usage::*` と 1:1 対応（camelCase）。
+//
+// Anthropic 公式 Beta API (`GET https://api.anthropic.com/api/oauth/usage`,
+// header `anthropic-beta: oauth-2025-04-20`) から取得した Pro/Max プランの
+// 5 時間ウィンドウ / 週次ウィンドウ / 追加クレジットの使用率。
+//
+// - Round A の `ClaudeRateLimits` (CLI TUI parse) は廃止。
+// - Stage B の `UsageStats` が「local JSONL 集計の実測値」を提供するのに対し、
+//   こちらは Anthropic 側で計算済みの **正規値**（全デバイス合算）。
 // ---------------------------------------------------------------------------
 
-export interface ClaudeRateLimits {
-  /** 5h session の reset 時刻（CLI raw 表記、例: `"9pm (Etc/GMT-9)"`） */
-  sessionResetAt: string | null;
-  /** 5h session の使用率 % */
-  sessionUsagePercent: number | null;
-  /** Weekly (all models) の reset 時刻 */
-  weeklyAllResetAt: string | null;
-  /** Weekly (all models) の使用率 % */
-  weeklyAllPercent: number | null;
-  /** Weekly (Sonnet only) の reset 時刻 */
-  weeklySonnetResetAt: string | null;
-  /** Weekly (Sonnet only) の使用率 % */
-  weeklySonnetPercent: number | null;
-  /** Last 24h: background/loop session 数 */
-  last24hBackground: number | null;
-  /** Last 24h: subagent session 数 */
-  last24hSubagent: number | null;
-  /** Last 24h: long session 数 */
-  last24hLong: number | null;
-  /** `/extra-usage` enabled か */
-  extraUsageEnabled: boolean;
-  /** Tauri 取得時刻 (ISO8601 UTC) */
+/** 5 時間 / 7 日 共通の 1 ウィンドウ分。 */
+export interface OAuthUsageWindow {
+  /** 使用率 0.0 〜 100.0 */
+  utilization: number;
+  /** ISO8601 UTC（例: `"2026-04-19T10:00:00Z"`）、欠落時 null */
+  resetsAt: string | null;
+}
+
+/** 追加クレジット（Pro/Max 上位プラン or 追加課金時のみ `isEnabled === true`）。 */
+export interface OAuthExtraUsage {
+  /** 利用率 %（無効時は null） */
+  utilization: number | null;
+  /** 使用済みクレジット (USD) */
+  usedCredits: number | null;
+  /** 月次上限 (USD) */
+  monthlyLimit: number | null;
+  /** 有効フラグ */
+  isEnabled: boolean;
+}
+
+/** `get_oauth_usage` 戻り値（Rust `ClaudeOAuthUsage` と 1:1）。 */
+export interface ClaudeOAuthUsage {
+  fiveHour: OAuthUsageWindow | null;
+  sevenDay: OAuthUsageWindow | null;
+  extraUsage: OAuthExtraUsage | null;
+  /** 取得時刻 (ISO8601 UTC)、UI の "N 分前取得" 表示に利用 */
   fetchedAt: string;
-  /** raw `/usage` 出力の先頭（最大 2KB、debug 用） */
-  rawSample: string;
 }
 
 /**
