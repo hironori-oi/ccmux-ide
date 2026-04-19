@@ -6,6 +6,7 @@ import { Inspector } from "@/components/layout/Inspector";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { Sidebar } from "@/components/sidebar/Sidebar";
+import { UpdateNotifier } from "@/components/updates/UpdateNotifier";
 import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
 
 /**
@@ -45,6 +46,9 @@ export function Shell({ children }: { children: ReactNode }) {
         <Inspector />
       </div>
       <StatusBar />
+      {/* PM-283: 起動時 + 手動の更新チェック & ダウンロード。
+          UI は自身で floating card を出すため、DOM 位置はどこでも可。 */}
+      <UpdateNotifier />
     </div>
   );
 }

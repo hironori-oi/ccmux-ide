@@ -65,6 +65,7 @@
       ]
     },
     "notification:default",
-    "notification:allow-notify"
+    "notification:allow-notify",
+    "updater:default"
   ]
 }

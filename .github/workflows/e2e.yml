@@ -1,0 +1,111 @@
+# ============================================================================
+# ccmux-ide / Playwright E2E Tests (CI)
+# ----------------------------------------------------------------------------
+# 目的:
+#   PM-290 / Week 8 Chunk 2 で導入した Playwright E2E 10 シナリオを
+#   ubuntu-latest 上で並列実行する。Tauri binary 自体は起動せず、Next.js dev
+#   server を Chromium で叩き、Tauri `invoke` / event を window 上に mock 注入
+#   する方式（tests/e2e/fixtures.ts）。
+#
+#   Linux で十分なのは、web 層のロジックに OS 依存が無いため（Chromium ベース
+#   + mock Tauri）。Windows 実機テストは build-windows.yml の手動 trigger と
+#   PM-292 手動検収でカバーする。
+# ----------------------------------------------------------------------------
+
+name: E2E
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "tests/**"
+      - "playwright.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/e2e.yml"
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: Playwright (Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # React 19 / Next 15.0.3 の peer 衝突に備える
+      NPM_CONFIG_LEGACY_PEER_DEPS: "true"
+      CI: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      # node_modules キャッシュ（setup-node の cache と併用）
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+          key: ${{ runner.os }}-node24-e2e-${{ hashFiles('package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node24-e2e-
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      # Playwright のブラウザバイナリを別キャッシュで管理
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('package.json') }}
+
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      # deps だけ再インストール（cache hit 時も dep packages 必要）
+      - name: Ensure Playwright deps
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Run Playwright tests
+        run: npm run test:e2e
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload test traces (failure only)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7

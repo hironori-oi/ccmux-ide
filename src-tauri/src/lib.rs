@@ -31,6 +31,10 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        // PM-283: 更新チェック plugin。endpoint は tauri.conf.json の
+        // `plugins.updater.endpoints`（GitHub Release の latest.json）を参照。
+        // pubkey 空文字のため署名検証は skip される（MVP、M3 で許容）。
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AgentState::default())
         .manage(HistoryState::default())
         .manage::<MonitorHandle>(monitor::new_handle())

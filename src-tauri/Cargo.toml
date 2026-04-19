@@ -23,6 +23,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
+# PM-283: GitHub Release の latest.json をポーリングし、署名なし updater で
+# NSIS/MSI/DMG/AppImage/deb を自動更新する。pubkey "" のため署名検証は
+# skip される（M3 MVP 許容、将来 DEC で Ed25519 鍵発行時に差し替え）。
+tauri-plugin-updater = "2"
 
 # --- Serde / async ---
 serde = { version = "1", features = ["derive"] }

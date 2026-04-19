@@ -2,10 +2,11 @@
 
 import { useEffect, useRef } from "react";
 import { useTheme } from "next-themes";
-import { Monitor, Moon, Palette, Sun } from "lucide-react";
+import { Monitor, Moon, Palette, RefreshCw, Sun } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { triggerManualUpdateCheck } from "@/components/updates/UpdateNotifier";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/lib/stores/settings";
 import {
@@ -284,6 +285,30 @@ export function AppearanceSettings() {
           <span>14</span>
           <span>15</span>
           <span>16</span>
+        </div>
+      </Card>
+
+      {/* アプリ更新（PM-283） */}
+      <Card className="space-y-3 p-5">
+        <div>
+          <h3 className="flex items-center gap-1.5 text-sm font-semibold">
+            <RefreshCw className="h-4 w-4" aria-hidden />
+            アプリの更新
+          </h3>
+          <p className="text-xs text-muted-foreground">
+            GitHub Release から最新版を手動で確認します。起動時にも自動でチェックされます。
+          </p>
+        </div>
+        <div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => triggerManualUpdateCheck()}
+            className="gap-2"
+          >
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+            手動で更新を確認
+          </Button>
         </div>
       </Card>
 

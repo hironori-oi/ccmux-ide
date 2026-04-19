@@ -1,0 +1,417 @@
+# ============================================================================
+# ccmux-ide / Multi-platform Release Build (PM-282)
+# ----------------------------------------------------------------------------
+# 目的:
+#   v* タグが push されたタイミングで Windows (NSIS/MSI) / macOS (DMG x64 +
+#   aarch64) / Linux (AppImage/deb) のインストーラを並列ビルドし、GitHub
+#   Release に自動添付する。合わせて tauri-plugin-updater 用の latest.json
+#   を生成して同じ Release に upload する。
+#
+#   workflow_dispatch でも走らせられるが、その場合は Release を作らず artifact
+#   upload のみ（dogfood 用）。
+#
+# トリガ:
+#   - push tag v*   … 本番 Release 生成（prerelease は -rc / -beta を含む場合）
+#   - workflow_dispatch … 手動ビルド、Release 非生成
+#
+# 既存 build-windows.yml は dogfood iteration 用に workflow_dispatch で残す。
+# 本 workflow とは独立。
+#
+# 注意:
+#   - tauri.conf.json の `plugins.updater.pubkey` は空文字のため updater
+#     manifest の `signature` も空（TOFU 相当、M3 MVP 許容、DEC 候補: M3
+#     PM-304 で Ed25519 ペア発行）
+#   - Linux は ubuntu-latest（24.04）で webkit2gtk 4.1 前提。もし 22.04 系の
+#     古い glibc 互換が必要になった場合は matrix に ubuntu-22.04 を追加する。
+# ----------------------------------------------------------------------------
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (artifact upload only, no Release)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+# 同じタグで複数回起動されても最後のみ有効。並列ビルドを無駄に走らせない。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  # --------------------------------------------------------------------------
+  # build: 各プラットフォームで Tauri bundle を生成
+  # --------------------------------------------------------------------------
+  build:
+    name: Build (${{ matrix.platform.label }})
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - label: 'windows-x86_64'
+            runner: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            tauri_args: ''
+            bundle_globs: |
+              src-tauri/target/release/bundle/nsis/*.exe
+              src-tauri/target/release/bundle/msi/*.msi
+          - label: 'darwin-x86_64'
+            runner: macos-13
+            rust_target: x86_64-apple-darwin
+            tauri_args: '--target x86_64-apple-darwin'
+            bundle_globs: |
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          - label: 'darwin-aarch64'
+            runner: macos-14
+            rust_target: aarch64-apple-darwin
+            tauri_args: '--target aarch64-apple-darwin'
+            bundle_globs: |
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          - label: 'linux-x86_64'
+            runner: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+            tauri_args: ''
+            bundle_globs: |
+              src-tauri/target/release/bundle/appimage/*.AppImage
+              src-tauri/target/release/bundle/deb/*.deb
+
+    env:
+      # DEC-013 継承: updater 署名鍵未発行、空文字で build pass
+      TAURI_SIGNING_PRIVATE_KEY: ''
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+      NPM_CONFIG_LEGACY_PEER_DEPS: 'true'
+      RUST_BACKTRACE: '1'
+      TAURI_CLI_VERBOSE: '1'
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. checkout
+      # ------------------------------------------------------------------
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 1
+
+      # ------------------------------------------------------------------
+      # 2. Linux 用の追加依存（webkit2gtk / libayatana-appindicator / librsvg）
+      #    ubuntu-latest = 24.04 では webkit2gtk-4.1 が必要。
+      # ------------------------------------------------------------------
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            patchelf \
+            file
+
+      # ------------------------------------------------------------------
+      # 3. Node.js 24 LTS
+      # ------------------------------------------------------------------
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            sidecar/package-lock.json
+
+      # ------------------------------------------------------------------
+      # 4. Rust 1.94.0 + ターゲット
+      # ------------------------------------------------------------------
+      - name: Setup Rust 1.94.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.94.0'
+          targets: ${{ matrix.platform.rust_target }}
+
+      # ------------------------------------------------------------------
+      # 5. Cargo キャッシュ
+      # ------------------------------------------------------------------
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.platform.label }}
+
+      # ------------------------------------------------------------------
+      # 6. npm / node_modules キャッシュ（キーに platform を含めて分離）
+      # ------------------------------------------------------------------
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+            sidecar/node_modules
+          key: ${{ matrix.platform.label }}-node24-${{ hashFiles('package.json', 'sidecar/package.json') }}
+          restore-keys: |
+            ${{ matrix.platform.label }}-node24-
+
+      # ------------------------------------------------------------------
+      # 7. Frontend / Sidecar install + bundle
+      # ------------------------------------------------------------------
+      - name: Install frontend dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Install sidecar dependencies
+        working-directory: sidecar
+        run: npm install
+
+      - name: Bundle sidecar (esbuild)
+        working-directory: sidecar
+        run: npm run build
+
+      - name: Verify sidecar bundle (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          if [ ! -f "sidecar/dist/index.mjs" ]; then
+            echo "sidecar/dist/index.mjs not found after build!" >&2
+            exit 1
+          fi
+          ls -lh sidecar/dist/index.mjs
+
+      - name: Verify sidecar bundle (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-Not (Test-Path "sidecar/dist/index.mjs")) {
+            Write-Error "sidecar/dist/index.mjs not found after build!"
+            exit 1
+          }
+          Get-Item "sidecar/dist/index.mjs" | Select-Object Name, Length
+
+      # ------------------------------------------------------------------
+      # 8. Tauri build
+      #    macOS のみ --target で arch を指定（x64 / aarch64 を分離 job で）。
+      # ------------------------------------------------------------------
+      - name: Build Tauri app
+        run: npm run tauri:build -- ${{ matrix.platform.tauri_args }}
+        env:
+          CARGO_BUILD_JOBS: '2'
+
+      # ------------------------------------------------------------------
+      # 9. Artifact upload（Release 作成用に集約）
+      # ------------------------------------------------------------------
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ccmux-ide-${{ matrix.platform.label }}
+          path: ${{ matrix.platform.bundle_globs }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      # ------------------------------------------------------------------
+      # 10. 失敗時のデバッグ情報
+      # ------------------------------------------------------------------
+      - name: Dump bundle tree on failure (POSIX)
+        if: failure() && runner.os != 'Windows'
+        run: |
+          echo "=== target/release/bundle ==="
+          if [ -d "src-tauri/target/release/bundle" ]; then
+            find src-tauri/target/release/bundle -maxdepth 3 -type f | head -100
+          fi
+          echo "=== target/${{ matrix.platform.rust_target }}/release/bundle ==="
+          if [ -d "src-tauri/target/${{ matrix.platform.rust_target }}/release/bundle" ]; then
+            find "src-tauri/target/${{ matrix.platform.rust_target }}/release/bundle" -maxdepth 3 -type f | head -100
+          fi
+
+      - name: Dump bundle tree on failure (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Write-Host "=== bundle tree ==="
+          if (Test-Path "src-tauri/target/release/bundle") {
+            Get-ChildItem "src-tauri/target/release/bundle" -Recurse -Depth 3 | Format-Table FullName, Length
+          }
+
+  # --------------------------------------------------------------------------
+  # release: 全 build job 成功後に GitHub Release を作成（tag push 時のみ）
+  # --------------------------------------------------------------------------
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    # tag push 時のみ。workflow_dispatch は artifact のみで終了。
+    if: startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout (CHANGELOG 抽出用)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # ------------------------------------------------------------------
+      # 1. 全 platform の artifact を単一ディレクトリに集約
+      # ------------------------------------------------------------------
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: ccmux-ide-*
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: |
+          echo "=== artifacts/ ==="
+          find artifacts -type f | sort
+          echo "==================="
+
+      # ------------------------------------------------------------------
+      # 2. タグ名から version を抽出し、CHANGELOG.md から該当 chunk を抽出
+      # ------------------------------------------------------------------
+      - name: Extract version and release notes
+        id: notes
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG_NAME#v}"
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # CHANGELOG.md から `## [v0.1.0]` 〜 次の `## [` 直前までを awk で抽出
+          NOTES_FILE="release-notes.md"
+          awk -v tag="[$TAG_NAME]" '
+            $0 ~ "^## " tag {flag=1; print; next}
+            flag && /^## \[/ {flag=0}
+            flag {print}
+          ' CHANGELOG.md > "$NOTES_FILE"
+
+          if [ ! -s "$NOTES_FILE" ]; then
+            echo "## $TAG_NAME" > "$NOTES_FILE"
+            echo "" >> "$NOTES_FILE"
+            echo "自動生成された Release です。CHANGELOG.md に該当セクションが見つかりませんでした。" >> "$NOTES_FILE"
+          fi
+
+          echo "notes_path=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+          echo "=== release notes ==="
+          cat "$NOTES_FILE"
+
+      # ------------------------------------------------------------------
+      # 3. tauri-plugin-updater 用 latest.json を生成
+      #    形式:
+      #      {
+      #        "version": "0.1.0",
+      #        "notes": "...",
+      #        "pub_date": "2026-04-19T00:00:00Z",
+      #        "platforms": {
+      #          "windows-x86_64": { "signature": "", "url": "..." },
+      #          "darwin-x86_64":  { "signature": "", "url": "..." },
+      #          "darwin-aarch64": { "signature": "", "url": "..." },
+      #          "linux-x86_64":   { "signature": "", "url": "..." }
+      #        }
+      #      }
+      #    URL は GitHub Release の安定 download URL を使う。
+      # ------------------------------------------------------------------
+      - name: Generate latest.json (updater manifest)
+        id: manifest
+        run: |
+          set -euo pipefail
+
+          TAG_NAME="${{ steps.notes.outputs.tag_name }}"
+          VERSION="${{ steps.notes.outputs.version }}"
+          PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          REPO_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}"
+
+          # 各アーティファクトファイル名を glob から取得（1 枚目のみ採用）
+          find_first() {
+            local pattern="$1"
+            local f
+            f="$(find artifacts -type f -name "$pattern" | head -1 || true)"
+            if [ -n "$f" ]; then
+              basename "$f"
+            fi
+          }
+
+          WIN_NSIS="$(find_first '*.exe')"
+          WIN_MSI="$(find_first '*.msi')"
+          # macOS は x64 / aarch64 で同じ拡張子なので、artifact dir 構造で絞り込み
+          MAC_X64="$(find artifacts -type f -name '*.dmg' | grep -i 'x86_64\|x64\|intel' | head -1 | xargs -I{} basename {} || true)"
+          MAC_ARM="$(find artifacts -type f -name '*.dmg' | grep -i 'aarch64\|arm64' | head -1 | xargs -I{} basename {} || true)"
+          # grep で絞れなかった場合のフォールバック（Tauri が productname に arch を
+          # 入れない場合は merge-multiple 後に区別できないため、手で各 1 つに）
+          if [ -z "$MAC_X64" ]; then
+            MAC_X64="$(find_first '*_x64.dmg')"
+          fi
+          if [ -z "$MAC_ARM" ]; then
+            MAC_ARM="$(find_first '*_aarch64.dmg')"
+          fi
+          LINUX_APPIMAGE="$(find_first '*.AppImage')"
+          LINUX_DEB="$(find_first '*.deb')"
+
+          # tauri-plugin-updater は Windows は NSIS の .exe、macOS は .dmg（or .app.tar.gz）、
+          # Linux は .AppImage を第一候補に取る。MSI / deb は併置のみ（updater 対象外）。
+          WIN_URL=""
+          if [ -n "$WIN_NSIS" ]; then WIN_URL="${REPO_BASE}/${WIN_NSIS}"; fi
+          MAC_X64_URL=""
+          if [ -n "$MAC_X64" ]; then MAC_X64_URL="${REPO_BASE}/${MAC_X64}"; fi
+          MAC_ARM_URL=""
+          if [ -n "$MAC_ARM" ]; then MAC_ARM_URL="${REPO_BASE}/${MAC_ARM}"; fi
+          LINUX_URL=""
+          if [ -n "$LINUX_APPIMAGE" ]; then LINUX_URL="${REPO_BASE}/${LINUX_APPIMAGE}"; fi
+
+          NOTES_TEXT="$(cat ${{ steps.notes.outputs.notes_path }})"
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg notes "$NOTES_TEXT" \
+            --arg pub_date "$PUB_DATE" \
+            --arg win_url "$WIN_URL" \
+            --arg mac_x64_url "$MAC_X64_URL" \
+            --arg mac_arm_url "$MAC_ARM_URL" \
+            --arg linux_url "$LINUX_URL" \
+            '{
+              version: $version,
+              notes: $notes,
+              pub_date: $pub_date,
+              platforms: {
+                "windows-x86_64": { signature: "", url: $win_url },
+                "darwin-x86_64":  { signature: "", url: $mac_x64_url },
+                "darwin-aarch64": { signature: "", url: $mac_arm_url },
+                "linux-x86_64":   { signature: "", url: $linux_url }
+              }
+            }' > latest.json
+
+          echo "=== latest.json ==="
+          cat latest.json
+
+      # ------------------------------------------------------------------
+      # 4. GitHub Release 作成 + 全 artifact を upload
+      # ------------------------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.notes.outputs.tag_name }}
+          name: ${{ steps.notes.outputs.tag_name }}
+          body_path: ${{ steps.notes.outputs.notes_path }}
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') }}
+          fail_on_unmatched_files: false
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.msi
+            artifacts/**/*.dmg
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            latest.json

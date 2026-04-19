@@ -13,7 +13,10 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "next": "15.0.3",
@@ -25,6 +28,8 @@
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-shell": "^2",
     "@tauri-apps/plugin-notification": "^2",
+    "@tauri-apps/plugin-updater": "^2",
+    "@tauri-apps/plugin-process": "^2",
     "next-themes": "^0.4.3",
     "framer-motion": "^11.11.17",
     "sonner": "^1.7.0",
@@ -64,6 +69,7 @@
     "postcss": "^8.4.49",
     "autoprefixer": "^10.4.20",
     "eslint": "^9",
-    "eslint-config-next": "15.0.3"
+    "eslint-config-next": "15.0.3",
+    "@playwright/test": "^1.48.0"
   }
 }
