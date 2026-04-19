@@ -26,30 +26,113 @@ import fs from "node:fs";
  * Claude Code native binary の実パスを解決する。
  *
  * Agent SDK v0.2.114 は platform-specific optional deps
- * `@anthropic-ai/claude-agent-sdk-{platform}-{arch}` として native binary
- * (Linux=`claude` ELF / Windows=`claude.exe` 236MB) を同梱する。
+ * `@anthropic-ai/claude-agent-sdk-{platform}-{arch}[-musl]` として native binary
+ * (Linux=`claude` ELF / Windows=`claude.exe`) を同梱する。
  * esbuild で JS バンドルしてもこの binary は bundle 内に含められないため、
  * packaged app では Tauri resources 経由で sidecar/node_modules に物理配置し、
  * ここで絶対パスを解決して SDK に `pathToClaudeCodeExecutable` で明示渡しする。
+ *
+ * 解決順:
+ *   1. CLAUDE_CODE_EXECUTABLE 環境変数
+ *   2. sidecar/node_modules/@anthropic-ai/claude-agent-sdk-{platform}-{arch}[-musl]/claude
+ *   3. sidecar/node_modules/.pnpm/@anthropic-ai+claude-agent-sdk-<...>/node_modules/.../claude
+ *   4. 親 workspace の node_modules（monorepo hoist ケース）
+ *   5. $PATH 上の claude CLI (execFile で shell 経由させない)
+ *   6. 一般的なインストール場所 (/usr/local/bin, ~/.local/bin, ~/.npm/bin)
  */
-function findClaudeExecutable(): string | undefined {
+async function findClaudeExecutable(): Promise<string | undefined> {
+  // 1. 環境変数で明示指定
+  const envPath = process.env.CLAUDE_CODE_EXECUTABLE;
+  if (envPath && fs.existsSync(envPath)) {
+    return envPath;
+  }
+
   const platform = process.platform; // "win32" | "darwin" | "linux"
   const arch = process.arch;         // "x64" | "arm64"
   const ext = platform === "win32" ? ".exe" : "";
+  // Linux は glibc/musl の両方を候補に (pnpm は libc を自動選択するが誤検出あり)
+  const libcVariants = platform === "linux" ? ["", "-musl"] : [""];
 
-  const pkgRel = path.join(
-    "node_modules",
-    "@anthropic-ai",
-    `claude-agent-sdk-${platform}-${arch}`,
-    `claude${ext}`
-  );
+  for (const variant of libcVariants) {
+    const pkgDir = `claude-agent-sdk-${platform}-${arch}${variant}`;
 
-  // Tauri packaged app では cwd = sidecar_dir (_up_/sidecar/) にしているので
-  // cwd 基準で resolve する。
-  const candidate = path.join(process.cwd(), pkgRel);
-  if (fs.existsSync(candidate)) {
-    return candidate;
+    // 2. sidecar/node_modules 直下
+    const direct = path.join(
+      process.cwd(),
+      "node_modules",
+      "@anthropic-ai",
+      pkgDir,
+      `claude${ext}`
+    );
+    if (fs.existsSync(direct)) return direct;
+
+    // 3. pnpm の .pnpm ストア配下
+    const pnpmStore = path.join(process.cwd(), "node_modules", ".pnpm");
+    try {
+      if (fs.existsSync(pnpmStore)) {
+        const entries = fs.readdirSync(pnpmStore);
+        const prefix = `@anthropic-ai+${pkgDir}@`;
+        const match = entries.find((e) => e.startsWith(prefix));
+        if (match) {
+          const pnpmPath = path.join(
+            pnpmStore,
+            match,
+            "node_modules",
+            "@anthropic-ai",
+            pkgDir,
+            `claude${ext}`
+          );
+          if (fs.existsSync(pnpmPath)) return pnpmPath;
+        }
+      }
+    } catch {
+      // 無視して次の候補へ
+    }
+
+    // 4. 親 workspace の node_modules（例: monorepo root）
+    const parentCandidate = path.join(
+      process.cwd(),
+      "..",
+      "node_modules",
+      "@anthropic-ai",
+      pkgDir,
+      `claude${ext}`
+    );
+    if (fs.existsSync(parentCandidate)) return parentCandidate;
   }
+
+  // 5. $PATH 上の claude CLI を execFile で探す (shell 経由しないため安全)
+  try {
+    const { execFileSync } = await import("node:child_process");
+    const finder = platform === "win32" ? "where" : "which";
+    const out = execFileSync(finder, ["claude"], {
+      encoding: "utf8",
+      timeout: 2000,
+    }).trim();
+    const firstLine = out.split(/\r?\n/)[0].trim();
+    if (firstLine && fs.existsSync(firstLine)) return firstLine;
+  } catch {
+    // PATH に claude が無いだけ、次の候補へ
+  }
+
+  // 6. 一般的なインストール場所（Linux/macOS）
+  const home = process.env.HOME;
+  const commonPaths: string[] = [];
+  if (platform !== "win32") {
+    commonPaths.push("/usr/local/bin/claude", "/usr/bin/claude");
+    if (home) {
+      commonPaths.push(
+        path.join(home, ".local", "bin", "claude"),
+        path.join(home, ".npm", "bin", "claude"),
+        path.join(home, ".npm-global", "bin", "claude"),
+        path.join(home, ".bun", "bin", "claude")
+      );
+    }
+  }
+  for (const p of commonPaths) {
+    if (fs.existsSync(p)) return p;
+  }
+
   return undefined;
 }
 
@@ -85,7 +168,7 @@ export async function* runAgentQuery(
   // これがないと packaged app で "Native CLI binary for ... not found" エラー。
   const opts: AgentQueryOptions = { ...options };
   if (!opts.pathToClaudeCodeExecutable) {
-    const claudePath = findClaudeExecutable();
+    const claudePath = await findClaudeExecutable();
     if (claudePath) {
       opts.pathToClaudeCodeExecutable = claudePath;
       try {

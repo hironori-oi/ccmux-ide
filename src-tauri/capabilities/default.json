@@ -19,15 +19,23 @@
     "fs:default",
     "fs:allow-read-text-file",
     "fs:allow-write-text-file",
+    "fs:allow-write-file",
+    "fs:allow-read-dir",
+    "fs:allow-stat",
+    "fs:allow-watch",
+    "fs:allow-unwatch",
     "fs:allow-exists",
     "fs:allow-mkdir",
     {
       "identifier": "fs:scope",
       "allow": [
         { "path": "$HOME/.claude/**" },
+        { "path": "$HOME/.ccmux-ide-gui/**" },
         { "path": "$APPDATA/ccmux-ide/**" },
         { "path": "$APPCONFIG/ccmux-ide/**" },
-        { "path": "$APPDATA/ccmux-images/**" }
+        { "path": "$APPDATA/ccmux-images/**" },
+        { "path": "$APPLOCALDATA/**" },
+        { "path": "$HOME/**" }
       ]
     },
     "shell:default",

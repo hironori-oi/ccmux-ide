@@ -1,0 +1,6 @@
+[project]
+name = "python-hello"
+version = "0.1.0"
+description = "Minimal Python hello world for ccmux-ide"
+requires-python = ">=3.9"
+license = { text = "MIT" }

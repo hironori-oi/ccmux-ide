@@ -1,43 +1,15 @@
 import type { ReactNode } from "react";
 
+import { Shell } from "@/components/layout/Shell";
+
 /**
- * ワークスペース全体の 3 ペインレイアウト (stub)。
+ * ワークスペース全体の 3 ペイン + 上下バー構成。
  *
- * - 左サイドバー: ContextGauge / SubAgentsList / ProjectTree （M1 Must）
- * - 中央: チャット (MessageList + InputArea)
- * - 右インスペクタ: MemoryTreeView / WorktreeTabs （M2 Should）
+ * レイアウト本体は `components/layout/Shell.tsx`（PM-167）に集約。
+ * ここは Next.js App Router のレイアウトスロットとして children を流し込むだけ。
  *
- * 実装は PM-100 系タスクで進める。現段階は骨格の CSS grid のみ。
+ * 旧実装（flex で Sidebar + section + aside を直書き）は Shell に移設済。
  */
 export default function WorkspaceLayout({ children }: { children: ReactNode }) {
-  return (
-    <div className="grid h-screen grid-cols-[260px_1fr_320px] bg-background">
-      <aside
-        aria-label="サイドバー"
-        className="flex flex-col border-r bg-muted/30 p-4"
-      >
-        <div className="text-sm font-semibold">ccmux-ide</div>
-        <div className="mt-4 space-y-2 text-xs text-muted-foreground">
-          <p>Context Gauge (stub)</p>
-          <p>Sub-Agents (stub)</p>
-          <p>Project Tree (stub)</p>
-        </div>
-      </aside>
-
-      <section aria-label="メインチャット" className="flex min-w-0 flex-col">
-        {children}
-      </section>
-
-      <aside
-        aria-label="インスペクタ"
-        className="flex flex-col border-l bg-muted/30 p-4"
-      >
-        <div className="text-sm font-semibold">Inspector</div>
-        <div className="mt-4 space-y-2 text-xs text-muted-foreground">
-          <p>CLAUDE.md Tree (stub)</p>
-          <p>Worktree Tabs (stub)</p>
-        </div>
-      </aside>
-    </div>
-  );
+  return <Shell>{children}</Shell>;
 }

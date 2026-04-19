@@ -35,9 +35,21 @@ const __dirname = path.dirname(__filename);
 // 設定
 // ----------------------------------------------------------------------------
 
-/** bundle 対象外にする module 名。Agent SDK は含める (DEC-026)。 */
+/**
+ * bundle 対象外にする module 名。
+ *
+ * @anthropic-ai/claude-agent-sdk は platform 固有の native CLI binary
+ * (@anthropic-ai/claude-agent-sdk-linux-x64 等、各 73MB) を
+ * optionalDependencies で持つため、esbuild で inline bundle すると
+ * 実行時に「Native CLI binary for linux-x64 not found」エラーになる。
+ *
+ * Node の module resolution に委ねる方が確実なので external 扱い。
+ * この場合 Tauri resources には sidecar/node_modules も含める必要があるが、
+ * dev (tauri dev) では Node が sidecar/node_modules を直接参照するため動く。
+ * production bundle 時の対応は M3 (PM-282 配布 CI) で改めて検討。
+ */
 const EXTERNAL = [
-  // 例: ネイティブ依存や optional dep で落ちるもの。初回は空で。
+  "@anthropic-ai/claude-agent-sdk",
 ];
 
 const ENTRY = path.join(__dirname, "src", "index.ts");
