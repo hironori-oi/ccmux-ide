@@ -2,13 +2,14 @@
 
 import type { ReactNode } from "react";
 
-import { Inspector } from "@/components/layout/Inspector";
+// NOTE(M3 切り分け): Inspector (MemoryTreeView watchImmediate + polling / WorktreeTabs)
+// を一時 disable。bypass-Shell 試験で error は Shell 子に特定済、次は Inspector を
+// 除外した状態で再検証する。
+// import { Inspector } from "@/components/layout/Inspector";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { Sidebar } from "@/components/sidebar/Sidebar";
-// NOTE(M3 緊急対応): UpdateNotifier は workspace の無限 render ループ (React error #185)
-// の容疑者として一時 disable。原因切り分け後に再有効化予定。
-// import { UpdateNotifier } from "@/components/updates/UpdateNotifier";
+// import { UpdateNotifier } from "@/components/updates/UpdateNotifier";  // 依然 disable
 import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
 
 /**
@@ -45,7 +46,7 @@ export function Shell({ children }: { children: ReactNode }) {
         >
           {children}
         </main>
-        <Inspector />
+        {/* <Inspector />  ← M3 切り分け中 disable */}
       </div>
       <StatusBar />
       {/* PM-283: UpdateNotifier を一時 disable（M3 緊急対応、React error #185 切り分け中） */}
