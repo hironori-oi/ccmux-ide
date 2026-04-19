@@ -9,6 +9,16 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 （`## [v0.1.0] - ...` 〜 次の `## [` 行の直前）を抽出して使用します。タグ名と
 見出しのバージョン表記を一致させてください（例: tag `v0.1.0` → 見出し `[v0.1.0]`）。
 
+## [Unreleased]
+### Added
+- **Claude CLI `/usage` 連携**（PRJ-012 Round A）。`get_claude_rate_limits` Tauri command で `claude /usage` を spawn し、ANSI 除去 + TUI text parser で **Anthropic 公式の 5h セッション / 週次（全モデル）/ 週次（Sonnet only）残量 % と reset 時刻**を取得。30 秒 cache + 10 秒 spawn timeout。
+- StatusBar 中央に 5h reset 時刻 + 週次 Sonnet 使用率 % のミニゲージ（≥85% で AlertTriangle 警告色）。
+- サイドバー `UsageStatsCard` 最上部に「公式レート制限」ブロックを追加（Stage B の JSONL 集計とは別表示）。直近 24h の background/subagent/long セッション数 + `/extra-usage` 有効状態も表示。
+
+### Known Issues
+- Claude CLI v2.1.x の `/usage` は **interactive TUI 専用**で `--json` 等の non-interactive 出力モードが存在しない。本実装は TUI 出力を ANSI 除去後に文言ベースで parse しているため、Anthropic 側の文言変更（`Current week (Sonnet only)` のラベルや `Resets ...` フォーマット等）で壊れる可能性がある。parse 失敗時は frontend 側で Stage B（JSONL 集計）を fallback として継続表示する。
+- `claude` CLI 未インストール / 未ログイン時は `get_claude_rate_limits` が `Err("...")` を返し、UI には案内文言を表示する。Stage B は引き続き利用可。
+
 ## [v0.1.0] - 2026-04-19
 ### Added
 - 日本語ファーストな Claude Code GUI クライアント（Tauri 2 + Next.js 15）

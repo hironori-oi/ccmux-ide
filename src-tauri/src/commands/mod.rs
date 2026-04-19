@@ -12,6 +12,7 @@
 //! `.map_err(|e| e.to_string())` して変換する）。
 
 pub mod agent;
+pub mod claude_usage;
 pub mod config;
 pub mod history;
 pub mod image_paste;

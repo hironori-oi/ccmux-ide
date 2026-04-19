@@ -234,6 +234,43 @@ export interface UsageStats {
   sourceFiles: number;
 }
 
+// ---------------------------------------------------------------------------
+// Claude CLI 公式レート制限（PRJ-012 Round A）
+//
+// Rust `commands::claude_usage::ClaudeRateLimits` と 1:1 対応（camelCase）。
+// `claude /usage` 出力を Tauri backend で TUI parse して取得した、Anthropic
+// 公式の 5h / weekly / Sonnet 残量比率の生スナップショット。Stage B (UsageStats)
+// が JSONL 集計の「実測値」を提供するのに対し、こちらは Anthropic 側で計算済み
+// の **正規値**（ただし local sessions ベースなので他デバイスは含まれない）。
+// ---------------------------------------------------------------------------
+
+export interface ClaudeRateLimits {
+  /** 5h session の reset 時刻（CLI raw 表記、例: `"9pm (Etc/GMT-9)"`） */
+  sessionResetAt: string | null;
+  /** 5h session の使用率 % */
+  sessionUsagePercent: number | null;
+  /** Weekly (all models) の reset 時刻 */
+  weeklyAllResetAt: string | null;
+  /** Weekly (all models) の使用率 % */
+  weeklyAllPercent: number | null;
+  /** Weekly (Sonnet only) の reset 時刻 */
+  weeklySonnetResetAt: string | null;
+  /** Weekly (Sonnet only) の使用率 % */
+  weeklySonnetPercent: number | null;
+  /** Last 24h: background/loop session 数 */
+  last24hBackground: number | null;
+  /** Last 24h: subagent session 数 */
+  last24hSubagent: number | null;
+  /** Last 24h: long session 数 */
+  last24hLong: number | null;
+  /** `/extra-usage` enabled か */
+  extraUsageEnabled: boolean;
+  /** Tauri 取得時刻 (ISO8601 UTC) */
+  fetchedAt: string;
+  /** raw `/usage` 出力の先頭（最大 2KB、debug 用） */
+  rawSample: string;
+}
+
 /**
  * Slash command 1 件（`list_slash_commands` 戻り値の要素、Rust
  * `commands::slash::SlashCmd` と 1:1）。

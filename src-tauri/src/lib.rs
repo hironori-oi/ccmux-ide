@@ -10,6 +10,7 @@ use tauri::{Listener, Manager};
 
 use commands::{
     agent::{send_agent_prompt, start_agent_sidecar, stop_agent_sidecar, AgentState},
+    claude_usage::{get_claude_rate_limits, ClaudeUsageCache},
     config::{get_api_key, set_api_key},
     history::{
         append_message, create_session, delete_session, get_session_messages, init_history_db,
@@ -38,6 +39,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AgentState::default())
         .manage(HistoryState::default())
+        .manage(ClaudeUsageCache::new())
         .manage::<MonitorHandle>(monitor::new_handle())
         .setup(|app| {
             // PM-150: `~/.ccmux-ide-gui/history.db` を初期化。失敗してもログを残して
@@ -126,8 +128,9 @@ pub fn run() {
             get_session_messages,
             delete_session,
             rename_session,
-            // Usage stats (PRJ-012 Stage B)
+            // Usage stats (PRJ-012 Stage B / Round A)
             get_usage_stats,
+            get_claude_rate_limits,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

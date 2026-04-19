@@ -1,29 +1,38 @@
 "use client";
 
-import { Cpu, GitBranch } from "lucide-react";
+import { AlertTriangle, Clock, Cpu, GitBranch } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import {
   selectContextPercent,
   useMonitorStore,
 } from "@/lib/stores/monitor";
+import { useClaudeUsageStore } from "@/lib/stores/claude-usage";
+import { useClaudeRateLimits } from "@/hooks/useClaudeRateLimits";
+import type { ClaudeRateLimits } from "@/lib/types";
 
 /**
- * PM-172: ステータスバー（画面下端・28px 固定）。
+ * PM-172 / PRJ-012 Round A: ステータスバー（画面下端・28px 固定）。
  *
- * 3 カラム:
- *  - 左:   model 名 + CPU アイコン（未設定時は "Claude"）
- *  - 中央: context % 簡易ゲージ（色 dot + % テキスト、<60 緑 / <85 黄 / ≥85 赤）
- *  - 右:   git branch + hotkey ヒント（⌘K コマンド / ⌘/ ヘルプ）
+ * 4 カラム:
+ *  - 左:    model 名 + CPU アイコン（未設定時は "Claude"）
+ *  - 中央L: context % 簡易ゲージ（色 dot + % テキスト、<60 緑 / <85 黄 / ≥85 赤）
+ *  - 中央R: Claude CLI レート制限（5h reset + Weekly Sonnet %、PRJ-012 Round A）
+ *  - 右:    git branch + hotkey ヒント（⌘K コマンド / ⌘/ ヘルプ）
  *
- * Chunk 2 の `useMonitorStore` が push する `MonitorState`（snake_case）から
- * 必要な値を selector 経由で購読する。`monitor:tick` が未到達（sidecar が
- * まだ返答していない）ときは fallback 表示になる。
- * Shell.tsx（Chunk 2）の下端にそのまま流し込む前提で、自身の幅は親 flex に従う。
+ * `useClaudeRateLimits()` をここでマウントすることで 30 秒 poll が始まる。
+ * 同じ store を `UsageStatsCard` も購読するので、サイドバーが折り畳まれていても
+ * StatusBar が単独でフェッチを継続する。Rust 側に 30 秒 cache があるため
+ * Sidebar との二重マウントでも CLI spawn は実質 30 秒に 1 回。
  */
 export function StatusBar() {
   const monitor = useMonitorStore((s) => s.monitor);
   const percentFromStore = useMonitorStore(selectContextPercent);
+
+  // PRJ-012 Round A: claude /usage の自動 poll を開始
+  useClaudeRateLimits();
+  const limits = useClaudeUsageStore((s) => s.limits);
+  const limitsError = useClaudeUsageStore((s) => s.error);
 
   const model = monitor?.model && monitor.model.length > 0
     ? shortModel(monitor.model)
@@ -42,7 +51,7 @@ export function StatusBar() {
         <span className="truncate font-medium text-foreground/80">{model}</span>
       </div>
 
-      {/* 中央: context % */}
+      {/* 中央L: context % */}
       <div className="flex items-center gap-1.5">
         {contextPercent !== null ? (
           <>
@@ -65,6 +74,9 @@ export function StatusBar() {
         )}
       </div>
 
+      {/* 中央R: Claude /usage 公式レート制限 */}
+      <RateLimitsSection limits={limits} error={limitsError} />
+
       {/* 右: branch + hotkey */}
       <div className="flex items-center gap-3">
         {branch && (
@@ -86,6 +98,157 @@ export function StatusBar() {
       </div>
     </footer>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Rate limits sub-section
+// ---------------------------------------------------------------------------
+
+interface RateLimitsSectionProps {
+  limits: ClaudeRateLimits | null;
+  error: string | null;
+}
+
+/**
+ * `5h: 9pm | 週: 51% ▓▓▓░░ Apr24` のような 1 行を出す。情報が取れていない
+ * フィールドは静かに省略し、何も無ければ `—` placeholder。
+ *
+ * Sonnet only の % が一番情報量があるため優先表示。閾値は ContextGauge と
+ * 揃えて <60 緑 / <85 黄 / ≥85 赤、≥85 で AlertTriangle アイコンを併記する。
+ */
+function RateLimitsSection({ limits, error }: RateLimitsSectionProps) {
+  if (error && !limits) {
+    return (
+      <div
+        className="flex items-center gap-1 opacity-60"
+        title={`Claude /usage 取得失敗: ${error}`}
+      >
+        <Clock className="h-3 w-3" aria-hidden />
+        <span>—</span>
+      </div>
+    );
+  }
+
+  if (!limits) {
+    return (
+      <div className="flex items-center gap-1 opacity-60" title="Claude /usage を取得中…">
+        <Clock className="h-3 w-3" aria-hidden />
+        <span>—</span>
+      </div>
+    );
+  }
+
+  const sonnetPct = limits.weeklySonnetPercent;
+  const sessionReset = limits.sessionResetAt;
+  const weeklyReset = limits.weeklySonnetResetAt ?? limits.weeklyAllResetAt;
+
+  const tooltip = [
+    sessionReset ? `セッション (5h) リセット: ${sessionReset}` : null,
+    limits.weeklyAllResetAt
+      ? `週次 (全モデル) リセット: ${limits.weeklyAllResetAt}` +
+        (limits.weeklyAllPercent !== null
+          ? ` (${limits.weeklyAllPercent}% 使用)`
+          : "")
+      : null,
+    limits.weeklySonnetResetAt
+      ? `週次 (Sonnet) リセット: ${limits.weeklySonnetResetAt}` +
+        (sonnetPct !== null ? ` (${sonnetPct}% 使用)` : "")
+      : null,
+    "詳細はサイドバーの使用状況カードを参照",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return (
+    <div
+      className="hidden items-center gap-3 lg:flex"
+      title={tooltip}
+      aria-label="Claude レート制限"
+    >
+      {/* 5h session */}
+      {sessionReset && (
+        <span className="flex items-center gap-1">
+          <Clock className="h-3 w-3" aria-hidden />
+          <span className="tabular-nums">5h: {shortenReset(sessionReset)}</span>
+        </span>
+      )}
+
+      {/* Weekly Sonnet only %（あれば優先） */}
+      {(sonnetPct !== null || weeklyReset) && (
+        <span className="flex items-center gap-1.5">
+          {sonnetPct !== null && sonnetPct >= 85 && (
+            <AlertTriangle
+              className={cn("h-3 w-3", weeklyPercentTextColor(sonnetPct))}
+              aria-hidden
+            />
+          )}
+          <span className="text-foreground/70">週:</span>
+          {sonnetPct !== null ? (
+            <>
+              <span
+                className={cn(
+                  "font-medium tabular-nums",
+                  weeklyPercentTextColor(sonnetPct)
+                )}
+              >
+                {sonnetPct}%
+              </span>
+              <PercentBar percent={sonnetPct} />
+            </>
+          ) : (
+            <span className="opacity-60">--%</span>
+          )}
+          {weeklyReset && (
+            <span className="tabular-nums opacity-70">
+              {shortenReset(weeklyReset)}
+            </span>
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * インライン bar（4 セグメント）。文字情報の補助なので過剰な装飾はしない。
+ */
+function PercentBar({ percent }: { percent: number }) {
+  const filled = Math.min(4, Math.max(0, Math.round((percent / 100) * 4)));
+  return (
+    <span aria-hidden className="inline-flex gap-[1px]">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <span
+          key={i}
+          className={cn(
+            "inline-block h-1.5 w-1.5 rounded-[1px]",
+            i < filled ? weeklyPercentBarColor(percent) : "bg-muted"
+          )}
+        />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * `"Apr 24, 5am (Etc/GMT-9)"` を `"Apr24 5am"` 程度に短縮する（StatusBar
+ * 表示用）。タイムゾーン表記は tooltip に残すのでここでは捨てる。
+ */
+function shortenReset(raw: string): string {
+  const tzStripped = raw.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  // 「Apr 24, 5am」→「Apr24 5am」
+  return tzStripped.replace(/^(\w{3})\s+(\d+),\s*/, "$1$2 ");
+}
+
+function weeklyPercentTextColor(p: number): string {
+  if (p >= 85) return "text-red-500 dark:text-red-400";
+  if (p >= 60) return "text-yellow-600 dark:text-yellow-400";
+  return "text-emerald-600 dark:text-emerald-400";
+}
+
+function weeklyPercentBarColor(p: number): string {
+  if (p >= 85) return "bg-red-500";
+  if (p >= 60) return "bg-yellow-500";
+  return "bg-emerald-500";
 }
 
 /**

@@ -33,7 +33,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 thiserror = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+# PRJ-012 Round A: claude_usage が `claude /usage` を spawn して TUI 出力を
+# capture するため `process` (tokio::process::Command) と `time` (timeout) を追加。
+# `io-util` は AsyncWriteExt::shutdown を child stdin に呼ぶために必要。
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "process", "time", "io-util"] }
 
 # --- ccmux-ide 由来の資産 ---
 arboard = "3.6"
