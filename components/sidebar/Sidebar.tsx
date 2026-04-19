@@ -8,12 +8,14 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { ContextGauge } from "@/components/sidebar/ContextGauge";
-import { ProjectSwitcher } from "@/components/sidebar/ProjectSwitcher";
-import { ProjectTree } from "@/components/sidebar/ProjectTree";
+// NOTE(M3 切り分け Round 4): ProjectSwitcher + ProjectTree を一時 disable。
+// Sidebar は特定済（Round 3）、内部の Project 系が最有力候補。
+// import { ProjectSwitcher } from "@/components/sidebar/ProjectSwitcher";
+// import { ProjectTree } from "@/components/sidebar/ProjectTree";
 import { SessionList } from "@/components/sidebar/SessionList";
 import { SubAgentsList } from "@/components/sidebar/SubAgentsList";
 import { TodosList } from "@/components/sidebar/TodosList";
-import { useProjectStore } from "@/lib/stores/project";
+// import { useProjectStore } from "@/lib/stores/project";
 import { cn } from "@/lib/utils";
 
 /**
@@ -30,7 +32,7 @@ import { cn } from "@/lib/utils";
  */
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
-  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  // const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
   return (
     <motion.aside
@@ -75,13 +77,13 @@ export function Sidebar() {
       {/* 本体: 折畳時は非表示 */}
       {!collapsed && (
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* Project セクション（PM-203 / PM-204, Week 6 Chunk 2） */}
+          {/* Project セクション: M3 切り分け中 disable
           <div className="shrink-0">
             <ProjectSwitcher />
             {activeProjectId && <ProjectTree />}
           </div>
-
           <Separator />
+          */}
 
           {/* セッション一覧（中央、伸縮） */}
           <SessionList />

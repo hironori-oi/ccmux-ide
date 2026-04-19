@@ -2,12 +2,12 @@
 
 import type { ReactNode } from "react";
 
-// NOTE(M3 切り分け Round 3): Inspector + Sidebar も一時 disable。
-// 残るのは TitleBar + StatusBar + useClaudeMonitor のみ。
+// NOTE(M3 切り分け Round 4): Sidebar を復活、内部の ProjectSwitcher + ProjectTree
+// だけ disable する。Inspector は依然 disable。
 // import { Inspector } from "@/components/layout/Inspector";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { TitleBar } from "@/components/layout/TitleBar";
-// import { Sidebar } from "@/components/sidebar/Sidebar";
+import { Sidebar } from "@/components/sidebar/Sidebar";
 // import { UpdateNotifier } from "@/components/updates/UpdateNotifier";  // 依然 disable
 import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
 
@@ -38,7 +38,7 @@ export function Shell({ children }: { children: ReactNode }) {
     <div className="flex h-screen flex-col bg-background">
       <TitleBar />
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* <Sidebar />  ← M3 切り分け Round 3 disable */}
+        <Sidebar />
         <main
           aria-label="メインチャット"
           className="flex min-w-0 flex-1 flex-col"
