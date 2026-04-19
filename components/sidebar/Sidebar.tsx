@@ -5,8 +5,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
+// import { ScrollArea } from "@/components/ui/scroll-area";  // M3 切り分け中 unused
+// import { Separator } from "@/components/ui/separator";     // M3 切り分け中 unused
 // NOTE(M3 切り分け Round 5): Project 無罪確定、Monitor 3 つ (ContextGauge /
 // SubAgentsList / TodosList) を disable して SessionList 単独で検証。
 // import { ContextGauge } from "@/components/sidebar/ContextGauge";
