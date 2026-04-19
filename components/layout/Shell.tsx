@@ -2,13 +2,13 @@
 
 import type { ReactNode } from "react";
 
-// NOTE(M3 切り分け Round 4): Sidebar を復活、内部の ProjectSwitcher + ProjectTree
-// だけ disable する。Inspector は依然 disable。
-// import { Inspector } from "@/components/layout/Inspector";
+import { Inspector } from "@/components/layout/Inspector";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { TitleBar } from "@/components/layout/TitleBar";
 import { Sidebar } from "@/components/sidebar/Sidebar";
-// import { UpdateNotifier } from "@/components/updates/UpdateNotifier";  // 依然 disable
+// NOTE(M3): UpdateNotifier は dogfood に不要かつ挙動不明なので disable 継続。
+// 復活は v0.2.0 以降で updater 鍵発行 (PM-304) と併せて検証予定。
+// import { UpdateNotifier } from "@/components/updates/UpdateNotifier";
 import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
 
 /**
@@ -45,7 +45,7 @@ export function Shell({ children }: { children: ReactNode }) {
         >
           {children}
         </main>
-        {/* <Inspector />  ← M3 切り分け中 disable */}
+        <Inspector />
       </div>
       <StatusBar />
       {/* PM-283: UpdateNotifier を一時 disable（M3 緊急対応、React error #185 切り分け中） */}

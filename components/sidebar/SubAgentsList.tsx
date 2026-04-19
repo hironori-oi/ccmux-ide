@@ -7,6 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useMonitorStore, type SubAgentInfo } from "@/lib/stores/monitor";
 
+// React error #185 防止: Zustand selector が毎 render 新配列を返すと
+// Object.is で差分ありと判定され無限 render ループになる。
+// モジュール外に stable な空配列を 1 つだけ用意し、null 時はこれを返す。
+const EMPTY_SUB_AGENTS: readonly SubAgentInfo[] = Object.freeze([]);
+
 /**
  * サイドバー下段のサブエージェント一覧（PM-166）。
  *
@@ -16,7 +21,9 @@ import { useMonitorStore, type SubAgentInfo } from "@/lib/stores/monitor";
  * - framer-motion の `layout` で追加/削除をスムーズに。
  */
 export function SubAgentsList() {
-  const subAgents = useMonitorStore((s) => s.monitor?.sub_agents ?? []);
+  const subAgents = useMonitorStore(
+    (s) => s.monitor?.sub_agents ?? EMPTY_SUB_AGENTS
+  );
 
   return (
     <section

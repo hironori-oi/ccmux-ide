@@ -6,6 +6,9 @@ import { CheckSquare, Circle, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMonitorStore, type TodoItem } from "@/lib/stores/monitor";
 
+// React error #185 防止: SubAgentsList と同じ理由で stable 空配列を使う。
+const EMPTY_TODOS: readonly TodoItem[] = Object.freeze([]);
+
 /**
  * サイドバー下段の Todo 一覧（PM-166）。
  *
@@ -18,7 +21,7 @@ import { useMonitorStore, type TodoItem } from "@/lib/stores/monitor";
  * アニメを滑らかに。
  */
 export function TodosList() {
-  const todos = useMonitorStore((s) => s.monitor?.todos ?? []);
+  const todos = useMonitorStore((s) => s.monitor?.todos ?? EMPTY_TODOS);
 
   const stats = todos.reduce(
     (acc, t) => {

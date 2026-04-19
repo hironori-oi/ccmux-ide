@@ -5,17 +5,15 @@ import { AnimatePresence, motion } from "framer-motion";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-// import { ScrollArea } from "@/components/ui/scroll-area";  // M3 切り分け中 unused
-// import { Separator } from "@/components/ui/separator";     // M3 切り分け中 unused
-// NOTE(M3 切り分け Round 5): Project 無罪確定、Monitor 3 つ (ContextGauge /
-// SubAgentsList / TodosList) を disable して SessionList 単独で検証。
-// import { ContextGauge } from "@/components/sidebar/ContextGauge";
-// import { ProjectSwitcher } from "@/components/sidebar/ProjectSwitcher";
-// import { ProjectTree } from "@/components/sidebar/ProjectTree";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { ContextGauge } from "@/components/sidebar/ContextGauge";
+import { ProjectSwitcher } from "@/components/sidebar/ProjectSwitcher";
+import { ProjectTree } from "@/components/sidebar/ProjectTree";
 import { SessionList } from "@/components/sidebar/SessionList";
-// import { SubAgentsList } from "@/components/sidebar/SubAgentsList";
-// import { TodosList } from "@/components/sidebar/TodosList";
-// import { useProjectStore } from "@/lib/stores/project";
+import { SubAgentsList } from "@/components/sidebar/SubAgentsList";
+import { TodosList } from "@/components/sidebar/TodosList";
+import { useProjectStore } from "@/lib/stores/project";
 import { cn } from "@/lib/utils";
 
 /**
@@ -32,7 +30,7 @@ import { cn } from "@/lib/utils";
  */
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
-  // const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
   return (
     <motion.aside
@@ -77,19 +75,20 @@ export function Sidebar() {
       {/* 本体: 折畳時は非表示 */}
       {!collapsed && (
         <div className="flex min-h-0 flex-1 flex-col">
-          {/* Project セクション: M3 切り分け中 disable
+          {/* Project セクション（PM-203 / PM-204, Week 6 Chunk 2） */}
           <div className="shrink-0">
             <ProjectSwitcher />
             {activeProjectId && <ProjectTree />}
           </div>
+
           <Separator />
-          */}
 
           {/* セッション一覧（中央、伸縮） */}
           <SessionList />
 
-          {/* M3 切り分け Round 5: Monitor 3 つ を一時 disable
           <Separator />
+
+          {/* モニタ領域（下半分、ScrollArea で overflow 対応） */}
           <ScrollArea className="shrink-0 max-h-[45%] basis-auto">
             <ContextGauge />
             <Separator className="mx-2 my-1" />
@@ -97,7 +96,6 @@ export function Sidebar() {
             <Separator className="mx-2 my-1" />
             <TodosList />
           </ScrollArea>
-          */}
         </div>
       )}
     </motion.aside>
