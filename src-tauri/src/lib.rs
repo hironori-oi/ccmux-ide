@@ -6,15 +6,26 @@
 mod commands;
 mod events;
 
-use tauri::{Listener, Manager};
+use tauri::Manager;
 
 use commands::{
-    agent::{send_agent_prompt, start_agent_sidecar, stop_agent_sidecar, AgentState},
+    // PRJ-012 v3.3 / DEC-033 / Chunk A: Multi-Sidecar Architecture
+    // (1 project = 1 sidecar)。v3.2 singleton の `send_agent_prompt` /
+    // `start_agent_sidecar` / `stop_agent_sidecar` は signature が変わり、
+    // 新規 `send_agent_interrupt` / `list_active_sidecars` を追加登録する。
+    agent::{
+        list_active_sidecars, send_agent_interrupt, send_agent_prompt, start_agent_sidecar,
+        stop_agent_sidecar, AgentState,
+    },
+    builtin_slash::{
+        builtin_init_claude_md, list_builtin_slashes, read_mcp_config, write_mcp_config,
+    },
     claude_usage::{get_claude_rate_limits, ClaudeUsageCache},
     config::{get_api_key, set_api_key},
     history::{
         append_message, create_session, delete_session, get_session_messages, init_history_db,
-        list_sessions, rename_session, HistoryState,
+        list_sessions, rename_session, update_session_project, update_session_sdk_id,
+        HistoryState,
     },
     image_paste::save_clipboard_image,
     memory_tree::scan_memory_tree,
@@ -22,7 +33,18 @@ use commands::{
     search_fts::{reindex_conversations, search_conversations, search_messages},
     slash::list_slash_commands,
     usage::get_usage_stats,
-    worktree::{add_worktree, list_worktrees, remove_worktree, switch_worktree},
+    // PRJ-012 v3.5 / PM-771 (2026-04-20): v3.5.3 UI 再配置により frontend 呼出 0 と
+    // なった `worktree` / `status` / `git` module (計 13 command) を削除。
+    // PRJ-012 v3.4 / Chunk B (DEC-034 Must 2): @file / @folder mention picker 用。
+    // 末尾 append で他 Chunk と排他。
+    file_list::list_project_files,
+    // PRJ-012 v3.4.5 hot-fix (2026-04-20): std::fs 版の Tauri command。
+    // tauri-plugin-fs の readDir / readFile が Windows 絶対パス + 大量フォルダで
+    // hang する事象を回避するため、ProjectTree / FilePreviewDialog の直接呼出に使う。
+    fs_util::{list_dir_children, read_file_bytes},
+    // PRJ-012 v1.0 / PM-920 / DEC-045 (2026-04-21): 組込ターミナル (xterm.js + Rust PTY)。
+    // portable-pty で cmd.exe / bash / vim / python REPL 等の interactive command を起動。
+    pty::{list_active_ptys, pty_kill, pty_resize, pty_spawn, pty_write, PtyState},
 };
 use events::monitor::{self, MonitorHandle};
 
@@ -43,6 +65,8 @@ pub fn run() {
         .manage(ClaudeUsageCache::new())
         // PRJ-012 Round D': OAuth Usage API 5 分 cache。
         .manage(OAuthUsageCache::default())
+        // PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル PTY state (HashMap<pty_id, PtyHandle>)。
+        .manage(PtyState::default())
         .manage::<MonitorHandle>(monitor::new_handle())
         .setup(|app| {
             // PM-150: `~/.ccmux-ide-gui/history.db` を初期化。失敗してもログを残して
@@ -54,52 +78,33 @@ pub fn run() {
                 eprintln!("[history] initialized ~/.ccmux-ide-gui/history.db");
             }
 
-            // PM-163: sidecar の `agent:raw` NDJSON を Rust 側でさらに parse し、
-            // MonitorState を更新 → 500ms throttle で `monitor:tick` として emit。
-            //
-            // 実装メモ（Tauri 2）:
-            // - `AppHandle::listen_any` は同一プロセス内で emit されたイベントを
-            //   受け取れる。`agent:raw` は commands::agent が emit しているため、
-            //   こちらの listener がループ購読する。
-            // - listener コールバック内は非同期不可 (`Fn` trait) なので、tokio task
-            //   に情報を投げて update する（Tauri の tokio runtime を block_on で使用）。
-            let app_handle = app.handle().clone();
-            let handle_for_listener = app_handle.clone();
-            app_handle.listen_any("agent:raw", move |event| {
-                // sidecar 側が 1 行の JSON を文字列として emit しているため、
-                // 二重 decode（外側: Tauri Event payload → JSON 文字列 ／
-                // 内側: その文字列 → NDJSON の JSON Value）が必要。
-                let raw = event.payload().to_string();
-                let line: String = match serde_json::from_str::<String>(&raw) {
-                    Ok(s) => s,
-                    Err(_) => raw, // payload がすでに plain 文字列の場合の fallback
-                };
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    return;
-                }
-                let envelope: serde_json::Value = match serde_json::from_str(trimmed) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        eprintln!("[monitor] JSON parse error: {e}; line={trimmed:.200}");
-                        return;
-                    }
-                };
-
-                let app_for_task = handle_for_listener.clone();
-                tauri::async_runtime::spawn(async move {
-                    let state: tauri::State<MonitorHandle> = app_for_task.state();
-                    let mut inner = state.write().await;
-                    let changed = monitor::update_from_sidecar_event(&mut inner, &envelope);
-                    if !changed {
-                        return;
-                    }
-                    let force = inner.state.stop_reason.is_some();
-                    monitor::emit_if_due(&app_for_task, &mut inner, force);
-                });
-            });
+            // PRJ-012 v3.3 / DEC-033 / Chunk A:
+            // v3.2 までは `app_handle.listen_any("agent:raw", ...)` で sidecar
+            // stdout NDJSON を集約し monitor state に反映していたが、v3.3 の
+            // multi-sidecar + per-project event prefix 化 (`agent:{projectId}:raw`)
+            // に伴い、stdout parser 内で `dispatch_to_monitor` を直接呼ぶ方式
+            // に切り替えた (cf. `commands::agent::start_agent_sidecar`)。
+            // ここでは listen_any 登録を削除する。MonitorHandle の state 管理
+            // 自体は従来通り `.manage(...)` 済。
 
             Ok(())
+        })
+        // PRJ-012 v3.3.1 / DEC-033 / Chunk A: orphan process 対策
+        // Tauri アプリ終了時 (window close / quit menu / Ctrl+C 等の graceful shutdown)
+        // に明示的に sidecar を kill する。Windows では JobObject KILL_ON_JOB_CLOSE が
+        // 最終ガードになるが、それでも Drop より早く明示 kill しておくことで
+        // 「Tauri exit ↔ Node プロセス残存」の race を最小化する。
+        // 強制 kill (タスクマネージャ / panic) はこの hook を経由せず、JobObject に頼る。
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = window.app_handle().try_state::<AgentState>() {
+                    state.drain_kill_all();
+                }
+                // PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル PTY も明示 drain。
+                if let Some(state) = window.app_handle().try_state::<PtyState>() {
+                    state.drain_kill_all();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             // Config / keyring
@@ -109,11 +114,8 @@ pub fn run() {
             save_clipboard_image,
             // CLAUDE.md tree
             scan_memory_tree,
-            // git worktree
-            list_worktrees,
-            add_worktree,
-            remove_worktree,
-            switch_worktree,
+            // PRJ-012 v3.5 / PM-771 (2026-04-20): list_worktrees / add_worktree /
+            // remove_worktree / switch_worktree は UI 再配置で frontend 呼出 0 となり削除。
             // FTS5 search (skeleton legacy + PM-230 本実装)
             search_conversations,
             reindex_conversations,
@@ -121,9 +123,13 @@ pub fn run() {
             // Slash command discovery (PM-200)
             list_slash_commands,
             // Agent sidecar (Node + Claude Agent SDK TS)
+            // PRJ-012 v3.3 / DEC-033: Multi-Sidecar (1 project = 1 sidecar)。
+            // API 契約は `commands::agent` モジュール doc を参照。
             start_agent_sidecar,
             send_agent_prompt,
+            send_agent_interrupt,
             stop_agent_sidecar,
+            list_active_sidecars,
             // Conversation history (PM-150 / PM-151)
             create_session,
             append_message,
@@ -131,11 +137,41 @@ pub fn run() {
             get_session_messages,
             delete_session,
             rename_session,
+            // PRJ-012 v5 / Chunk B / DEC-032: session の project_id 再割当
+            update_session_project,
+            // PRJ-012 v3.5.14 / PM-830: SDK 側 session UUID を保存して resume 経由
+            // で context 継続するための更新コマンド。sidecar からの sdk_session_ready
+            // event を frontend が受けて呼ぶ。
+            update_session_sdk_id,
             // Usage stats (PRJ-012 Stage B / Round A)
             get_usage_stats,
             get_claude_rate_limits,
             // PRJ-012 Round D': 公式 OAuth Usage API
             get_oauth_usage,
+            // PRJ-012 v4 / Chunk C / DEC-028: Claude Code 組込 slash の GUI ネイティブ実装
+            list_builtin_slashes,
+            builtin_init_claude_md,
+            read_mcp_config,
+            write_mcp_config,
+            // PRJ-012 v3.5 / PM-771 (2026-04-20): detect_status_file /
+            // list_status_candidates / read_status_file は UI 再配置で frontend 呼出 0
+            // となり削除。
+            // PRJ-012 v3.4 / Chunk B / DEC-034 Must 2: @file / @folder mention picker。
+            // project_root 配下を .gitignore 尊重で列挙。末尾 append で他 Chunk と排他。
+            list_project_files,
+            // PRJ-012 v3.5 / PM-771 (2026-04-20): git_status / git_stage_file /
+            // git_unstage_file / git_commit / git_diff_file / git_current_branch は
+            // UI 再配置で frontend 呼出 0 となり削除。
+            // PRJ-012 v3.4.5 hot-fix: std::fs 版の fs util（ProjectTree / 画像プレビュー用）
+            list_dir_children,
+            read_file_bytes,
+            // PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル (xterm.js + Rust PTY)。
+            // cmd.exe / bash / vim / python REPL 等の interactive command を portable-pty 経由で起動。
+            pty_spawn,
+            pty_write,
+            pty_resize,
+            pty_kill,
+            list_active_ptys,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

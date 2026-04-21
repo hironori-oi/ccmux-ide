@@ -107,43 +107,77 @@ fn sanitize_query(raw: &str) -> Option<String> {
 ///
 /// messages_fts は `content='messages'` の contentless 設計なので、
 /// `messages_fts.rowid` と `messages.rowid` を等価結合する。
+///
+/// v5 Chunk B / DEC-032: `project_id = Some(id)` で sessions.project_id = id の
+/// 結果のみに絞り込む。None なら全 project 横断（従来挙動）。
 fn run_search(
     conn: &Connection,
     match_query: &str,
     limit: i64,
+    project_id: Option<&str>,
 ) -> Result<Vec<SearchResult>, String> {
-    let sql = "\
-        SELECT m.id, m.session_id, m.role, m.created_at, s.title, \
-               snippet(messages_fts, 0, '[', ']', '…', 16) \
-        FROM messages_fts \
-        JOIN messages m ON messages_fts.rowid = m.rowid \
-        JOIN sessions s ON m.session_id = s.id \
-        WHERE messages_fts MATCH ?1 \
-        ORDER BY rank \
-        LIMIT ?2";
-
-    let mut stmt = conn
-        .prepare(sql)
-        .map_err(|e| format!("search prepare 失敗: {e}"))?;
-
-    let rows = stmt
-        .query_map(params![match_query, limit], |r| {
-            Ok(SearchResult {
-                message_id: r.get(0)?,
-                session_id: r.get(1)?,
-                role: r.get(2)?,
-                created_at: r.get(3)?,
-                session_title: r.get(4)?,
-                snippet_html: r.get(5)?,
+    let rows: Vec<SearchResult> = if let Some(pid) = project_id {
+        let sql = "\
+            SELECT m.id, m.session_id, m.role, m.created_at, s.title, \
+                   snippet(messages_fts, 0, '[', ']', '…', 16) \
+            FROM messages_fts \
+            JOIN messages m ON messages_fts.rowid = m.rowid \
+            JOIN sessions s ON m.session_id = s.id \
+            WHERE messages_fts MATCH ?1 AND s.project_id = ?3 \
+            ORDER BY rank \
+            LIMIT ?2";
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| format!("search prepare 失敗: {e}"))?;
+        let iter = stmt
+            .query_map(params![match_query, limit, pid], |r| {
+                Ok(SearchResult {
+                    message_id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    role: r.get(2)?,
+                    created_at: r.get(3)?,
+                    session_title: r.get(4)?,
+                    snippet_html: r.get(5)?,
+                })
             })
-        })
-        .map_err(|e| format!("search query 失敗: {e}"))?;
-
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row.map_err(|e| format!("search row 失敗: {e}"))?);
-    }
-    Ok(out)
+            .map_err(|e| format!("search query 失敗: {e}"))?;
+        let mut out = Vec::new();
+        for row in iter {
+            out.push(row.map_err(|e| format!("search row 失敗: {e}"))?);
+        }
+        out
+    } else {
+        let sql = "\
+            SELECT m.id, m.session_id, m.role, m.created_at, s.title, \
+                   snippet(messages_fts, 0, '[', ']', '…', 16) \
+            FROM messages_fts \
+            JOIN messages m ON messages_fts.rowid = m.rowid \
+            JOIN sessions s ON m.session_id = s.id \
+            WHERE messages_fts MATCH ?1 \
+            ORDER BY rank \
+            LIMIT ?2";
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| format!("search prepare 失敗: {e}"))?;
+        let iter = stmt
+            .query_map(params![match_query, limit], |r| {
+                Ok(SearchResult {
+                    message_id: r.get(0)?,
+                    session_id: r.get(1)?,
+                    role: r.get(2)?,
+                    created_at: r.get(3)?,
+                    session_title: r.get(4)?,
+                    snippet_html: r.get(5)?,
+                })
+            })
+            .map_err(|e| format!("search query 失敗: {e}"))?;
+        let mut out = Vec::new();
+        for row in iter {
+            out.push(row.map_err(|e| format!("search row 失敗: {e}"))?);
+        }
+        out
+    };
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +188,8 @@ fn run_search(
 ///
 /// - `query`: ユーザー入力文字列。空白区切りで AND 検索、末尾 `*` で prefix。
 /// - `limit`: 最大返却件数（既定 30、1〜200 にクランプ）。
+/// - `project_id`: v5 Chunk B / DEC-032。`Some(id)` なら sessions.project_id = id
+///                 の session に紐づく message のみヒット。None は全横断。
 ///
 /// 戻り値: `Vec<SearchResult>`（JSON は camelCase）。
 #[tauri::command]
@@ -161,6 +197,7 @@ pub async fn search_messages(
     state: State<'_, HistoryState>,
     query: String,
     limit: Option<i64>,
+    project_id: Option<String>,
 ) -> Result<Vec<SearchResult>, String> {
     // 空クエリは前段で弾く（DB を叩かずに空配列）
     let sanitized = match sanitize_query(&query) {
@@ -177,7 +214,7 @@ pub async fn search_messages(
         let conn = guard
             .as_ref()
             .ok_or_else(|| "history DB が未初期化です（init_history_db 失敗）".to_string())?;
-        run_search(conn, &sanitized, lim)
+        run_search(conn, &sanitized, lim, project_id.as_deref())
     })
     .await
     .map_err(|e| format!("join error: {e}"))?
@@ -220,6 +257,8 @@ mod tests {
     use rusqlite::Connection;
 
     /// history.rs の DDL を最小限だけ再現（テスト専用）。
+    ///
+    /// v5 Chunk B / DEC-032: sessions.project_id 列を最小 DDL にも追加。
     fn apply_minimal_ddl(conn: &Connection) {
         conn.execute_batch(
             "
@@ -228,7 +267,8 @@ mod tests {
                 title TEXT,
                 created_at INTEGER,
                 updated_at INTEGER,
-                project_path TEXT
+                project_path TEXT,
+                project_id TEXT DEFAULT NULL
             );
             CREATE TABLE messages(
                 id TEXT PRIMARY KEY,
@@ -278,8 +318,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         apply_minimal_ddl(&conn);
         conn.execute(
-            "INSERT INTO sessions (id, title, created_at, updated_at, project_path) \
-             VALUES ('s1', 'FTS セッション', 1, 1, NULL)",
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id) \
+             VALUES ('s1', 'FTS セッション', 1, 1, NULL, NULL)",
             [],
         )
         .unwrap();
@@ -297,7 +337,7 @@ mod tests {
         .unwrap();
 
         // prefix search `tau*` で tauri / taurus の両方が拾える。
-        let hits = run_search(&conn, "tau*", 10).unwrap();
+        let hits = run_search(&conn, "tau*", 10, None).unwrap();
         assert_eq!(hits.len(), 2);
         for h in &hits {
             assert_eq!(h.session_id, "s1");
@@ -313,8 +353,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         apply_minimal_ddl(&conn);
         conn.execute(
-            "INSERT INTO sessions (id, title, created_at, updated_at, project_path) \
-             VALUES ('s1', NULL, 1, 1, NULL)",
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id) \
+             VALUES ('s1', NULL, 1, 1, NULL, NULL)",
             [],
         )
         .unwrap();
@@ -326,7 +366,51 @@ mod tests {
             )
             .unwrap();
         }
-        let hits = run_search(&conn, "claude*", 3).unwrap();
+        let hits = run_search(&conn, "claude*", 3, None).unwrap();
         assert_eq!(hits.len(), 3);
+    }
+
+    /// v5 Chunk B / DEC-032: project_id filter で絞り込めることを検証。
+    #[test]
+    fn run_search_filters_by_project_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_minimal_ddl(&conn);
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id) \
+             VALUES ('s-a', 'project A session', 1, 1, NULL, 'proj-A')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id) \
+             VALUES ('s-b', 'project B session', 2, 2, NULL, 'proj-B')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, created_at) \
+             VALUES ('m-a', 's-a', 'user', 'claude in proj A', 10)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, created_at) \
+             VALUES ('m-b', 's-b', 'user', 'claude in proj B', 20)",
+            [],
+        )
+        .unwrap();
+
+        // None 指定: 全件ヒット
+        let all = run_search(&conn, "claude*", 10, None).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // proj-A 指定: 1 件のみ
+        let only_a = run_search(&conn, "claude*", 10, Some("proj-A")).unwrap();
+        assert_eq!(only_a.len(), 1);
+        assert_eq!(only_a[0].session_id, "s-a");
+
+        // 存在しない project: 0 件
+        let none = run_search(&conn, "claude*", 10, Some("proj-none")).unwrap();
+        assert_eq!(none.len(), 0);
     }
 }

@@ -1,11 +1,16 @@
 import { test, expect } from "@playwright/test";
 import { setupE2EPage } from "./helpers";
-import { emitMockEvent } from "./fixtures";
+import {
+  emitMockEvent,
+  FIXTURE_WITH_TEST_PROJECT,
+  AGENT_RAW_EVENT,
+} from "./fixtures";
 
 /**
- * PM-290 シナリオ 5: Monaco Diff Viewer（Edit tool）。
+ * PM-290 シナリオ 5 / v3.3.1 Chunk B (S-1): Monaco Diff Viewer（Edit tool）。
  *
- * - /workspace で Edit tool の tool_use を mock emit
+ * - 初期 project が登録された状態で /workspace を開く（FIXTURE_WITH_TEST_PROJECT）
+ * - Edit tool の tool_use を `agent:${TEST_PROJECT_ID}:raw` で mock emit
  * - ToolUseCard が描画される → 展開ボタンをクリック → DiffViewer (Monaco) が
  *   lazy load → before / after の文字列が両方見える
  *
@@ -15,7 +20,7 @@ import { emitMockEvent } from "./fixtures";
  */
 test.describe("Monaco Diff for Edit tool", () => {
   test.beforeEach(async ({ page }) => {
-    await setupE2EPage(page);
+    await setupE2EPage(page, FIXTURE_WITH_TEST_PROJECT);
   });
 
   test("Edit tool renders ToolUseCard with expandable Monaco diff", async ({
@@ -47,7 +52,7 @@ test.describe("Monaco Diff for Edit tool", () => {
         },
       },
     });
-    await emitMockEvent(page, "agent:raw", toolUseEvent);
+    await emitMockEvent(page, AGENT_RAW_EVENT, toolUseEvent);
 
     // ToolUseCard が出る
     await expect(page.getByText("ファイル編集").first()).toBeVisible({

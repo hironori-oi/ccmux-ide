@@ -12,7 +12,8 @@
 //!   title TEXT,
 //!   created_at INTEGER,
 //!   updated_at INTEGER,
-//!   project_path TEXT
+//!   project_path TEXT,
+//!   project_id TEXT DEFAULT NULL  -- v5 Chunk B / DEC-032 で追加
 //! );
 //!
 //! CREATE TABLE IF NOT EXISTS messages(
@@ -66,6 +67,14 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// 1 セッション（最小カラム）。
+///
+/// v5 Chunk B (DEC-032): `project_id` を追加。既存 session は NULL（未分類）として
+/// 保持し、project 切替時に activeProjectId から自動 attach される。
+///
+/// PM-830 (v3.5.14): `sdk_session_id` を追加。Claude Agent SDK 側 session の
+/// UUID（`SDKSystemMessage.session_id`）を保持し、次回送信時に
+/// `query({ resume: sdk_session_id })` で context を継続する。NULL は未取得
+/// （初回送信前 / 取得前のレガシー session）で、その場合は stateless 呼出となる。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Session {
@@ -74,6 +83,10 @@ pub struct Session {
     pub created_at: i64,
     pub updated_at: i64,
     pub project_path: Option<String>,
+    /// DEC-032: project registry の id（例 "PRJ-012"）。NULL は未分類。
+    pub project_id: Option<String>,
+    /// PM-830: Claude Agent SDK 側 session UUID。次回送信で `resume` に渡して context 継続。
+    pub sdk_session_id: Option<String>,
 }
 
 /// サイドバー一覧向け（最後のメッセージ抜粋付き）。
@@ -85,6 +98,10 @@ pub struct SessionSummary {
     pub created_at: i64,
     pub updated_at: i64,
     pub project_path: Option<String>,
+    /// DEC-032: session を登録した project registry の id。NULL は未分類。
+    pub project_id: Option<String>,
+    /// PM-830: Claude Agent SDK 側 session UUID（context 継続用）。NULL は未取得。
+    pub sdk_session_id: Option<String>,
     /// 直近 messages.content を 80 文字 trunc（UI 側の省略表示用）。
     pub last_message_excerpt: Option<String>,
     /// 直近 messages.role（user / assistant / tool_use 等）。
@@ -155,6 +172,73 @@ fn db_path() -> Result<PathBuf> {
     Ok(dir.join("history.db"))
 }
 
+/// sessions テーブルに指定列が存在するか確認する。
+///
+/// SQLite の `ALTER TABLE ADD COLUMN` は冪等でない（既に列があると error）ため、
+/// `PRAGMA table_info(sessions)` で列の存在を確認してから ALTER を発行する。
+/// apply_ddl を 2 回以上呼んでも安全なよう、migrate 側で存在確認する。
+fn sessions_has_column(conn: &Connection, column: &str) -> Result<bool> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(sessions)")
+        .context("PRAGMA table_info prepare 失敗")?;
+    let rows = stmt
+        .query_map([], |row| {
+            // PRAGMA table_info の列順: cid, name, type, notnull, dflt_value, pk
+            let name: String = row.get(1)?;
+            Ok(name)
+        })
+        .context("PRAGMA table_info query 失敗")?;
+    for row in rows {
+        let name = row.context("PRAGMA table_info row 失敗")?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// 後方互換 alias（既存テスト用）。
+fn sessions_has_project_id(conn: &Connection) -> Result<bool> {
+    sessions_has_column(conn, "project_id")
+}
+
+/// v5 Chunk B / DEC-032 の schema migration。
+///
+/// - 既存 DB（project_id 列がない）には `ALTER TABLE ADD COLUMN` を発行
+/// - 新規 DB は apply_ddl の CREATE TABLE で既に列が入っているため no-op
+/// - 2 回以上呼んでも冪等（列が存在すれば skip）
+fn migrate_sessions_project_id(conn: &Connection) -> Result<()> {
+    if sessions_has_column(conn, "project_id")? {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE sessions ADD COLUMN project_id TEXT DEFAULT NULL",
+        [],
+    )
+    .context("ALTER TABLE sessions ADD COLUMN project_id 失敗")?;
+    Ok(())
+}
+
+/// PM-830 (v3.5.14) の schema migration: `sdk_session_id` 列を追加する。
+///
+/// - 既存 DB（sdk_session_id 列がない）には `ALTER TABLE ADD COLUMN` を発行
+/// - 新規 DB は apply_ddl の CREATE TABLE で既に列が入っているため no-op
+/// - 2 回以上呼んでも冪等（列が存在すれば skip）
+///
+/// 既存 session は NULL のまま保持され、初回送信時に sidecar から取得する
+/// `system.session_id` で埋まる（その時点で stateless 1 回 → 以降 resume）。
+fn migrate_sessions_sdk_session_id(conn: &Connection) -> Result<()> {
+    if sessions_has_column(conn, "sdk_session_id")? {
+        return Ok(());
+    }
+    conn.execute(
+        "ALTER TABLE sessions ADD COLUMN sdk_session_id TEXT DEFAULT NULL",
+        [],
+    )
+    .context("ALTER TABLE sessions ADD COLUMN sdk_session_id 失敗")?;
+    Ok(())
+}
+
 /// DDL を 1 発で流す。IF NOT EXISTS なので繰り返し呼んでも無害。
 fn apply_ddl(conn: &Connection) -> Result<()> {
     // foreign_keys は接続単位の PRAGMA なので都度 ON にする。
@@ -168,7 +252,9 @@ fn apply_ddl(conn: &Connection) -> Result<()> {
             title TEXT,
             created_at INTEGER,
             updated_at INTEGER,
-            project_path TEXT
+            project_path TEXT,
+            project_id TEXT DEFAULT NULL,
+            sdk_session_id TEXT DEFAULT NULL
         );
 
         CREATE TABLE IF NOT EXISTS messages(
@@ -219,6 +305,24 @@ fn apply_ddl(conn: &Connection) -> Result<()> {
         ",
     )
     .context("DDL 実行失敗")?;
+
+    // v5 Chunk B / DEC-032: 既存 DB の ALTER 補填 + index 追加（冪等）。
+    // 新規 DB は CREATE TABLE ... project_id TEXT で既に列があるので ALTER は skip。
+    migrate_sessions_project_id(conn)?;
+
+    // PM-830: SDK session 継続用列の migration（冪等）。
+    // 既存 DB の sdk_session_id 列が無ければ ALTER で追加、新規 DB は CREATE TABLE
+    // 側に既に含まれているため no-op。
+    migrate_sessions_sdk_session_id(conn)?;
+
+    // project_id での filter を効かせるため index を追加（idempotent）。
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_project_id \
+         ON sessions(project_id)",
+        [],
+    )
+    .context("idx_sessions_project_id 作成失敗")?;
+
     Ok(())
 }
 
@@ -307,23 +411,29 @@ fn load_attachments(conn: &Connection, message_id: &str) -> Result<Vec<Attachmen
 // ---------------------------------------------------------------------------
 
 /// 新規セッション作成。
+///
+/// v5 Chunk B / DEC-032: `project_id: Option<String>` を受け取り、null なら未分類
+/// として INSERT。frontend 側では activeProjectId を自動 attach する想定。
 #[tauri::command]
 pub async fn create_session(
     state: State<'_, HistoryState>,
     title: Option<String>,
     project_path: Option<String>,
+    project_id: Option<String>,
 ) -> Result<Session, String> {
     let id = new_uuid();
     let now = now_epoch();
     let title_c = title.clone();
     let pp_c = project_path.clone();
+    let pid_c = project_id.clone();
     let id_c = id.clone();
 
     with_conn_mut(&state, move |conn| {
         conn.execute(
-            "INSERT INTO sessions (id, title, created_at, updated_at, project_path) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id_c, title_c, now, now, pp_c],
+            "INSERT INTO sessions \
+                (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+            params![id_c, title_c, now, now, pp_c, pid_c],
         )
         .map_err(|e| format!("sessions INSERT 失敗: {e}"))?;
         Ok(Session {
@@ -332,6 +442,9 @@ pub async fn create_session(
             created_at: now,
             updated_at: now,
             project_path: pp_c,
+            project_id: pid_c,
+            // PM-830: 初回送信時に sidecar から system event で取得 → update_session_sdk_id で埋める
+            sdk_session_id: None,
         })
     })
     .await
@@ -418,51 +531,167 @@ pub async fn append_message(
 }
 
 /// セッション一覧を updated_at DESC で取得（最後のメッセージ抜粋付き）。
+///
+/// v5 Chunk B / DEC-032: `project_id` で filter 可能。
+/// - `Some(id)`: 指定 project の session のみ
+/// - `None`:    全件（未分類含む）— 「未分類のみ」は呼出側で `projectId == null`
+///               を filter して抽出する（特別なセンチネル文字列は使わない）
 #[tauri::command]
 pub async fn list_sessions(
     state: State<'_, HistoryState>,
     limit: Option<i64>,
     offset: Option<i64>,
+    project_id: Option<String>,
 ) -> Result<Vec<SessionSummary>, String> {
     let limit = limit.unwrap_or(100).clamp(1, 1000);
     let offset = offset.unwrap_or(0).max(0);
 
     with_conn_mut(&state, move |conn| {
         // 直近 message を latest_message sub-query で 1 件だけ pull。
-        let sql = "\
-            SELECT s.id, s.title, s.created_at, s.updated_at, s.project_path, \
-                   m.content, m.role \
-            FROM sessions s \
-            LEFT JOIN messages m ON m.id = ( \
-                SELECT id FROM messages \
-                WHERE session_id = s.id \
-                ORDER BY created_at DESC LIMIT 1 \
-            ) \
-            ORDER BY s.updated_at DESC \
-            LIMIT ?1 OFFSET ?2";
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| format!("sessions prepare 失敗: {e}"))?;
-        let rows = stmt
-            .query_map(params![limit, offset], |r| {
-                let content: Option<String> = r.get(5)?;
-                let role: Option<String> = r.get(6)?;
-                Ok(SessionSummary {
-                    id: r.get(0)?,
-                    title: r.get(1)?,
-                    created_at: r.get(2)?,
-                    updated_at: r.get(3)?,
-                    project_path: r.get(4)?,
-                    last_message_excerpt: content.as_deref().map(excerpt),
-                    last_message_role: role,
+        // project_id が Some ならそれで絞り込む。FTS5 と messages 側には
+        // project_id を持たせない（sessions 側で join して引ける）。
+        // PM-830: SELECT に sdk_session_id を追加（list_sessions 戻り値に含めて
+        // frontend 側 fetchSessions で session store に保持 → 送信時 resume に使う）。
+        let (sql, rows): (&str, Vec<SessionSummary>) = if let Some(pid) = project_id.clone() {
+            let sql = "\
+                SELECT s.id, s.title, s.created_at, s.updated_at, s.project_path, \
+                       s.project_id, s.sdk_session_id, \
+                       m.content, m.role \
+                FROM sessions s \
+                LEFT JOIN messages m ON m.id = ( \
+                    SELECT id FROM messages \
+                    WHERE session_id = s.id \
+                    ORDER BY created_at DESC LIMIT 1 \
+                ) \
+                WHERE s.project_id = ?3 \
+                ORDER BY s.updated_at DESC \
+                LIMIT ?1 OFFSET ?2";
+            let mut stmt = conn
+                .prepare(sql)
+                .map_err(|e| format!("sessions prepare 失敗: {e}"))?;
+            let iter = stmt
+                .query_map(params![limit, offset, pid], |r| {
+                    let content: Option<String> = r.get(7)?;
+                    let role: Option<String> = r.get(8)?;
+                    Ok(SessionSummary {
+                        id: r.get(0)?,
+                        title: r.get(1)?,
+                        created_at: r.get(2)?,
+                        updated_at: r.get(3)?,
+                        project_path: r.get(4)?,
+                        project_id: r.get(5)?,
+                        sdk_session_id: r.get(6)?,
+                        last_message_excerpt: content.as_deref().map(excerpt),
+                        last_message_role: role,
+                    })
                 })
-            })
-            .map_err(|e| format!("sessions query 失敗: {e}"))?;
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row.map_err(|e| format!("sessions row 失敗: {e}"))?);
+                .map_err(|e| format!("sessions query 失敗: {e}"))?;
+            let mut out = Vec::new();
+            for row in iter {
+                out.push(row.map_err(|e| format!("sessions row 失敗: {e}"))?);
+            }
+            (sql, out)
+        } else {
+            let sql = "\
+                SELECT s.id, s.title, s.created_at, s.updated_at, s.project_path, \
+                       s.project_id, s.sdk_session_id, \
+                       m.content, m.role \
+                FROM sessions s \
+                LEFT JOIN messages m ON m.id = ( \
+                    SELECT id FROM messages \
+                    WHERE session_id = s.id \
+                    ORDER BY created_at DESC LIMIT 1 \
+                ) \
+                ORDER BY s.updated_at DESC \
+                LIMIT ?1 OFFSET ?2";
+            let mut stmt = conn
+                .prepare(sql)
+                .map_err(|e| format!("sessions prepare 失敗: {e}"))?;
+            let iter = stmt
+                .query_map(params![limit, offset], |r| {
+                    let content: Option<String> = r.get(7)?;
+                    let role: Option<String> = r.get(8)?;
+                    Ok(SessionSummary {
+                        id: r.get(0)?,
+                        title: r.get(1)?,
+                        created_at: r.get(2)?,
+                        updated_at: r.get(3)?,
+                        project_path: r.get(4)?,
+                        project_id: r.get(5)?,
+                        sdk_session_id: r.get(6)?,
+                        last_message_excerpt: content.as_deref().map(excerpt),
+                        last_message_role: role,
+                    })
+                })
+                .map_err(|e| format!("sessions query 失敗: {e}"))?;
+            let mut out = Vec::new();
+            for row in iter {
+                out.push(row.map_err(|e| format!("sessions row 失敗: {e}"))?);
+            }
+            (sql, out)
+        };
+        let _ = sql; // lint 対策: sql は debug 用、今は未使用
+        Ok(rows)
+    })
+    .await
+}
+
+/// v5 Chunk B / DEC-032: 既存 session の project_id を再割当する。
+///
+/// 将来の一括移行・手動分類 UI 用の nice-to-have。
+/// - `project_id = Some(id)` で指定 project に紐づけ
+/// - `project_id = None`    で未分類へ戻す
+#[tauri::command]
+pub async fn update_session_project(
+    state: State<'_, HistoryState>,
+    session_id: String,
+    project_id: Option<String>,
+) -> Result<(), String> {
+    let now = now_epoch();
+    with_conn_mut(&state, move |conn| {
+        let affected = conn
+            .execute(
+                "UPDATE sessions SET project_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![project_id, now, session_id],
+            )
+            .map_err(|e| format!("sessions UPDATE project_id 失敗: {e}"))?;
+        if affected == 0 {
+            return Err(format!("session_id={session_id} が存在しません"));
         }
-        Ok(out)
+        Ok(())
+    })
+    .await
+}
+
+/// PM-830: session の `sdk_session_id` を更新する。
+///
+/// 初回送信完了時、sidecar が `system.session_id` を含む `sdk_session_ready`
+/// outbound event を frontend に通知 → frontend が本 command を呼んで DB に保存する。
+/// 2 回目以降の送信時に session store からこの id を引き、`send_agent_prompt` の
+/// `resume` 引数に渡すことで Claude 側 context を継続する。
+///
+/// - `sdk_session_id = Some(id)` で正常 attach
+/// - `sdk_session_id = None` で reset（resume 失敗時のフォールバック等で利用）
+///
+/// session が存在しない場合は明示的にエラー（silently 飲み込まない）。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_session_sdk_id(
+    state: State<'_, HistoryState>,
+    session_id: String,
+    sdk_session_id: Option<String>,
+) -> Result<(), String> {
+    let now = now_epoch();
+    with_conn_mut(&state, move |conn| {
+        let affected = conn
+            .execute(
+                "UPDATE sessions SET sdk_session_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![sdk_session_id, now, session_id],
+            )
+            .map_err(|e| format!("sessions UPDATE sdk_session_id 失敗: {e}"))?;
+        if affected == 0 {
+            return Err(format!("session_id={session_id} が存在しません"));
+        }
+        Ok(())
     })
     .await
 }
@@ -579,6 +808,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         apply_ddl(&conn).unwrap();
         apply_ddl(&conn).unwrap();
+        // 2 回目の apply_ddl でも sessions.project_id は存在する（冪等）
+        assert!(sessions_has_project_id(&conn).unwrap());
     }
 
     #[test]
@@ -597,8 +828,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         apply_ddl(&conn).unwrap();
         conn.execute(
-            "INSERT INTO sessions (id, title, created_at, updated_at, project_path) \
-             VALUES ('s1', 'test', 1, 1, NULL)",
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES ('s1', 'test', 1, 1, NULL, NULL, NULL)",
             [],
         )
         .unwrap();
@@ -616,5 +847,427 @@ mod tests {
             )
             .unwrap();
         assert_eq!(hits, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // v5 Chunk B / DEC-032: project_id 列の migration + filter 回帰テスト
+    //
+    // `with_conn_mut` は Tauri State 依存のため、ここでは Connection を直接
+    // 操作して SQL 層の挙動を検証する。Tauri command の引数受け渡しは E2E
+    // レイヤに任せる。
+    // -----------------------------------------------------------------------
+
+    /// 新規 DB の CREATE TABLE に project_id が含まれることを確認。
+    #[test]
+    fn apply_ddl_creates_project_id_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+        assert!(sessions_has_project_id(&conn).unwrap());
+    }
+
+    /// 既存 DB（project_id 列がない）からの migration が冪等に動くことを確認。
+    #[test]
+    fn migrate_adds_project_id_to_legacy_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        // v0 相当の legacy sessions（project_id 列なし）を手で作る
+        conn.execute_batch(
+            "
+            CREATE TABLE sessions(
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at INTEGER,
+                updated_at INTEGER,
+                project_path TEXT
+            );
+            ",
+        )
+        .unwrap();
+        assert!(!sessions_has_project_id(&conn).unwrap());
+
+        // 初回 migrate: 列が追加される
+        migrate_sessions_project_id(&conn).unwrap();
+        assert!(sessions_has_project_id(&conn).unwrap());
+
+        // 2 回目 migrate: skip されて error にならない（idempotent）
+        migrate_sessions_project_id(&conn).unwrap();
+        assert!(sessions_has_project_id(&conn).unwrap());
+    }
+
+    /// DDL の 2 回適用後も idx_sessions_project_id が作成済であることを確認。
+    #[test]
+    fn apply_ddl_creates_project_id_index() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+        apply_ddl(&conn).unwrap();
+        let idx_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master \
+                 WHERE type='index' AND name='idx_sessions_project_id'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(idx_count, 1);
+    }
+
+    /// project_id = NULL の既存 session は ALTER 後も NULL のまま保たれる（後方互換）。
+    #[test]
+    fn legacy_sessions_preserve_null_project_id_after_migration() {
+        let conn = Connection::open_in_memory().unwrap();
+        // v0 相当の legacy sessions + データを投入
+        conn.execute_batch(
+            "
+            CREATE TABLE sessions(
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at INTEGER,
+                updated_at INTEGER,
+                project_path TEXT
+            );
+            INSERT INTO sessions (id, title, created_at, updated_at, project_path)
+                VALUES ('legacy-1', 'old session', 1, 1, NULL);
+            INSERT INTO sessions (id, title, created_at, updated_at, project_path)
+                VALUES ('legacy-2', NULL, 2, 2, '/tmp/foo');
+            ",
+        )
+        .unwrap();
+
+        migrate_sessions_project_id(&conn).unwrap();
+
+        // 既存 2 件の project_id が NULL のまま保持されていること
+        let null_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sessions WHERE project_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(null_count, 2);
+
+        let total: i64 = conn
+            .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 2);
+    }
+
+    /// list_sessions の SQL 層で project_id filter が機能することを検証。
+    /// （Tauri State を介さず、create_session / list_sessions の SQL を直接再現）。
+    #[test]
+    fn list_sessions_filters_by_project_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+
+        // proj-A に 2 件、proj-B に 1 件、未分類 1 件
+        let rows = [
+            ("s-a1", Some("proj-A"), 10),
+            ("s-a2", Some("proj-A"), 20),
+            ("s-b1", Some("proj-B"), 30),
+            ("s-none", None::<&str>, 40),
+        ];
+        for (id, pid, ts) in rows.iter() {
+            conn.execute(
+                "INSERT INTO sessions \
+                   (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+                 VALUES (?1, NULL, ?2, ?2, NULL, ?3, NULL)",
+                params![id, ts, pid],
+            )
+            .unwrap();
+        }
+
+        // proj-A フィルタ: 2 件
+        let count_a: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sessions WHERE project_id = ?1",
+                params!["proj-A"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count_a, 2);
+
+        // proj-B フィルタ: 1 件
+        let count_b: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sessions WHERE project_id = ?1",
+                params!["proj-B"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count_b, 1);
+
+        // 全件 (filter なし): 4 件
+        let count_all: i64 = conn
+            .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count_all, 4);
+
+        // 未分類 (project_id IS NULL): 1 件
+        let count_null: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sessions WHERE project_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count_null, 1);
+
+        // 未分類は project_id = 'proj-A' filter には含まれない
+        let not_in_a: Option<String> = conn
+            .query_row(
+                "SELECT id FROM sessions WHERE project_id = ?1 AND id = 's-none'",
+                params!["proj-A"],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert!(not_in_a.is_none());
+    }
+
+    /// create_session が project_id = Some を受け付け、INSERT 後に list で引ける。
+    #[test]
+    fn create_session_sql_accepts_project_id_some() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+
+        // create_session が内部で発行する SQL を模倣
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+            params!["new-1", Option::<String>::None, 100i64, 100i64, Option::<String>::None, Some("PRJ-012")],
+        )
+        .unwrap();
+
+        let pid: Option<String> = conn
+            .query_row(
+                "SELECT project_id FROM sessions WHERE id = 'new-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pid.as_deref(), Some("PRJ-012"));
+    }
+
+    /// create_session が project_id = None を受け付け、NULL で INSERT される。
+    #[test]
+    fn create_session_sql_accepts_project_id_none() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+            params![
+                "new-2",
+                Option::<String>::None,
+                200i64,
+                200i64,
+                Option::<String>::None,
+                Option::<String>::None
+            ],
+        )
+        .unwrap();
+
+        let pid: Option<String> = conn
+            .query_row(
+                "SELECT project_id FROM sessions WHERE id = 'new-2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pid, None);
+    }
+
+    /// update_session_project 相当の SQL が期待通り書き換わる。
+    #[test]
+    fn update_session_project_reassigns_project_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES ('s1', NULL, 1, 1, NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+
+        // 未分類 -> proj-X
+        let affected = conn
+            .execute(
+                "UPDATE sessions SET project_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params!["proj-X", 2i64, "s1"],
+            )
+            .unwrap();
+        assert_eq!(affected, 1);
+
+        let pid: Option<String> = conn
+            .query_row(
+                "SELECT project_id FROM sessions WHERE id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pid.as_deref(), Some("proj-X"));
+
+        // proj-X -> None（未分類へ戻す）
+        conn.execute(
+            "UPDATE sessions SET project_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![Option::<String>::None, 3i64, "s1"],
+        )
+        .unwrap();
+        let pid2: Option<String> = conn
+            .query_row(
+                "SELECT project_id FROM sessions WHERE id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(pid2, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // PM-830 (v3.5.14): sdk_session_id migration / update / list の回帰テスト
+    //
+    // - apply_ddl で新規 DB に列が含まれること
+    // - 既存 DB（sdk_session_id 列なし）からの ALTER 補填が冪等に動くこと
+    // - update_session_sdk_id 相当の SQL で attach / reset の双方ができること
+    // - list_sessions が SELECT に sdk_session_id を含めて返せること
+    // -----------------------------------------------------------------------
+
+    /// 新規 DB の CREATE TABLE に sdk_session_id が含まれることを確認。
+    #[test]
+    fn apply_ddl_creates_sdk_session_id_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+        assert!(sessions_has_column(&conn, "sdk_session_id").unwrap());
+    }
+
+    /// 既存 DB（project_id まではあるが sdk_session_id がない v5 相当）からの
+    /// migration が冪等に動くことを確認。
+    #[test]
+    fn migrate_adds_sdk_session_id_to_v5_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        // v5 相当: project_id まではあるが sdk_session_id がない
+        conn.execute_batch(
+            "
+            CREATE TABLE sessions(
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at INTEGER,
+                updated_at INTEGER,
+                project_path TEXT,
+                project_id TEXT DEFAULT NULL
+            );
+            INSERT INTO sessions (id, title, created_at, updated_at, project_path, project_id)
+                VALUES ('legacy-1', 'old', 1, 1, NULL, 'PRJ-012');
+            ",
+        )
+        .unwrap();
+        assert!(sessions_has_column(&conn, "project_id").unwrap());
+        assert!(!sessions_has_column(&conn, "sdk_session_id").unwrap());
+
+        // 初回 migrate: 列が追加される、既存データは保持される
+        migrate_sessions_sdk_session_id(&conn).unwrap();
+        assert!(sessions_has_column(&conn, "sdk_session_id").unwrap());
+        let sdk_id: Option<String> = conn
+            .query_row(
+                "SELECT sdk_session_id FROM sessions WHERE id = 'legacy-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(sdk_id, None);
+
+        // 2 回目 migrate: skip されて error にならない（idempotent）
+        migrate_sessions_sdk_session_id(&conn).unwrap();
+    }
+
+    /// apply_ddl の 2 回適用後も sdk_session_id 列が確実に存在する（上位 idempotency 保証）。
+    #[test]
+    fn apply_ddl_twice_preserves_sdk_session_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+        apply_ddl(&conn).unwrap();
+        assert!(sessions_has_column(&conn, "sdk_session_id").unwrap());
+    }
+
+    /// update_session_sdk_id 相当の SQL で attach / reset 両方が動く。
+    #[test]
+    fn update_session_sdk_id_attaches_and_resets() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sessions \
+                (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES ('s1', NULL, 1, 1, NULL, NULL, NULL)",
+            [],
+        )
+        .unwrap();
+
+        // None -> Some(uuid)
+        let sdk_uuid = "11111111-2222-3333-4444-555555555555";
+        let affected = conn
+            .execute(
+                "UPDATE sessions SET sdk_session_id = ?1, updated_at = ?2 WHERE id = ?3",
+                params![Some(sdk_uuid), 2i64, "s1"],
+            )
+            .unwrap();
+        assert_eq!(affected, 1);
+        let got: Option<String> = conn
+            .query_row(
+                "SELECT sdk_session_id FROM sessions WHERE id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(got.as_deref(), Some(sdk_uuid));
+
+        // Some -> None（resume 失敗時の reset 経路）
+        conn.execute(
+            "UPDATE sessions SET sdk_session_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![Option::<String>::None, 3i64, "s1"],
+        )
+        .unwrap();
+        let got2: Option<String> = conn
+            .query_row(
+                "SELECT sdk_session_id FROM sessions WHERE id = 's1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(got2, None);
+    }
+
+    /// list_sessions の SELECT 列順序を真似て sdk_session_id が読み出せる。
+    /// 実際の SessionSummary 構築は Tauri 経由なのでここでは SQL 形のみ検証する。
+    #[test]
+    fn list_sessions_select_returns_sdk_session_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sessions \
+                (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES ('s1', 'test', 1, 1, NULL, NULL, 'abc-123')",
+            [],
+        )
+        .unwrap();
+
+        // list_sessions (filter なしブランチ) と同じ SELECT 列順
+        let sql = "\
+            SELECT s.id, s.title, s.created_at, s.updated_at, s.project_path, \
+                   s.project_id, s.sdk_session_id, \
+                   m.content, m.role \
+            FROM sessions s \
+            LEFT JOIN messages m ON m.id = ( \
+                SELECT id FROM messages \
+                WHERE session_id = s.id \
+                ORDER BY created_at DESC LIMIT 1 \
+            ) \
+            ORDER BY s.updated_at DESC \
+            LIMIT 10 OFFSET 0";
+        let mut stmt = conn.prepare(sql).unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let row = rows.next().unwrap().unwrap();
+        let id: String = row.get(0).unwrap();
+        let sdk_session_id: Option<String> = row.get(6).unwrap();
+        assert_eq!(id, "s1");
+        assert_eq!(sdk_session_id.as_deref(), Some("abc-123"));
     }
 }

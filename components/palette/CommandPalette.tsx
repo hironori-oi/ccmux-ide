@@ -7,7 +7,6 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import {
   FileSearch,
-  GitBranch,
   ImagePlus,
   MessageSquarePlus,
   Moon,
@@ -49,7 +48,6 @@ import { useSessionStore } from "@/lib/stores/session";
  *  - チャット: 画像を添付（`save_clipboard_image`）
  *  - 表示: テーマ切替 / 設定を開く（Settings は Week6 実装のため placeholder）
  *  - 検索: 会話検索（Week7 PM-231 で SearchPalette を起動）
- *  - Git: 新規 worktree（Week7 実装のため placeholder）
  *
  * 日本語 UI。ショートカットヒントは ⌘ 表記で統一（Windows でも同じ文字を表示）。
  *
@@ -150,7 +148,7 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
     router.push("/settings");
   });
 
-  // ----------------------- 検索 / Git（placeholder）-----------------------
+  // ----------------------- 検索 -----------------------
 
   const handleSearch = run(() => {
     if (onOpenSearch) {
@@ -161,9 +159,8 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
     }
   });
 
-  const handleNewWorktree = run(() => {
-    toast.info("worktree UI は Week 7 で実装予定です");
-  });
+  // v3.5.3 (2026-04-20): Git / worktree UI は撤去済。CommandPalette の
+  // 「新規 worktree」placeholder も合わせて削除（PM-770 dead code removal）。
 
   // --- 最近のセッション 5 件（updatedAt 降順で slice）---
   const recentSessions = [...sessions]
@@ -273,18 +270,7 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
               </CommandItem>
             </CommandGroup>
 
-            <CommandSeparator />
-
-            {/* Git */}
-            <CommandGroup heading="Git">
-              <CommandItem
-                value="new-worktree worktree 新規"
-                onSelect={handleNewWorktree}
-              >
-                <GitBranch aria-hidden />
-                <span>新規 worktree（Week 7 で実装予定）</span>
-              </CommandItem>
-            </CommandGroup>
+            {/* v3.5.3: Git / worktree グループは撤去済（PM-770） */}
           </CommandList>
         </Command>
       </DialogContent>

@@ -20,12 +20,8 @@ export interface TreeNode {
   isFile: boolean;
 }
 
-/** git worktree 1 件（Rust `Worktree` と対応） */
-export interface Worktree {
-  id: string;
-  branch: string;
-  path: string;
-}
+// v3.5.3 (2026-04-20): `Worktree` interface は UI 層撤去と同時に削除（PM-770）。
+// Rust side の `Worktree` struct は src-tauri に残置（将来再導入時の参照用）。
 
 /** 画像ペースト結果（Rust `paste_image_from_clipboard` 戻り値） */
 export interface ImagePasteResult {
@@ -53,6 +49,21 @@ export interface Session {
   /** Unix epoch seconds (UTC) */
   updatedAt: number;
   projectPath: string | null;
+  /**
+   * v5 Chunk B / DEC-032: session を登録した project registry (RegisteredProject.id)。
+   * null は未分類（既存 session は後方互換のため NULL で保持される）。
+   */
+  projectId: string | null;
+  /**
+   * PM-830 (v3.5.14): Claude Agent SDK 側 session UUID（context 継続用）。
+   *
+   * 初回送信時は null。sidecar が `system.subtype === "init"` event の `session_id`
+   * を `sdk_session_ready` outbound event で frontend に通知し、frontend が
+   * `update_session_sdk_id` を呼んで DB に保存する。2 回目以降の送信時に session
+   * store からこの値を引き、`send_agent_prompt({ resume: sdkSessionId })` で
+   * SDK に渡すことで Claude が前回会話の context を覚えた状態で応答する。
+   */
+  sdkSessionId: string | null;
 }
 
 /** サイドバー一覧向け。`list_sessions` 戻り値の要素。 */
@@ -62,6 +73,16 @@ export interface SessionSummary {
   createdAt: number;
   updatedAt: number;
   projectPath: string | null;
+  /**
+   * v5 Chunk B / DEC-032: session を登録した project registry (RegisteredProject.id)。
+   * null は未分類。SessionList はこれで activeProjectId filter を行う。
+   */
+  projectId: string | null;
+  /**
+   * PM-830 (v3.5.14): Claude Agent SDK 側 session UUID（context 継続用）。
+   * 初回送信前 / レガシー session では null。送信時 resume の引数に使う。
+   */
+  sdkSessionId: string | null;
   /** 直近 messages.content を 80 文字 trunc（UI 省略表示用） */
   lastMessageExcerpt: string | null;
   /** 直近 messages.role */
@@ -97,19 +118,16 @@ export interface AttachmentInput {
 // ---------------------------------------------------------------------------
 
 /**
- * `claude-code-company` workspace 配下の 1 プロジェクトを表す軽量サマリ。
+ * **DEPRECATED — v3.2 DEC-031 で `RegisteredProject` に置換。**
  *
- * - `id`: ディレクトリ名（例: `PRJ-012` / `COMPANY-WEBSITE`）
- * - `path`: 絶対パス（OS 依存のセパレータ）
- * - `title`: `brief.md` の 1 行目 `#` から抽出したタイトル（無ければ `undefined`）
- * - `phase`: `brief.md` 内の最初の `Phase`/`フェーズ` 記述から簡易抽出（無ければ `undefined`）
+ * 後方互換のため `RegisteredProject` の alias として残す（ファイル末尾の
+ * type export を参照）。新規コードは必ず `RegisteredProject` を使用すること。
+ *
+ * かつて: `claude-code-company` workspace 配下の 1 プロジェクトを表す軽量サマリ
+ * 現在:   任意ディレクトリ project registry の 1 エントリ（`RegisteredProject`）
  */
-export interface ProjectSummary {
-  id: string;
-  path: string;
-  title?: string;
-  phase?: string;
-}
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- alias は末尾で宣言
+export type ProjectSummary = RegisteredProject;
 
 /**
  * ProjectTree が扱うファイルエントリ。
@@ -142,6 +160,70 @@ export type ThemeMode = "light" | "dark" | "system";
  *   選択時は next-themes 側も `dark` に強制切替する。
  */
 export type ThemePreset = "orange" | "tokyo-night" | "catppuccin" | "dracula" | "nord";
+
+// ---------------------------------------------------------------------------
+// PRJ-012 v4 / Chunk C: モデル選択（/model 用）
+// ---------------------------------------------------------------------------
+
+/**
+ * /model picker の選択肢。Anthropic の正式モデル ID。
+ *
+ * - `claude-opus-4-7[1m]`     : Opus 4.7（1M context）
+ * - `claude-sonnet-4-6`       : Sonnet 4.6（既定 200k context）
+ * - `claude-haiku-4-5`        : Haiku 4.5（最速・低コスト）
+ *
+ * 現状は Settings 永続化のみで、sidecar 側との配線は M3 後 (v4) 候補。
+ * ChatPanel が起動時に sidecar へ model を渡す経路を `start_agent_sidecar`
+ * の args 拡張で繋ぐところまで実装済になり次第、本値を反映する。
+ */
+export type ModelId =
+  | "claude-opus-4-7[1m]"
+  | "claude-sonnet-4-6"
+  | "claude-haiku-4-5";
+
+/** ModelId の表示名 / 役割の組（dialog 用）。 */
+export interface ModelMeta {
+  id: ModelId;
+  /** 短縮表示名（例: "Opus 4.7"） */
+  label: string;
+  /** 1 行説明（日本語） */
+  description: string;
+}
+
+export const MODEL_CHOICES: readonly ModelMeta[] = [
+  {
+    id: "claude-opus-4-7[1m]",
+    label: "Opus 4.7 (1M)",
+    description: "最高性能。複雑な推論や長文コンテキスト向け。",
+  },
+  {
+    id: "claude-sonnet-4-6",
+    label: "Sonnet 4.6",
+    description: "速度と性能のバランス型。日常的な開発作業に最適。",
+  },
+  {
+    id: "claude-haiku-4-5",
+    label: "Haiku 4.5",
+    description: "最速・低コスト。短い質問や軽量タスク向け。",
+  },
+] as const;
+
+/**
+ * PM-760 / v3.4.9 Chunk A: UI `ModelId` を Anthropic SDK `model` 文字列に変換する。
+ *
+ * - `"claude-opus-4-7[1m]"` → `"claude-opus-4-7"` （`[1m]` は UI 上の 1M context
+ *   マーカーで、SDK / API の model id としては同じ `claude-opus-4-7` を使う。
+ *   1M context 利用は将来 beta header で切替予定、PM-761 で再検討）
+ * - `"claude-sonnet-4-6"` / `"claude-haiku-4-5"` はそのまま
+ *
+ * Rust 側 `start_agent_sidecar(model: Option<String>, ...)` と sidecar 側
+ * `parseModelFromArgv` の両方がこの正規化後の ID を受け取る前提。
+ */
+export function modelIdToSdkId(id: ModelId | null | undefined): string | null {
+  if (!id) return null;
+  if (id === "claude-opus-4-7[1m]") return "claude-opus-4-7";
+  return id;
+}
 
 /** Appearance 設定（`app/settings` の Appearance タブで管理）。 */
 export interface AppearanceSettings {
@@ -294,6 +376,40 @@ export interface DailyUsage {
   costUsd: number;
 }
 
+// ---------------------------------------------------------------------------
+// PRJ-012 v3.4 / Chunk A (DEC-034 Must 1): File Editor Integration
+//
+// `lib/stores/editor.ts` から import / re-export される OpenFile 型。
+// 型定義は types.ts に集約する方針に従い、store は実装ロジックのみ保持する
+// （ただし store ファイル側でも同名の export を持ち、どちらから import しても
+//  同じ shape になるよう structural type で一致させる）。
+// ---------------------------------------------------------------------------
+
+/**
+ * エディタに open されている 1 ファイルの状態。
+ *
+ * - `id`: `crypto.randomUUID()`、UI key 用の安定識別子
+ * - `path`: 絶対パス（重複 open 判定 / savefile のキー）
+ * - `title`: タブラベル（basename）
+ * - `language`: Monaco 言語 ID（`lib/detect-lang.ts`）
+ * - `content`: 現在バッファ（編集中）
+ * - `savedContent`: 最後に writeTextFile 成功時のスナップショット
+ * - `dirty`: content !== savedContent の cached 真偽値
+ * - `loading`: 初回 load / reload 中フラグ
+ * - `error`: load / save エラーメッセージ（Alert 表示）
+ */
+export interface OpenFile {
+  id: string;
+  path: string;
+  title: string;
+  language: string;
+  content: string;
+  savedContent: string;
+  dirty: boolean;
+  loading: boolean;
+  error: string | null;
+}
+
 /** `get_usage_stats` 戻り値。 */
 export interface UsageStats {
   /** 直近 5 時間ウィンドウ */
@@ -356,6 +472,9 @@ export interface ClaudeOAuthUsage {
 /**
  * Slash command 1 件（`list_slash_commands` 戻り値の要素、Rust
  * `commands::slash::SlashCmd` と 1:1）。
+ *
+ * DEC-027 v4 Chunk B: 旧 `isOrganization` フィールドは削除。組織ロールの
+ * 特別扱いは行わず、純粋なスコープベースのグルーピングに統一した。
  */
 export interface SlashCmd {
   /** 先頭 `/` を含むコマンド名（例: `/ceo`） */
@@ -368,6 +487,123 @@ export interface SlashCmd {
   source: "global" | "project" | "cwd";
   /** 絶対パス（Monaco preview 用） */
   filePath: string;
-  /** 組織 role slash（`/ceo` `/dev` 等）なら true */
-  isOrganization: boolean;
 }
+
+// v3.5.3 (2026-04-20): Status pane / StatusFile interface は UI 層撤去と同時に削除（PM-770）。
+// Rust side の `StatusFile` struct / `list_status_candidates` / `read_status_file`
+// command は src-tauri に残置（frontend からは未呼出、将来再導入時の参照用）。
+
+// ---------------------------------------------------------------------------
+// PRJ-012 v3.2 / Chunk A (DEC-031): Project registry 型
+//
+// Workspace 概念を撤去し、すべて「Project = 任意ディレクトリ」に統一。
+// `useProjectStore` (lib/stores/project.ts) の registry エントリ型。
+//
+// Chunk B / C が参照するので本ファイルの末尾 append で共存する。
+// ---------------------------------------------------------------------------
+
+/**
+ * ModelId の抜粋エイリアス（Settings 未連動の preferredModel 用）。
+ *
+ * 既存 `ModelId` と同値だが、RegisteredProject のオプショナルフィールドとして
+ * 明示的に 3 択を型レベルで絞り込むため別名で再宣言する。
+ */
+export type PreferredModelId =
+  | "opus-4-7"
+  | "sonnet-4-6"
+  | "haiku-4-5";
+
+/**
+ * Project registry の 1 エントリ。
+ *
+ * - `id`: `crypto.randomUUID()` で生成。path 変更に追従するため path hash ではなく UUID
+ * - `path`: 絶対パス（OS 依存セパレータ）
+ * - `title`: brief.md frontmatter `title` 優先、なければ `# ` 見出し、最終的に basename
+ * - `phase`: brief.md frontmatter `phase` or 本文 `Phase N` 抽出（任意）
+ * - `colorIdx`: 0..7（ProjectRail ACCENT_CLASSES のインデックス、path hash）
+ * - `lastSessionId`: Chunk C が session 切替時に更新する「最後に開いていた」session id
+ * - `preferredModel`: 将来 ModelPickerDialog と連動、未連動時 undefined
+ * - `addedAt`: 登録時刻（epoch ms）。UI での並び替え / デバッグ用
+ *
+ * ## v3.5.16 PM-840 (Claude Desktop 風 Live Model/Effort 切替)
+ *
+ * - `runningModel`  : 「今この project の sidecar が起動している model（ModelId）」。
+ *   StatusBar の `ModelPickerPopover` は active project の本値を表示することで、
+ *   Claude Desktop と同等の「実態追従」UX を実現する（dialog store の
+ *   `selectedModel` は「次回起動 default」に役割変更）。
+ * - `runningEffort` : 同じく「今この project の sidecar が起動している effort」。
+ *
+ * 両者は sidecar 起動成功時に `project.ts::ensureSidecarRunning` から
+ * `updateProject(id, { runningModel, runningEffort })` で記録され、
+ * `stopSidecar` / `restartSidecarWithModel` で reset / 更新される。
+ *
+ * **persist 対象外**（partialize で除外）。sidecar は再起動で空 map 化するため、
+ * runningModel / runningEffort も揮発させて乖離を防ぐ。
+ */
+export interface RegisteredProject {
+  id: string;
+  path: string;
+  title: string;
+  phase?: string;
+  colorIdx?: number;
+  lastSessionId?: string | null;
+  preferredModel?: PreferredModelId;
+  addedAt: number;
+  /**
+   * v3.5.16 PM-840: 現在起動中 sidecar の model。null / undefined は「未起動」。
+   * persist 対象外（project.ts の partialize で除外）。
+   */
+  runningModel?: ModelId | null;
+  /**
+   * v3.5.16 PM-840: 現在起動中 sidecar の effort。null / undefined は「未起動」。
+   * persist 対象外（project.ts の partialize で除外）。
+   */
+  runningEffort?: EffortLevel | null;
+}
+
+// v3.5.3 (2026-04-20): Git 統合パネル関連 interface（GitFileEntry / GitStatus /
+// GitDiffContent）は UI 層撤去と同時に削除（PM-770）。Rust side の struct / command
+// は src-tauri に残置（frontend からは未呼出、将来再導入時の参照用）。
+
+// ---------------------------------------------------------------------------
+// PRJ-012 v3.4.9: 推論工数（effort）レベル（StatusBar の EffortPickerPopover 用）
+//
+// Claude Desktop 風の 4 段階工数切替。現段階では UI 上の選択保持のみで、
+// sidecar / Rust agent への反映は PM-760 候補として別途実装（`start_agent_sidecar`
+// の options 拡張が必要）。
+// ---------------------------------------------------------------------------
+
+/**
+ * 推論工数レベル（4 段階）。
+ *
+ * - `low`    : 素早い応答向け、thinking トークン 1,024
+ * - `medium` : バランス型（既定）、thinking トークン 8,192
+ * - `high`   : 複雑な設計・分析向け、thinking トークン 32,768
+ * - `max`    : 最長推論、thinking トークン 65,536（時間・コスト増）
+ */
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
+
+/**
+ * EffortLevel の表示メタ（EffortPickerPopover 用）。
+ *
+ * v3.4.11: Anthropic 公式の 5 段階（low / medium / high / xhigh / max）に合わせて
+ * xhigh（超高）を medium と high の上位として追加。thinkingTokens は Claude Desktop の
+ * 挙動を踏まえ、以下の対応:
+ *  - low    :  1,024 tokens（素早い応答）
+ *  - medium :  8,192 tokens（推奨、バランス型）
+ *  - high   : 16,384 tokens（複雑な設計・分析）
+ *  - xhigh  : 32,768 tokens（高難度のリファクタ / デバッグ）
+ *  - max    : 65,536 tokens（SDK 上限、最長推論）
+ */
+export const EFFORT_CHOICES: Array<{
+  id: EffortLevel;
+  label: string;
+  description: string;
+  thinkingTokens: number;
+}> = [
+  { id: "low", label: "低", description: "素早い応答、単純な質問向け", thinkingTokens: 1024 },
+  { id: "medium", label: "中", description: "バランス型（推奨）", thinkingTokens: 8192 },
+  { id: "high", label: "高", description: "複雑な設計・分析向け", thinkingTokens: 16384 },
+  { id: "xhigh", label: "超高", description: "高難度のリファクタ / デバッグ向け", thinkingTokens: 32768 },
+  { id: "max", label: "最大", description: "最長推論、時間・コスト増", thinkingTokens: 65536 },
+];

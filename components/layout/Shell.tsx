@@ -1,19 +1,58 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import {
+  Check,
+  ChevronDown,
+  Columns2,
+  FileCode2,
+  LayoutGrid,
+  MessageSquare,
+  Monitor,
+  Square,
+  Terminal as TerminalIcon,
+} from "lucide-react";
 
-import { Inspector } from "@/components/layout/Inspector";
+import { ChatPanel } from "@/components/chat/ChatPanel";
+import { ImagePasteZone } from "@/components/chat/ImagePasteZone";
+import { EditorPane } from "@/components/editor/EditorPane";
 import { ProjectRail } from "@/components/layout/ProjectRail";
+import { SplitView } from "@/components/layout/SplitView";
 import { StatusBar } from "@/components/layout/StatusBar";
 import { TitleBar } from "@/components/layout/TitleBar";
+import { PreviewPane } from "@/components/preview/PreviewPane";
 import { Sidebar } from "@/components/sidebar/Sidebar";
+import { TerminalView } from "@/components/terminal/TerminalView";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 // NOTE(M3): UpdateNotifier は dogfood に不要かつ挙動不明なので disable 継続。
-// 復活は v0.2.0 以降で updater 鍵発行 (PM-304) と併せて検証予定。
 // import { UpdateNotifier } from "@/components/updates/UpdateNotifier";
+import { useAllProjectsSidecarListener } from "@/hooks/useAllProjectsSidecarListener";
 import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
+import { useClaudeOAuthUsage } from "@/hooks/useClaudeOAuthUsage";
+import { useTerminalListener } from "@/hooks/useTerminalListener";
+import { useChatStore, MAX_PANES } from "@/lib/stores/chat";
+import {
+  useEditorStore,
+  EDITOR_MAX_PANES,
+} from "@/lib/stores/editor";
+import { useProjectStore } from "@/lib/stores/project";
+import {
+  useTerminalStore,
+  TERMINAL_MAX_PANES,
+} from "@/lib/stores/terminal";
+import { cn } from "@/lib/utils";
 
 /**
- * Workspace 全体の統合 Shell（PM-167）。
+ * Workspace 全体の統合 Shell（PM-167 + v5 Chunk C / DEC-030）。
  *
  * 構造（縦 flex）:
  *   ┌──────────────────────────────────────────────────┐
@@ -25,36 +64,456 @@ import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
  *   │                StatusBar (28px)                  │
  *   └──────────────────────────────────────────────────┘
  *
- * ※ ProjectRail は PRJ-012 Round B で追加（Discord/Slack 風の
- *   縦アイコン列、ワンクリックでプロジェクト切替）。
- *
- * - `useClaudeMonitor` をここで 1 回だけ起動し、`monitor:tick` event を store に接続。
- * - `TitleBar` / `StatusBar` は Chunk 3 の本実装を直接 import（stub 作成不要）。
- * - `Sidebar` は Chunk B で実装済、下段に Chunk 2 の ContextGauge 系を追加済。
- * - `Inspector` は M2 まで stub。
+ * v3.5 Chunk B (Split Sessions):
+ *  - main 領域の Chat タブ配下を SplitView で 1〜2 pane に分割。
+ *  - 「分割」ボタンを Chat / Editor タブの右側に追加（pane < MAX_PANES のみ有効）。
+ *  - 各 pane は独立した ChatPanel（paneId prop 付き）。pane 上部に ChatPaneHeader
+ *    を表示し session 切替 / pane 閉じ操作を提供する。
+ *  - ImagePasteZone は Shell に 1 個だけマウント（hotkey 重複を避ける）。
+ *    activePane に対して attachment を追加する。
  */
-export function Shell({ children }: { children: ReactNode }) {
-  // モニタ listener をアプリ全体で 1 度だけマウント。
-  // `Shell` はワークスペース 1 画面に 1 インスタンスなので安全。
+export function Shell({ children }: { children?: ReactNode }) {
+
   useClaudeMonitor();
+  // PRJ-012 v3.5.11 Chunk E (Cross-Project Events): 全 project の sidecar event を
+  // 常時購読する singleton hook。Shell から 1 回だけ呼ぶことで、project 切替
+  // 中も非 active project の thinking → tool_use → streaming → complete が
+  // 裏で進行し続け、ProjectRail の activity dot が独立動作する。
+  useAllProjectsSidecarListener();
+  // v3.5.15 (2026-04-20): Claude Max プランの 5h / 7d 使用量を **アプリ起動時から**
+  // 即 poll 開始（60 秒間隔）。従来は `UsageStatsCard` が mount されるまで fetch
+  // されず、Sidebar の「実行状態」タブを開くまで StatusBar の 5h / 7d ゲージが
+  // 空のままだった UX を解消する。hook 自体に二重 fetch ガード + interval cleanup
+  // があるため複数箇所で呼んでも安全。
+  useClaudeOAuthUsage();
+  // PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル exit event listener。
+  // data event は TerminalPane が自前で subscribe、ここは exit 集約のみ。
+  useTerminalListener();
+
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const reduceMotion = useReducedMotion();
+
+  // v3.4 Chunk A: Chat / Editor 切替
+  const viewMode = useEditorStore((s) => s.viewMode);
+  const setViewMode = useEditorStore((s) => s.setViewMode);
+  const openFileCount = useEditorStore((s) => s.openFiles.length);
+
+  // v3.5 Chunk B: pane 一覧 + 分割操作
+  const panes = useChatStore((s) => s.panes);
+  const activePaneId = useChatStore((s) => s.activePaneId);
+  const addPane = useChatStore((s) => s.addPane);
+  const removePane = useChatStore((s) => s.removePane);
+  const paneIds = useMemo(() => Object.keys(panes), [panes]);
+
+  // PM-924: Editor 分割の state
+  const editorPanes = useEditorStore((s) => s.editorPanes);
+  const addEditorPane = useEditorStore((s) => s.addEditorPane);
+  const removeEditorPane = useEditorStore((s) => s.removeEditorPane);
+  const editorPaneIds = useMemo(() => Object.keys(editorPanes), [editorPanes]);
+
+  // PM-924: Terminal 分割の state
+  const terminalPanes = useTerminalStore((s) => s.terminalPanes);
+  const addTerminalPane = useTerminalStore((s) => s.addTerminalPane);
+  const removeTerminalPane = useTerminalStore((s) => s.removeTerminalPane);
+  const terminalPaneIds = useMemo(
+    () => Object.keys(terminalPanes),
+    [terminalPanes]
+  );
+
+  /**
+   * PM-937 (2026-04-20): viewMode に応じて「現在の pane 数」「目標 pane 数への遷移」
+   * を抽象化するヘルパ。1 / 2 / 4 の 3 モードから選べる dropdown から呼ばれる。
+   *
+   * - target < current: 余分な pane を末尾（= 追加順で後ろ）から removePane
+   * - target > current: 差分だけ addPane
+   * - target === current: no-op
+   *
+   * Terminal だけ removePane が async（pty kill 含む）だが、void で fire-and-forget
+   * して UI は即 state を読み直す（store 側が optimistic update 済）。
+   */
+  const applyPaneMode = useCallback(
+    (target: 1 | 2 | 4) => {
+      switch (viewMode) {
+        case "chat": {
+          const cur = paneIds.length;
+          if (cur === target) return;
+          if (cur < target) {
+            for (let i = cur; i < target; i++) addPane();
+          } else {
+            // 末尾から削る（先頭 = "main" / 最初に作られた pane を残す）
+            const toRemove = paneIds.slice(target);
+            for (const id of toRemove) removePane(id);
+          }
+          return;
+        }
+        case "editor": {
+          const cur = editorPaneIds.length;
+          if (cur === target) return;
+          if (cur < target) {
+            for (let i = cur; i < target; i++) addEditorPane();
+          } else {
+            const toRemove = editorPaneIds.slice(target);
+            for (const id of toRemove) removeEditorPane(id);
+          }
+          return;
+        }
+        case "terminal": {
+          const cur = terminalPaneIds.length;
+          if (cur === target) return;
+          if (cur < target) {
+            for (let i = cur; i < target; i++) addTerminalPane();
+          } else {
+            const toRemove = terminalPaneIds.slice(target);
+            // removeTerminalPane は async (pty kill) だが fire-and-forget で OK
+            // （store 側が optimistic に UI state を更新する）
+            toRemove.forEach((id) => {
+              void removeTerminalPane(id);
+            });
+          }
+          return;
+        }
+        default:
+          return;
+      }
+    },
+    [
+      viewMode,
+      paneIds,
+      addPane,
+      removePane,
+      editorPaneIds,
+      addEditorPane,
+      removeEditorPane,
+      terminalPaneIds,
+      addTerminalPane,
+      removeTerminalPane,
+    ]
+  );
+
+  /**
+   * PM-937: 現在の viewMode での pane 数 / 最大 pane 数を返す。
+   * Dropdown の 4 pane 項目の enable 判定と checkmark 表示に使う。
+   */
+  const paneModeInfo = (() => {
+    switch (viewMode) {
+      case "chat":
+        return { current: paneIds.length, max: MAX_PANES, target: "チャット" };
+      case "editor":
+        return {
+          current: editorPaneIds.length,
+          max: EDITOR_MAX_PANES,
+          target: "エディタ",
+        };
+      case "terminal":
+        return {
+          current: terminalPaneIds.length,
+          max: TERMINAL_MAX_PANES,
+          target: "ターミナル",
+        };
+      default:
+        return null;
+    }
+  })();
+
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  const transitionConfig = reduceMotion
+    ? { duration: 0 }
+    : {
+        duration: 0.18,
+        ease: [0.16, 1, 0.3, 1] as [number, number, number, number],
+      };
+
+  if (!mounted) {
+    return (
+      <div
+        className="flex h-screen flex-col bg-transparent"
+        suppressHydrationWarning
+      />
+    );
+  }
+
+  const paneItems = paneIds.map((id) => ({
+    id,
+    content: (
+      <ChatPanel
+        paneId={id}
+        canClose={paneIds.length > 1}
+        showHeader={paneIds.length > 1}
+      />
+    ),
+  }));
 
   return (
-    <div className="flex h-screen flex-col bg-background">
+    // PM-870: bg-background → bg-transparent。html::before (背景画像) と
+    // html::after (背景色 overlay) を body 越しに見せるため、最外コンテナの
+    // 背景色を撤去する。画像なし時は html::after の opacity=1 で従来と同じ見た目。
+    <div className="flex h-screen flex-col bg-transparent">
       <TitleBar />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <ProjectRail />
         <Sidebar />
-        <main
-          aria-label="メインチャット"
-          className="flex min-w-0 flex-1 flex-col"
-        >
-          {children}
-        </main>
-        <Inspector />
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.main
+            key={activeProjectId ?? "__none__"}
+            aria-label="メインビュー"
+            className="flex min-w-0 flex-1 flex-col"
+            initial={reduceMotion ? false : { opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduceMotion ? undefined : { opacity: 0, y: -6 }}
+            transition={transitionConfig}
+          >
+            {/* Chat / Editor 切替タブ + v3.5 分割ボタン */}
+            <div
+              role="tablist"
+              aria-label="メインビュー切替"
+              className="flex h-9 shrink-0 items-center gap-0 border-b bg-muted/10 px-2"
+            >
+              <ViewModeTab
+                active={viewMode === "chat"}
+                onClick={() => setViewMode("chat")}
+                icon={<MessageSquare className="h-3.5 w-3.5" aria-hidden />}
+                label="チャット"
+              />
+              <ViewModeTab
+                active={viewMode === "editor"}
+                onClick={() => setViewMode("editor")}
+                icon={<FileCode2 className="h-3.5 w-3.5" aria-hidden />}
+                label="エディタ"
+                badge={openFileCount > 0 ? String(openFileCount) : undefined}
+              />
+              {/* PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナルタブ。 */}
+              <ViewModeTab
+                active={viewMode === "terminal"}
+                onClick={() => setViewMode("terminal")}
+                icon={<TerminalIcon className="h-3.5 w-3.5" aria-hidden />}
+                label="ターミナル"
+              />
+              {/* PRJ-012 v1.0 / PM-925 (2026-04-20): ブラウザプレビュータブ。
+                  iframe + 外部ブラウザ fallback ハイブリッド (Phase 1 MVP)。 */}
+              <ViewModeTab
+                active={viewMode === "preview"}
+                onClick={() => setViewMode("preview")}
+                icon={<Monitor className="h-3.5 w-3.5" aria-hidden />}
+                label="プレビュー"
+              />
+
+              {/*
+               * v3.5 Chunk B (Split Sessions) / PM-924 / PM-937 (2026-04-20):
+               * 分割モード選択 dropdown。chat / editor / terminal の 3 view mode で共通化。
+               * 1 pane / 2 pane / 4 pane (2x2 grid) から選択可能で、現在の pane 数との
+               * 差分を addPane / removePane で埋める。
+               */}
+              {paneModeInfo && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="ml-auto h-7 gap-1 px-2 text-[12px]"
+                      aria-label={`${paneModeInfo.target}の分割モードを選択`}
+                      title={`分割モード (現在 ${paneModeInfo.current} pane)`}
+                    >
+                      {paneModeInfo.current >= 4 ? (
+                        <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
+                      ) : paneModeInfo.current === 2 ? (
+                        <Columns2 className="h-3.5 w-3.5" aria-hidden />
+                      ) : (
+                        <Square className="h-3.5 w-3.5" aria-hidden />
+                      )}
+                      <span className="hidden sm:inline">分割</span>
+                      <ChevronDown className="h-3 w-3 opacity-60" aria-hidden />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
+                      {paneModeInfo.target}の分割
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <PaneModeItem
+                      icon={<Square className="h-3.5 w-3.5" aria-hidden />}
+                      label="1 pane"
+                      active={paneModeInfo.current === 1}
+                      disabled={1 > paneModeInfo.max}
+                      onSelect={() => applyPaneMode(1)}
+                    />
+                    <PaneModeItem
+                      icon={<Columns2 className="h-3.5 w-3.5" aria-hidden />}
+                      label="2 pane (左右)"
+                      active={paneModeInfo.current === 2}
+                      disabled={2 > paneModeInfo.max}
+                      onSelect={() => applyPaneMode(2)}
+                    />
+                    <PaneModeItem
+                      icon={<LayoutGrid className="h-3.5 w-3.5" aria-hidden />}
+                      label="4 pane (2x2)"
+                      active={paneModeInfo.current >= 4}
+                      disabled={4 > paneModeInfo.max}
+                      onSelect={() => applyPaneMode(4)}
+                    />
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
+            </div>
+
+            {/* Chat / Editor を両方 mount し display 切替で保持 */}
+            <div
+              className={cn(
+                "min-h-0 flex-1 flex-col",
+                viewMode === "chat" ? "flex" : "hidden"
+              )}
+              aria-hidden={viewMode !== "chat"}
+            >
+              <SplitView panes={paneItems} />
+            </div>
+            <div
+              className={cn(
+                "min-h-0 flex-1",
+                viewMode === "editor" ? "block" : "hidden"
+              )}
+              aria-hidden={viewMode !== "editor"}
+            >
+              <EditorPane />
+            </div>
+            {/*
+             * PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル (xterm.js + Rust PTY)。
+             *
+             * PM-935 (2026-04-20): mount 戦略変更 — **conditional mount 化**。
+             * 従来は display:none で常時 mount していたが、xterm.js の `term.open()`
+             * は container rect が 0x0 の間に呼ぶと canvas の font metric 測定が
+             * 破損し、以降 display:block に戻しても復旧しないケースがあった
+             * (PM-920〜934 で 9 回 hotfix したが完全解消に至らず)。
+             * `viewMode === "terminal"` の時のみ TerminalView を mount することで、
+             * xterm は必ず非 0 サイズの container に対して open される。
+             *
+             * tradeoff:
+             * - pty process: Rust 側の `useTerminalStore.terminals` で一元管理され、
+             *   frontend unmount でも sidecar process は生存するため情報は失われない。
+             *   `useTerminalListener` は Shell singleton で exit event を継続購読。
+             * - xterm scrollback: tab 切替で reset される (初期化コスト ≈100-200ms)。
+             *   scrollback の永続化は Phase 2 以降で検討。
+             */}
+            {viewMode === "terminal" && (
+              <div
+                className="flex min-h-0 flex-1 flex-col"
+                aria-hidden={false}
+              >
+                <TerminalView />
+              </div>
+            )}
+            {/*
+             * PRJ-012 v1.0 / PM-925 (2026-04-20): ブラウザプレビュー (iframe)。
+             * 非表示時も display:none で mount 維持し iframe state を保つ
+             * （タブ切替で dev server への再接続を回避）。
+             */}
+            <div
+              className={cn(
+                "min-h-0 flex-1",
+                viewMode === "preview" ? "block" : "hidden"
+              )}
+              aria-hidden={viewMode !== "preview"}
+            >
+              <PreviewPane />
+            </div>
+          </motion.main>
+        </AnimatePresence>
+        {/* v3.5.3: 右 Inspector 完全撤去（Git / Status / Worktree / CLAUDE.md 全機能を
+            Sidebar / エディタ / 左 Rail に再配置。チャット + エディタを広く使うため。） */}
       </div>
       <StatusBar />
-      {/* PM-283: UpdateNotifier を一時 disable（M3 緊急対応、React error #185 切り分け中） */}
+      {/*
+       * v3.5 Chunk B: ImagePasteZone は Shell にグローバル 1 個だけマウント。
+       * hotkey は DOM 全体で capture されるため各 pane に配ると重複発火する。
+       * 貼付先は常に activePane（pane を変えれば paste 先も切替わる）。
+       */}
+      <ImagePasteZone paneId={activePaneId} />
+      {/*
+       * Next.js page children（WorkspacePage）をここに overlay として mount する。
+       * page 側は CommandPalette / SearchPalette / HelloBubble 等の上乗せ UI のみ。
+       */}
+      {children}
       {/* <UpdateNotifier /> */}
     </div>
+  );
+}
+
+/**
+ * PM-937 (2026-04-20): 分割モード選択 dropdown の 1 項目。
+ *
+ * 現在のモードに一致する項目に checkmark を表示する。選択で applyPaneMode(target) を呼ぶ。
+ * disabled は MAX_PANES 超過ケース（将来的に max が 2 に下げられた場合の guard）。
+ */
+function PaneModeItem({
+  icon,
+  label,
+  active,
+  disabled,
+  onSelect,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <DropdownMenuItem
+      disabled={disabled}
+      onSelect={(e) => {
+        // onSelect は default で menu を close するが、preventDefault しない方が UX 自然
+        e.preventDefault();
+        onSelect();
+      }}
+      className="flex items-center gap-2 text-[12px]"
+    >
+      {icon}
+      <span className="flex-1">{label}</span>
+      {active && <Check className="h-3.5 w-3.5" aria-hidden />}
+    </DropdownMenuItem>
+  );
+}
+
+/**
+ * Chat / Editor 切替 1 タブ。TitleBar 直下に配置。
+ */
+function ViewModeTab({
+  active,
+  onClick,
+  icon,
+  label,
+  badge,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  badge?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={cn(
+        "flex h-full items-center gap-1.5 border-b-2 px-3 text-[12px] font-medium transition-colors",
+        active
+          ? "border-primary text-foreground"
+          : "border-transparent text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {icon}
+      <span>{label}</span>
+      {badge && (
+        <span
+          aria-label={`${badge} 件開いています`}
+          className="ml-1 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground"
+        >
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }

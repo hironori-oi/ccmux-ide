@@ -97,6 +97,17 @@
     --ccmux-bg-overlay: 1;
     --ccmux-bg-size: cover;
     --ccmux-bg-repeat: no-repeat;
+
+    /*
+     * PM-926 / PM-928 / PM-932 hotfix: Terminal 背景色 (半透明黒) のデフォルト。
+     * PM-932 以降は **wrapper div** に適用され (DOM overlay 方式)、xterm canvas
+     * 自体は完全透明になる。TerminalPane.tsx は mount 時にこの variable を読取り、
+     * wrapper の inline style.background に適用する。
+     * 値は 0.5〜0.7 の範囲で調整するのが推奨 (小さすぎると text 可読性低下、
+     * 大きすぎると壁紙が見えない)。PM-932 では canvas 透過合成の不確実性を
+     * 排除したため、0.55 で text 可読性 + 壁紙透過のバランスが取れる。
+     */
+    --terminal-bg: rgba(0, 0, 0, 0.55);
   }
 
   /* 画像レイヤー + オーバーレイ層を効かせるため、body 自身の bg を透明化。

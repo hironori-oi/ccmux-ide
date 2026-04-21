@@ -9,8 +9,8 @@
 //!   - Global    : `~/.claude/commands/*.md`
 //!   - Project   : active project（引数で渡された場合） `.claude/commands/*.md`
 //!   - Cwd       : `std::env::current_dir()` を起点に親方向へ最大 5 階層、各階層の
-//!                 `.claude/commands/*.md` を走査。同名はより深い（= 近い）ディレクトリ
-//!                 を優先する。
+//!     `.claude/commands/*.md` を走査。同名はより深い（= 近い）ディレクトリ
+//!     を優先する。
 //!
 //! 重複処理: 同じ name のコマンドが複数スコープに存在する場合、優先順位は
 //!   Cwd（最も近い） > Project > Global。
@@ -21,25 +21,25 @@
 //!   `name` / `description` / `argument-hint` を拾う。無い場合は
 //!   filename (拡張子除く) を name、本文 1 行目（非空・非ヘッダ）を description とする。
 //!   `#` や `##` で始まる markdown ヘッダは description 候補にする（先頭 `#` を trim）。
+//!
+//! ## DEC-027 汎用化（v4 Chunk B）
+//!
+//! 旧版で持っていた `ORGANIZATION_SLASHES` 定数（claude-code-company 8 役の
+//! ハードコード）は **本リリースで完全に削除** した。slash 一覧は純粋な
+//! ファイル走査 + スコープ優先度のみで構築され、特定の組織スキーマに依存しない。
+//!
+//! - `SlashCmd.is_organization` は廃止
+//! - 並べ替えは「スコープ（cwd > project > global）→ alphabetical」のみ
+//! - UI 側の組織グループ表示も削除（`SlashPalette.tsx` 参照）
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-/// 組織ロール ID。これらに一致する slash は UI で「組織」グループに集約される。
-const ORGANIZATION_SLASHES: &[&str] = &[
-    "ceo",
-    "dev",
-    "pm",
-    "research",
-    "review",
-    "secretary",
-    "marketing",
-    "web-ops",
-];
-
 /// フロントエンドへ返す slash 1 件。
+///
+/// DEC-027: `is_organization` フィールドは v4 Chunk B で削除済。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlashCmd {
@@ -53,8 +53,6 @@ pub struct SlashCmd {
     pub source: String,
     /// 絶対パス（Monaco preview 用）。
     pub file_path: String,
-    /// 組織ロール slash なら true（UI で優先表示）。
-    pub is_organization: bool,
 }
 
 /// Tauri command: `~/.claude/commands/` + active project + cwd chain を走査する。
@@ -69,6 +67,19 @@ pub fn list_slash_commands(project_path: Option<String>) -> Result<Vec<SlashCmd>
     let project = project_path.as_deref().map(Path::new);
     let cwd = std::env::current_dir().ok();
     Ok(scan_all(project, cwd.as_deref()))
+}
+
+/// スコープ優先度（数値が小さいほど近い = 上に表示）。
+///
+/// DEC-027: 旧 `organization_rank` を置換。組織ロールハードコードは削除し、
+/// 純粋にスコープのみで決定する。
+fn source_rank(source: &str) -> u8 {
+    match source {
+        "cwd" => 0,
+        "project" => 1,
+        "global" => 2,
+        _ => 99,
+    }
 }
 
 /// 全スコープを走査して重複を解決した `Vec<SlashCmd>` を返す。
@@ -114,24 +125,15 @@ fn scan_all(project_root: Option<&Path>, cwd: Option<&Path>) -> Vec<SlashCmd> {
         }
     }
 
-    // 出力: 組織 → その他、内部は name 昇順で安定化。
+    // 出力: スコープ（cwd → project → global）で安定化。
+    // 同一スコープ内は name 昇順。
     let mut out: Vec<SlashCmd> = map.into_values().collect();
     out.sort_by(|a, b| {
-        let ord_a = organization_rank(&a.name);
-        let ord_b = organization_rank(&b.name);
-        ord_a.cmp(&ord_b).then_with(|| a.name.cmp(&b.name))
+        let ra = source_rank(&a.source);
+        let rb = source_rank(&b.source);
+        ra.cmp(&rb).then_with(|| a.name.cmp(&b.name))
     });
     out
-}
-
-/// 組織 role の並び順（8 組織の `ORGANIZATION_SLASHES` 順）。
-/// 非組織は 100 以上を返して末尾に寄せる。
-fn organization_rank(name_with_slash: &str) -> usize {
-    let name = name_with_slash.trim_start_matches('/');
-    ORGANIZATION_SLASHES
-        .iter()
-        .position(|s| *s == name)
-        .unwrap_or(100)
 }
 
 /// `dir` 直下の `*.md` を走査して `SlashCmd` のリストにする。
@@ -192,16 +194,12 @@ fn parse_cmd_file(path: &Path, stem: &str, source: &str) -> Result<SlashCmd, Str
         .trim()
         .to_string();
 
-    let simple_name = name_with_slash.trim_start_matches('/');
-    let is_org = ORGANIZATION_SLASHES.iter().any(|s| *s == simple_name);
-
     Ok(SlashCmd {
         name: name_with_slash,
         description,
         argument_hint: parsed.argument_hint,
         source: source.to_string(),
         file_path: path.to_string_lossy().into_owned(),
-        is_organization: is_org,
     })
 }
 
@@ -356,11 +354,10 @@ mod tests {
     }
 
     #[test]
-    fn organization_rank_orders_known_roles_first() {
-        assert_eq!(organization_rank("/ceo"), 0);
-        assert_eq!(organization_rank("/dev"), 1);
-        assert_eq!(organization_rank("/web-ops"), 7);
-        assert_eq!(organization_rank("/unknown"), 100);
+    fn source_rank_orders_cwd_first_then_project_then_global() {
+        assert!(source_rank("cwd") < source_rank("project"));
+        assert!(source_rank("project") < source_rank("global"));
+        assert!(source_rank("global") < source_rank("unknown"));
     }
 
     #[test]
@@ -395,16 +392,17 @@ mod tests {
     }
 
     #[test]
-    fn is_organization_flag_set_for_known_roles() {
+    fn scan_dir_does_not_set_organization_field_anymore() {
+        // DEC-027 v4 Chunk B: SlashCmd は is_organization フィールド自体を持たない。
+        // scan_dir が返す struct のフィールド集合を field 列挙でなくダミー使用で確認する。
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         write_file(&root.join("ceo.md"), "# CEO");
-        write_file(&root.join("other.md"), "# other");
 
         let cmds = scan_dir(root, "global");
         let ceo = cmds.iter().find(|c| c.name == "/ceo").unwrap();
-        let other = cmds.iter().find(|c| c.name == "/other").unwrap();
-        assert!(ceo.is_organization);
-        assert!(!other.is_organization);
+        assert_eq!(ceo.source, "global");
+        // 以下 4 フィールドの存在のみ確認（is_organization が無いことはコンパイルが保証）
+        let _ = (&ceo.name, &ceo.description, &ceo.argument_hint, &ceo.file_path);
     }
 }

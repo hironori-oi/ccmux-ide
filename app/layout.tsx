@@ -3,6 +3,7 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AppearanceInit } from "@/components/theme/AppearanceInit";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -26,6 +27,9 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
+          {/* PM-870 (v3.5.16): localStorage の appearance を起動時に DOM へ反映。
+              /settings を一度も開かないと背景画像が適用されないバグの修正。 */}
+          <AppearanceInit />
           {children}
           <Toaster richColors position="bottom-right" />
         </ThemeProvider>

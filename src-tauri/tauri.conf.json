@@ -19,11 +19,28 @@
         "minHeight": 600,
         "decorations": true,
         "transparent": false,
-        "acceptFirstMouse": true
+        "acceptFirstMouse": true,
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,IsolateOrigins,site-per-process --disable-site-isolation-trials"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://api.anthropic.com; img-src 'self' data: asset: http://asset.localhost https://asset.localhost"
+      "csp": "default-src 'self' https: http://localhost:* http://127.0.0.1:* http://*.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: http://localhost:* http://127.0.0.1:*; style-src 'self' 'unsafe-inline' https:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://api.anthropic.com https: wss: ws: http://localhost:* http://127.0.0.1:*; img-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost https: http://localhost:* http://127.0.0.1:*; font-src 'self' data: https:; media-src 'self' https: http://localhost:* http://127.0.0.1:*; frame-src 'self' http://localhost:* http://127.0.0.1:* http://*.localhost https:; worker-src 'self' blob:",
+      "devCsp": "default-src 'self' https: http://localhost:* http://127.0.0.1:* http://*.localhost; script-src 'self' 'unsafe-inline' 'unsafe-eval' https: http://localhost:* http://127.0.0.1:*; style-src 'self' 'unsafe-inline' https:; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost https://api.anthropic.com https: wss: ws: http://localhost:* http://127.0.0.1:*; img-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost https: http://localhost:* http://127.0.0.1:*; font-src 'self' data: https:; media-src 'self' https: http://localhost:* http://127.0.0.1:*; frame-src 'self' http://localhost:* http://127.0.0.1:* http://*.localhost https:; worker-src 'self' blob:",
+      "dangerousDisableAssetCspModification": ["frame-src", "connect-src", "img-src", "default-src"],
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$APPLOCALDATA/**",
+          "$APPDATA/ccmux-images/**",
+          "$HOME/.claude/**",
+          "$HOME/.ccmux-ide-gui/**",
+          "$HOME/Pictures/**",
+          "$HOME/Desktop/**",
+          "$HOME/Downloads/**",
+          "$HOME/Documents/**"
+        ]
+      }
     }
   },
   "bundle": {

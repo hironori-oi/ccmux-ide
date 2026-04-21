@@ -151,6 +151,41 @@ export type AgentQueryOptions = Pick<
   | "executable"
   | "additionalDirectories"
   | "settingSources"
+  /**
+   * v3.3.1 (Chunk C): query 中断用の AbortController。
+   * sidecar 側 main loop が `{type:"interrupt"}` 受信時に `abort()` を呼ぶことで
+   * 進行中の SDK query が即座に終了する。
+   */
+  | "abortController"
+  /**
+   * PM-760 / v3.4.9 Chunk A: 推論 (extended thinking) budget の上限。
+   *
+   * StatusBar の EffortPickerPopover 選択値 (`EFFORT_CHOICES.thinkingTokens`:
+   * 1024 / 8192 / 32768 / 65536) を argv 経由で sidecar に渡し、SDK の
+   * `query({ options: { maxThinkingTokens: N } })` に流し込む。
+   *
+   * SDK 0.2.x では adaptive thinking (`thinking: { type: 'adaptive' }`) が推奨だが、
+   * `maxThinkingTokens` も引き続き後方互換で受け付けるため、まずは UI の
+   * 4 段階選択に素直に対応するこちらを採用する (将来 adaptive + effort 文字列に
+   * 切り替える場合は PM-761 として別チケット化)。
+   */
+  | "maxThinkingTokens"
+  /**
+   * PM-830 (v3.5.14): Claude Agent SDK 側 session を継続するための resume option。
+   *
+   * `query({ resume: sdk_session_id })` で過去会話 history を SDK 側がロードし、
+   * 同一 session として返答する (Claude が前回会話の context を覚えている状態)。
+   * sdk_session_id は `SDKSystemMessage(subtype:"init").session_id` から取得し、
+   * 初回送信完了時に sidecar から `sdk_session_ready` outbound event で frontend
+   * に通知 → frontend が DB の sessions.sdk_session_id に保存 → 2 回目以降の送信
+   * 時に `send_agent_prompt(resume: sdk_session_id)` として渡されてここに到達する。
+   *
+   * SDK 仕様: `resume` 指定時は `sessionId` / `continue` と排他。SDK が history
+   * を見つけられない (jsonl 削除済 等) 場合は throw するため、sidecar 側で catch
+   * して `error` event の payload に `kind: "resume_failed"` を含めて frontend に
+   * 通知し、frontend は次回送信時に sdk_session_id を null にして fallback する。
+   */
+  | "resume"
 >;
 
 /**

@@ -1,10 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
-import dynamic from "next/dynamic";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { readTextFile, stat } from "@tauri-apps/plugin-fs";
-import { FileText, Loader2 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { FileText, ImageIcon, Loader2 } from "lucide-react";
 
 import {
   Dialog,
@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SafeMonacoEditor } from "@/components/common/SafeMonacoEditor";
 import { detectLang } from "@/lib/detect-lang";
 import { cn } from "@/lib/utils";
 
@@ -29,14 +30,6 @@ import { cn } from "@/lib/utils";
  * - Dialog サイズ: max-w-[900px] / max-h-[80vh]
  */
 
-const MonacoEditor = dynamic(
-  () => import("@monaco-editor/react").then((mod) => mod.default),
-  {
-    ssr: false,
-    loading: () => <EditorSkeleton />,
-  }
-);
-
 export interface FilePreviewDialogProps {
   /** プレビュー対象の絶対パス（`null` で閉状態） */
   filePath: string | null;
@@ -46,8 +39,56 @@ export interface FilePreviewDialogProps {
   onClose: () => void;
 }
 
-/** 500KB を超えるファイルはプレビュー対象外 */
-const MAX_PREVIEW_BYTES = 500 * 1024;
+/** 500KB を超えるテキストファイルはプレビュー対象外 */
+const MAX_TEXT_PREVIEW_BYTES = 500 * 1024;
+/** 画像は 10MB まで表示（超えると警告） */
+const MAX_IMAGE_PREVIEW_BYTES = 10 * 1024 * 1024;
+
+/** 画像として <img> 表示する拡張子（v3.4.4 追加）。 */
+const IMAGE_EXTS: ReadonlySet<string> = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "ico",
+  "svg",
+  "avif",
+]);
+
+/** 拡張子 → 画像判定。 */
+function isImagePath(path: string | null): boolean {
+  if (!path) return false;
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_EXTS.has(ext);
+}
+
+/** 拡張子 → MIME 推定（Blob 作成時に使用）。 */
+function guessImageMime(path: string): string {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  switch (ext) {
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "bmp":
+      return "image/bmp";
+    case "ico":
+      return "image/x-icon";
+    case "svg":
+      return "image/svg+xml";
+    case "avif":
+      return "image/avif";
+    default:
+      return "application/octet-stream";
+  }
+}
 
 interface LoadState {
   content: string | null;
@@ -56,6 +97,8 @@ interface LoadState {
   error: string | null;
   tooLarge: boolean;
   isLoading: boolean;
+  /** v3.4.4: 画像ファイルフラグ。true の場合 `content` は Blob URL。 */
+  isImage: boolean;
 }
 
 const INITIAL_STATE: LoadState = {
@@ -65,6 +108,7 @@ const INITIAL_STATE: LoadState = {
   error: null,
   tooLarge: false,
   isLoading: false,
+  isImage: false,
 };
 
 export function FilePreviewDialog({
@@ -73,11 +117,18 @@ export function FilePreviewDialog({
   onClose,
 }: FilePreviewDialogProps) {
   const [state, setState] = useState<LoadState>(INITIAL_STATE);
+  // v3.4.4: 画像用 Blob URL の ref。unmount / 再読込時に revoke する。
+  const imageUrlRef = useRef<string | null>(null);
   const { resolvedTheme } = useTheme();
   const monacoTheme = resolvedTheme === "dark" ? "vs-dark" : "vs-light";
 
   useEffect(() => {
     if (!filePath) {
+      // 前の Blob URL を revoke
+      if (imageUrlRef.current) {
+        URL.revokeObjectURL(imageUrlRef.current);
+        imageUrlRef.current = null;
+      }
       setState(INITIAL_STATE);
       return;
     }
@@ -90,8 +141,53 @@ export function FilePreviewDialog({
         const meta = await stat(filePath);
         const size = meta.size ?? 0;
         const mtime = meta.mtime ? new Date(meta.mtime) : null;
+        const isImage = isImagePath(filePath);
 
-        if (size > MAX_PREVIEW_BYTES) {
+        // v3.4.4: 画像なら readFile → Blob URL 経路
+        if (isImage) {
+          if (size > MAX_IMAGE_PREVIEW_BYTES) {
+            if (cancelled) return;
+            setState({
+              content: null,
+              bytes: size,
+              mtime,
+              error: null,
+              tooLarge: true,
+              isLoading: false,
+              isImage: true,
+            });
+            return;
+          }
+          // v3.4.5 hot-fix: tauri-plugin-fs の readFile を避け、std::fs 版の
+          // Rust command `read_file_bytes` を使う（capability / path 正規化回避）。
+          // Rust 側は Vec<u8> を JSON 配列でシリアライズするので
+          // `number[]` で受け取り、`Uint8Array.from()` で復元する。
+          const bytesArr = await invoke<number[]>("read_file_bytes", {
+            path: filePath,
+          });
+          if (cancelled) return;
+          const bytes = Uint8Array.from(bytesArr);
+          // 旧 Blob URL を revoke（連続プレビュー時のメモリリーク防止）
+          if (imageUrlRef.current) {
+            URL.revokeObjectURL(imageUrlRef.current);
+          }
+          const blob = new Blob([bytes], { type: guessImageMime(filePath) });
+          const url = URL.createObjectURL(blob);
+          imageUrlRef.current = url;
+          setState({
+            content: url,
+            bytes: size,
+            mtime,
+            error: null,
+            tooLarge: false,
+            isLoading: false,
+            isImage: true,
+          });
+          return;
+        }
+
+        // テキスト経路（既存）
+        if (size > MAX_TEXT_PREVIEW_BYTES) {
           if (cancelled) return;
           setState({
             content: null,
@@ -100,6 +196,7 @@ export function FilePreviewDialog({
             error: null,
             tooLarge: true,
             isLoading: false,
+            isImage: false,
           });
           return;
         }
@@ -113,6 +210,7 @@ export function FilePreviewDialog({
           error: null,
           tooLarge: false,
           isLoading: false,
+          isImage: false,
         });
       } catch (e) {
         if (cancelled) return;
@@ -127,6 +225,16 @@ export function FilePreviewDialog({
       cancelled = true;
     };
   }, [filePath]);
+
+  // アンマウント時に残った Blob URL を revoke
+  useEffect(() => {
+    return () => {
+      if (imageUrlRef.current) {
+        URL.revokeObjectURL(imageUrlRef.current);
+        imageUrlRef.current = null;
+      }
+    };
+  }, []);
 
   const open = filePath !== null;
   const fileName =
@@ -178,10 +286,15 @@ export function FilePreviewDialog({
 
           {!state.isLoading && !state.error && state.tooLarge && (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-xs text-muted-foreground">
-              <FileText className="h-6 w-6" aria-hidden />
+              {state.isImage ? (
+                <ImageIcon className="h-6 w-6" aria-hidden />
+              ) : (
+                <FileText className="h-6 w-6" aria-hidden />
+              )}
               <p>このファイルは大きすぎて表示できません</p>
               <p className="text-[10px]">
-                ({state.bytes != null ? humanSize(state.bytes) : "サイズ不明"} / 上限 500KB)
+                ({state.bytes != null ? humanSize(state.bytes) : "サイズ不明"} / 上限{" "}
+                {state.isImage ? "10MB" : "500KB"})
               </p>
             </div>
           )}
@@ -189,9 +302,20 @@ export function FilePreviewDialog({
           {!state.isLoading &&
             !state.error &&
             !state.tooLarge &&
-            state.content !== null && (
+            state.content !== null &&
+            (state.isImage ? (
+              /* v3.4.4: 画像プレビュー（Blob URL） */
+              <div className="flex flex-1 items-center justify-center overflow-auto bg-[repeating-conic-gradient(theme(colors.muted.DEFAULT)_0%_25%,transparent_0%_50%)_50%/20px_20px] p-4">
+                <img
+                  src={state.content}
+                  alt={fileName}
+                  className="max-h-full max-w-full object-contain shadow-md"
+                  draggable={false}
+                />
+              </div>
+            ) : (
               <Suspense fallback={<EditorSkeleton />}>
-                <MonacoEditor
+                <SafeMonacoEditor
                   height="60vh"
                   defaultLanguage={language}
                   language={language}
@@ -209,7 +333,7 @@ export function FilePreviewDialog({
                   }}
                 />
               </Suspense>
-            )}
+            ))}
         </div>
       </DialogContent>
     </Dialog>

@@ -1,11 +1,11 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import dynamic from "next/dynamic";
 import { useTheme } from "next-themes";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SafeMonacoDiffEditor } from "@/components/common/SafeMonacoDiffEditor";
 import { cn } from "@/lib/utils";
 
 /**
@@ -16,16 +16,13 @@ import { cn } from "@/lib/utils";
  * - Monaco 本体は ~1.5MB と重いので Suspense + Skeleton でプレースホルダを表示する。
  * - 折畳制御: 初期は 200px プレビュー、ユーザーが「展開」を押すと `maxHeight`（既定 400px）まで拡張。
  * - テーマは next-themes の `resolvedTheme` を参照し、`vs-dark` / `vs-light` を切替。
+ *
+ * ## PRJ-012 v3.3.x: Monaco dispose race 対策
+ * unmount 時の「TextModel got disposed before DiffEditorWidget model got reset」
+ * を抑制するため、`@monaco-editor/react` の `DiffEditor` を直接使うのではなく
+ * `SafeMonacoDiffEditor` 経由で利用する。
+ * 詳細: `components/common/SafeMonacoDiffEditor.tsx` の docblock 参照。
  */
-
-// DiffEditor は CSR でのみ読み込む（Monaco worker が window に依存するため）
-const DiffEditor = dynamic(
-  () => import("@monaco-editor/react").then((mod) => mod.DiffEditor),
-  {
-    ssr: false,
-    loading: () => <DiffEditorSkeleton />,
-  }
-);
 
 export interface DiffViewerProps {
   /** 変更前の内容（Edit tool の `old_string` 等） */
@@ -61,7 +58,7 @@ export function DiffViewer({
         style={{ height }}
       >
         <Suspense fallback={<DiffEditorSkeleton />}>
-          <DiffEditor
+          <SafeMonacoDiffEditor
             height={height}
             language={language}
             original={original}

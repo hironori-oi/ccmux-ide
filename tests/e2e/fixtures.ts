@@ -45,14 +45,18 @@ export interface TauriFixtureOptions {
     lastMessageExcerpt: string | null;
     lastMessageRole: string | null;
   }>;
-  /** 初期 slash コマンド一覧 */
+  /**
+   * 初期 slash コマンド一覧。
+   *
+   * DEC-027 v4 Chunk B: `isOrganization` フィールドは Rust 側 SlashCmd から
+   * 削除されたため、ここでも optional 扱い（残しておくが型上は許容）にした。
+   */
   slashCommands?: Array<{
     name: string;
     description: string;
     argumentHint: string | null;
     source: "global" | "project" | "cwd";
     filePath: string;
-    isOrganization: boolean;
   }>;
   /** 検索結果 */
   searchResults?: Array<{
@@ -65,7 +69,58 @@ export interface TauriFixtureOptions {
   }>;
   /** save_clipboard_image の返す絶対パス（null で「画像なし」） */
   clipboardImagePath?: string | null;
+  /**
+   * v3.3.1 Chunk B (S-1): 初期 project registry。
+   *
+   * 渡された場合、`installTauriMock` が `localStorage["ccmux-project-registry"]`
+   * へ zustand persist 互換の shape で書き込む。これにより `/workspace` を
+   * 開いた直後から `useProjectStore.activeProjectId` が確定し、ChatPanel が
+   * `agent:${activeProjectId}:raw` を listen する。spec 側からは
+   * `TEST_PROJECT_ID` を使って `agent:${id}:raw` を `emitMockEvent` で発火する。
+   *
+   * 省略時は registry を書かない（旧挙動: 「未選択」状態で start）。
+   */
+  initialProjects?: Array<{
+    id: string;
+    path: string;
+    title: string;
+    phase?: string;
+    colorIdx?: number;
+    lastSessionId?: string | null;
+    addedAt?: number;
+  }>;
+  /** 初期 active project id（initialProjects と組で使う）。 */
+  activeProjectId?: string | null;
 }
+
+/**
+ * v3.3.1 Chunk B: e2e spec 共通で使う固定 project id。
+ *
+ * `agent:${TEST_PROJECT_ID}:raw` 等の event 名で emit する spec が複数あり、
+ * 値を 1 か所に集約してずれを防ぐ。spec 側は registerProject の代わりに
+ * `setupE2EPage(page, FIXTURE_WITH_TEST_PROJECT)` を呼ぶだけで registry が
+ * 整い、`emitMockEvent(page, AGENT_RAW_EVENT, ...)` で listener に届く。
+ */
+export const TEST_PROJECT_ID = "e2e-project-fixed-uuid-0000-0001";
+export const TEST_PROJECT_PATH = "/tmp/ccmux-e2e/project-1";
+export const AGENT_RAW_EVENT = `agent:${TEST_PROJECT_ID}:raw`;
+export const AGENT_STDERR_EVENT = `agent:${TEST_PROJECT_ID}:stderr`;
+export const AGENT_TERMINATED_EVENT = `agent:${TEST_PROJECT_ID}:terminated`;
+
+/** 1 件 project が登録された状態で /workspace を開く共通 fixture。 */
+export const FIXTURE_WITH_TEST_PROJECT: TauriFixtureOptions = {
+  initialProjects: [
+    {
+      id: TEST_PROJECT_ID,
+      path: TEST_PROJECT_PATH,
+      title: "E2E テスト用プロジェクト",
+      colorIdx: 0,
+      lastSessionId: null,
+      addedAt: Date.now(),
+    },
+  ],
+  activeProjectId: TEST_PROJECT_ID,
+};
 
 const DEFAULT_OPTIONS: Required<TauriFixtureOptions> = {
   apiKey: null,
@@ -77,7 +132,6 @@ const DEFAULT_OPTIONS: Required<TauriFixtureOptions> = {
       argumentHint: "{指示}",
       source: "global",
       filePath: "/home/user/.claude/commands/ceo.md",
-      isOrganization: true,
     },
     {
       name: "/dev",
@@ -85,7 +139,6 @@ const DEFAULT_OPTIONS: Required<TauriFixtureOptions> = {
       argumentHint: "{指示}",
       source: "global",
       filePath: "/home/user/.claude/commands/dev.md",
-      isOrganization: true,
     },
     {
       name: "/pm",
@@ -93,11 +146,12 @@ const DEFAULT_OPTIONS: Required<TauriFixtureOptions> = {
       argumentHint: "{指示}",
       source: "global",
       filePath: "/home/user/.claude/commands/pm.md",
-      isOrganization: true,
     },
   ],
   searchResults: [],
   clipboardImagePath: "/tmp/ccmux-images/mock-clipboard.png",
+  initialProjects: [],
+  activeProjectId: null,
 };
 
 /**
@@ -216,15 +270,20 @@ export async function installTauriMock(
         return null;
       }
 
-      // ---------- agent sidecar ----------
+      // ---------- agent sidecar (v3.3 DEC-033 Multi-Sidecar) ----------
       if (cmd === "start_agent_sidecar") return null;
       if (cmd === "stop_agent_sidecar") return null;
+      if (cmd === "send_agent_interrupt") return null;
+      if (cmd === "list_active_sidecars") return [];
       if (cmd === "send_agent_prompt") {
         const id = (args?.id as string) ?? "mock-id";
+        const projectId = (args?.projectId as string | undefined) ?? null;
+        // v3.3: event は `agent:{projectId}:raw` を優先、projectId 無しなら legacy
+        const rawEvent = projectId ? `agent:${projectId}:raw` : "agent:raw";
         // 非同期で assistant 応答を mock stream
         setTimeout(() => {
           emit(
-            "agent:raw",
+            rawEvent,
             JSON.stringify({
               type: "message",
               id,
@@ -240,7 +299,7 @@ export async function installTauriMock(
           );
           setTimeout(() => {
             emit(
-              "agent:raw",
+              rawEvent,
               JSON.stringify({ type: "result", id, payload: {} })
             );
           }, 50);
@@ -382,6 +441,52 @@ export async function installTauriMock(
       window.localStorage.setItem("hasSeenWelcome", "1");
     } catch {
       // ignore
+    }
+
+    // -----------------------------------------------------------------
+    // v3.3.1 Chunk B (Should Fix S-1): zustand persist 互換 shape で
+    // project registry を初期投入する。
+    //
+    // useProjectStore は `persist({ name: "ccmux-project-registry", version: 1 })`
+    // で localStorage に `{ state: {...}, version: 1 }` の形で書く。
+    // partialize で persist 対象は `projects` / `activeProjectId` のみ。
+    // -----------------------------------------------------------------
+    if (Array.isArray(opts.initialProjects) && opts.initialProjects.length > 0) {
+      try {
+        const projects = (
+          opts.initialProjects as Array<{
+            id: string;
+            path: string;
+            title: string;
+            phase?: string;
+            colorIdx?: number;
+            lastSessionId?: string | null;
+            addedAt?: number;
+          }>
+        ).map((p) => ({
+          id: p.id,
+          path: p.path,
+          title: p.title,
+          phase: p.phase,
+          colorIdx: typeof p.colorIdx === "number" ? p.colorIdx : 0,
+          lastSessionId: p.lastSessionId ?? null,
+          preferredModel: undefined,
+          addedAt: p.addedAt ?? Date.now(),
+        }));
+        const payload = {
+          state: {
+            projects,
+            activeProjectId: (opts.activeProjectId as string | null) ?? null,
+          },
+          version: 1,
+        };
+        window.localStorage.setItem(
+          "ccmux-project-registry",
+          JSON.stringify(payload)
+        );
+      } catch {
+        // localStorage 失敗時は spec 側で activeProject 未設定として扱う
+      }
     }
   }, merged as unknown as Record<string, unknown>);
 }

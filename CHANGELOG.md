@@ -10,19 +10,58 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 見出しのバージョン表記を一致させてください（例: tag `v0.1.0` → 見出し `[v0.1.0]`）。
 
 ## [Unreleased]
+
+## [v1.0.0] - 2026-04-21
+
 ### Added
-- **公式 OAuth Usage API 連携**（PRJ-012 Round D'）。Anthropic 公式 Beta API (`GET https://api.anthropic.com/api/oauth/usage`, `anthropic-beta: oauth-2025-04-20`) を直接叩いて、Pro/Max プランの **5 時間ウィンドウ / 週次ウィンドウ / 追加クレジット**の正確な使用率と reset 時刻（ISO8601 UTC）を取得。Rust backend `get_oauth_usage` が `~/.claude/.credentials.json` の `claudeAiOauth.accessToken` を Bearer token として利用、5 分 in-memory cache + 10 秒 HTTP timeout + `reqwest` (rustls-tls) 実装。
-- StatusBar 中央に公式 5h / 7d ゲージ復活（Round C で廃止していたミニゲージの後継）。`5h: 45% ▓▓ ~19:00 | 7d: 62% ▓▓▓ 4/24` 形式で色段階（<60 緑 / <85 黄 / ≥85 赤）。
-- サイドバー `UsageStatsCard` 最上部の「公式レート制限」ブロックを **外部リンクカード → 実値表示**に格上げ。5h / 7d の %bar + リセット時刻（`今日 19:00` / `明日 10:00` / `4/24 09:00` の日本語 local 表記）+ `is_enabled` 有効時の追加クレジット（`%` + `used / monthly_limit USD`）を表示、手動 refresh ボタン + キャッシュ age (`cached N 分前`) 表示付き。
-- エラー時の誘導文言: credentials 未検出 → `claude login` 実行案内、OAuth token 期限切れ (HTTP 401) → `claude login` で再認証案内、retry ボタンで手動再取得。
+- **組込ターミナル本格版** (xterm.js + portable-pty)。cmd / PowerShell / bash / zsh / vim / python REPL 等 interactive command 対応、複数 pty の sub-tab 切替、Windows JobObject による orphan-process 防止 (PM-920 / DEC-045)
+- **Preview タブ**。外部ブラウザ連携 (`@tauri-apps/plugin-shell`) による URL プレビュー、プロジェクトごとに last URL を zustand persist (PM-925 / PM-936 / DEC-046 / DEC-048)
+- **Chat / Editor / Terminal の 1 / 2 / 4 pane 分割**。shadcn DropdownMenu で mode 切替、4 pane は 2×2 grid (垂直 PanelGroup 内に水平 PanelGroup 2 つ) (PM-924 / PM-937 / DEC-049 / DEC-050)
+- **`/effort` slash command**。model-level thinking effort の UI 連携 (PM-840)
+- **tool content の JSON 整形表示**。assistant の tool_use / tool_result を humanize、専用 view (Edit / Bash) + 汎用 pretty JSON fallback (PM-831 / PM-880)
+- **公式 OAuth Usage API 連携** (Round D')。`GET https://api.anthropic.com/api/oauth/usage` で Pro/Max プランの 5 時間 / 7 日 / 追加クレジット使用率を取得。StatusBar 中央のミニゲージ + サイドバー UsageStatsCard の実値化 (5 分 cache、`claude login` 誘導)
 
 ### Changed
-- PRJ-012 Round A の `claude /usage` CLI TUI parse 経路は廃止。`lib/stores/claude-usage.ts` と `hooks/useClaudeRateLimits.ts` を削除し、OAuth API ベースの `lib/stores/oauth-usage.ts` / `hooks/useClaudeOAuthUsage.ts` に置換。Rust 側の `claude_usage.rs` / `get_claude_rate_limits` command は将来の JSON mode 対応に備えて残置（invoke は継続、UI からは未呼出）。
+- **`/clear` で sidecar 再起動による完全 context リフレッシュ**。従来は conversation reset のみだったが、Claude session jsonl も cleanup (PM-910)
+- **Sidebar タブ順序**: ファイル / セッション / ルール / 実行状態 → **セッション / ファイル / ルール / 実行状態**。default active tab も sessions に変更
+- **Terminal Shell は conditional mount に移行**。`display:hidden` 常時 mount の 0x0 canvas race を構造的に解消 (PM-935 / DEC-047)
+- Round A の `claude /usage` CLI TUI parse 経路を廃止、OAuth API ベースに全面置換 (`lib/stores/oauth-usage.ts` / `hooks/useClaudeOAuthUsage.ts`)
+
+### Fixed
+- **Split Sessions で message が誤 pane に届く regression**。pm810-claim/resolve/release の 3-phase routing で sidecar event を正しい pane に配送 (PM-810)
+- **Session cache stale で resume 失敗する regression** (v3.5.19)。session 選択時の cache invalidation タイミング制御
+- **背景画像が起動時に反映されない bug**。AppearanceSettings 初期化と apply-accent の race (PM-870)
+- **Next.js CVE-2025-66478** (HTTP smuggling / SSRF / RCE / DoS 系 15 advisory) を 15.0.3 → 15.5.15 で解消。`npm audit critical 1 → 0` (T1-B)
+- **React 19 + zustand infinite loop 3 件**。MessageList / InputArea / ActivityIndicator の selector memoize 修正
+- `tailwind.config.ts` の ESM `require()` エラーを ESM import に移行
+- Terminal で `term.open()` が 0x0 container で呼ばれ canvas が永続破損する bug (PM-930 → PM-935 で根治)
+- Terminal の `pty_kill` deadlock (child mutex 共有で blocking wait が killer を block) を `ChildKiller` 分離で解消 (PM-921)
+
+### Security
+- **Tauri asset protocol scope 絞込**: `$HOME/**` → 8 具体 path (`$APPLOCALDATA/**` / `$APPDATA/ccmux-images/**` / `$HOME/.claude/**` / `$HOME/.ccmux-ide-gui/**` / `$HOME/Pictures/**` / `$HOME/Desktop/**` / `$HOME/Downloads/**` / `$HOME/Documents/**`) (T2-D)
+- **Frontend console.log を logger wrapper で `NODE_ENV` gate 化**。実コード 12 件を `logger.debug` に置換、warn / error は production でも残置 (T1-C)
+- Capability の `fs:scope $HOME/**` と `shell:allow-spawn args:true` は維持 (project cwd / sidecar args 可変要件、v1.1 で Rust 側 dynamic scope + whitelist 化予定) (T2-E)
+
+### Removed
+- **Frontend dead code 14 ファイル** (PM-770): `GitPanel` / `WorktreeTabs` / `Inspector` / `ProjectSwitcher` 等、過去の実験 UI で現在参照なし
+- **Rust 孤立 command 13 個** (PM-771): `git_*` / `worktree_*` / `status_*` 系、frontend から invoke なしの v3.4 以前残骸
 
 ### Known Issues
-- OAuth Usage API は Anthropic **Beta**（`anthropic-beta: oauth-2025-04-20`）のため仕様変更の可能性あり。top-level schema 崩壊時は UI 側で 3 ブロックそれぞれ個別に `null` 判定して partial 表示を維持する（`serde_json::from_value::<_>::ok()` で耐性を持たせた）。完全崩壊時はエラーメッセージを表示、Stage B（ローカル JSONL 集計）は引き続き利用可。
-- OAuth access token は `~/.claude/.credentials.json` の `claudeAiOauth.accessToken` 平文 JSON から読む。`claude login` 未実行時はこのファイルが存在せず取得不可（エラーメッセージで誘導）。token 文字列は log / error message に絶対出さない実装。
-- Round A 時代のミニゲージ仕様（AlertTriangle + 週次 Sonnet only）は OAuth API の seven_day 集約値に置き換わった（Anthropic の 7 日ウィンドウは all-models 合算のため Sonnet only は提供されない）。
+- Terminal 4 pane は PTY process が project 当たり最大 4 個生成、メモリ消費増 (ユーザ明示選択時のみ)
+- Terminal conditional mount の tradeoff として tab 切替で xterm scrollback が reset (PTY 自体は維持、v1.1 で data stream buffering 検討)
+- Preview は iframe 撤退のため完全な IDE 内 preview ではなく外部ブラウザ起動式 (v1.1 で Tauri 2 secondary webview window / Phase 4 案 D を再検証)
+- OAuth Usage API は Anthropic Beta のため仕様変更の可能性あり (partial `null` 判定で耐性確保)
+- WSL2 の日本語 IME は制約あり (Windows native ビルドを推奨)
+- 自己署名なし配布のため Windows SmartScreen / macOS Gatekeeper の警告あり (README の回避手順参照)
+- Updater は pubkey 未設定のため署名検証 skip (v1.1 で Ed25519 化予定)
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed
+- 組織運営統合は [claude-code-company](https://github.com/hironori-oi/claude-code-company) のメタ設計に基づく
+
+### Acceptance
+- v1.0 readiness audit: `pm-release-readiness-audit.md` (Tier 1 全完了、Tier 2-D/E 完了、Tier 2-G は v1.1 候補)
+- リリース手順: [docs/release-checklist.md](./docs/release-checklist.md)
 
 ## [v0.1.0] - 2026-04-19
 ### Added

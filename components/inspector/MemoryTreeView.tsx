@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import type { TreeNode } from "@/lib/types";
 
 /**
- * Week 6 Chunk 3 / PM-205: CLAUDE.md ツリービュー。
+ * Week 6 Chunk 3 / PM-205 + v5 Chunk C (DEC-030): CLAUDE.md ツリービュー。
  *
  * ## 仕様
  * - Rust `scan_memory_tree(repo_root)` を呼び、Global / Parent / Project / Cwd
@@ -32,11 +32,15 @@ import type { TreeNode } from "@/lib/types";
  *   watch セットアップに失敗した場合は 5 秒 polling に fallback。
  *
  * ## repo_root の決定
- * `scan_memory_tree` は引数 `repo_root: String` を要求する。Week 6 時点では
- * `cwd` が確定していないため、暫定で `invoke("plugin:path|resolve_directory",
- * { directory: "Home" })` → ホームディレクトリを `repo_root` として渡す。
- * M3 PM-203 の ProjectSwitcher が active project path を state で公開したら、
- * そこに切替える（TODO コメント参照）。
+ * `scan_memory_tree` は引数 `repo_root: String` を要求する。
+ *  - props で `repoRoot` が指定されている場合はそれを Project scope の root と
+ *    する（v5 Chunk C / DEC-030: Inspector が activeProject.path を渡す）。
+ *  - 未指定時は homeDir() を fallback として使う（active project 未選択時も
+ *    Global / Cwd scope は表示される）。
+ *
+ * v5 では Inspector 側が `key={activeProjectId}` + `repoRoot={activeProject.path}`
+ * で MemoryTreeView を再 mount するため、本コンポーネント内のフック状態
+ * （展開状態等）は project 切替で初期化される。
  */
 
 interface MemoryTreeViewProps {

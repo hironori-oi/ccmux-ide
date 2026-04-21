@@ -3,13 +3,19 @@
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { callTauri } from "@/lib/tauri-api";
-import { useChatStore } from "@/lib/stores/chat";
+import { useChatStore, DEFAULT_PANE_ID } from "@/lib/stores/chat";
 
 /**
  * PM-140: Ctrl/Cmd+V でクリップボード画像を取り込む透明レイヤー（hook のみ）。
  *
- * Tauri backend の `save_clipboard_image` command を invoke し、保存された
- * ローカル PNG の絶対パスを Zustand store に attachment として追加する。
+ * v3.5 Chunk B (Split Sessions): `paneId` prop を受け、当該 pane の attachments
+ * に追加する。複数 pane 表示時でも paste 先は「Ctrl+V を捕まえた pane」= props
+ * で明示された pane に確定し、active pane ではない側の pane でも直接 paste 可能
+ * にする（将来 pane 内に focus-scoped hotkey を配る拡張で役立つ）。
+ *
+ * 現状は各 pane に ImagePasteZone を 1 個ずつ mount すると ctrl+v が重複 fire
+ * してしまう（react-hotkeys-hook は DOM 全体で capture）ため、v3.5 Step 1 では
+ * Shell で 1 個だけ mount し、常に activePane に add する設計にする。
  *
  * 注: `react-hotkeys-hook` の `useHotkeys` は DOM 全体で capture するため、
  * チャット入力欄にフォーカスがあっても発火する。input 欄内での通常 paste を
@@ -17,7 +23,11 @@ import { useChatStore } from "@/lib/stores/chat";
  * を true にして browser デフォルトと共存、クリップボードに画像がある場合だけ
  * sidecar 経由保存、画像がなければ何もせずテキスト paste が通る）。
  */
-export function ImagePasteZone() {
+export function ImagePasteZone({
+  paneId = DEFAULT_PANE_ID,
+}: {
+  paneId?: string;
+}) {
   const appendAttachment = useChatStore((s) => s.appendAttachment);
 
   useHotkeys(
@@ -32,7 +42,9 @@ export function ImagePasteZone() {
           typeof crypto !== "undefined" && "randomUUID" in crypto
             ? crypto.randomUUID()
             : `att-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        appendAttachment({ id, path: savedPath });
+        // v3.5 Chunk B: 明示 paneId を指定して追加（どの pane でも hotkey fire で
+        // 「自 pane」を対象にする、active pane fallback にはしない）。
+        appendAttachment(paneId, { id, path: savedPath });
         toast.success("画像を添付しました");
       } catch (e) {
         toast.error(

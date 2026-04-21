@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Send, Paperclip, AlertTriangle, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -13,8 +14,29 @@ import {
 } from "@/components/ui/tooltip";
 import { ImageThumb } from "@/components/chat/ImageThumb";
 import { SlashPalette } from "@/components/palette/SlashPalette";
-import { useChatStore, type Attachment } from "@/lib/stores/chat";
+import { AtMentionPicker } from "@/components/chat/AtMentionPicker";
+import { HelpDialog } from "@/components/chat/HelpDialog";
+import { ClearSessionDialog } from "@/components/chat/ClearSessionDialog";
+import { ModelPickerDialog } from "@/components/chat/ModelPickerDialog";
+import { EffortPickerDialog } from "@/components/chat/EffortPickerDialog";
+import { useChatStore, DEFAULT_PANE_ID, type Attachment } from "@/lib/stores/chat";
+
+// React 19 + zustand: selector が新配列を返すと getSnapshot cache が効かず
+// infinite loop。固定参照の凍結空配列で回避。
+const EMPTY_ATTACHMENTS: readonly Attachment[] = Object.freeze([]);
+import { useProjectStore, findProjectById } from "@/lib/stores/project";
+import {
+  useSessionStore,
+  getSdkSessionIdFromCache,
+} from "@/lib/stores/session";
+import { claimNextSendForPane } from "@/hooks/useAllProjectsSidecarListener";
+import { logger } from "@/lib/logger";
 import { callTauri } from "@/lib/tauri-api";
+import { handleBuiltinSlash } from "@/lib/builtin-slash";
+import {
+  CCMUX_FILE_PATH_MIME,
+  formatFileMention,
+} from "@/lib/file-drag";
 import { writeFile, mkdir, exists, stat } from "@tauri-apps/plugin-fs";
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
 import { humanFileSize } from "@/lib/image-utils";
@@ -35,13 +57,29 @@ const LARGE_ATTACHMENT_BYTES = 100 * 1024;
  *   選択された slash を該当トークンに置換（末尾に空白を足してカーソル続行）
  * - SlashPalette 表示中は Ctrl+Enter 送信を抑止（slash 選択を優先）
  */
-export function InputArea() {
-  const attachments = useChatStore((s) => s.attachments);
+export function InputArea({
+  paneId = DEFAULT_PANE_ID,
+}: {
+  paneId?: string;
+}) {
+  const attachments = useChatStore(
+    (s) => (s.panes[paneId]?.attachments ?? EMPTY_ATTACHMENTS) as Attachment[]
+  );
   const appendAttachment = useChatStore((s) => s.appendAttachment);
   const clearAttachments = useChatStore((s) => s.clearAttachments);
   const appendMessage = useChatStore((s) => s.appendMessage);
   const setStreaming = useChatStore((s) => s.setStreaming);
-  const streaming = useChatStore((s) => s.streaming);
+  const streaming = useChatStore((s) => s.panes[paneId]?.streaming ?? false);
+  const setActivePane = useChatStore((s) => s.setActivePane);
+
+  // PRJ-012 v4 / Chunk C: 組込 slash dispatcher が router / workspaceRoot を要求する。
+  const router = useRouter();
+  const projects = useProjectStore((s) => s.projects);
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  const workspaceRoot = useMemo(
+    () => findProjectById(projects, activeProjectId)?.path ?? null,
+    [projects, activeProjectId]
+  );
 
   const [text, setText] = useState("");
   const [dragOver, setDragOver] = useState(false);
@@ -56,6 +94,9 @@ export function InputArea() {
   >({});
   // slash クエリは textarea の onChange / onKeyUp / onClick 時に再計算する
   const [slashQuery, setSlashQuery] = useState("");
+  // v3.4 Chunk B (DEC-034 Must 2): @file / @folder mention picker 状態
+  const [atOpen, setAtOpen] = useState(false);
+  const [atQuery, setAtQuery] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
 
@@ -98,20 +139,85 @@ export function InputArea() {
     };
   }, [attachments, attachmentSizes]);
 
-  /** 現在の caret で slash 断片を再評価して state に反映する。 */
+  /**
+   * 現在の caret で slash / at mention 断片を再評価して state に反映する。
+   *
+   * v3.4 Chunk B (DEC-034 Must 2): slash と at の排他制御。
+   * 同一トークンに両方が前置することは無いが、カーソル直近の token が
+   * `/` / `@` どちらで始まるかで分岐する。両方同時 open しないよう
+   * 以下の順で判定し、どちらかが open になればもう一方は close する:
+   *
+   *   1. slash（`/` 始まり） → SlashPalette を優先
+   *   2. at（`@` 始まり）    → AtMentionPicker
+   *   3. どちらでもない      → 両方 close
+   */
   function recomputeSlashAt(value: string, caret: number) {
-    const m = detectSlashFragment(value, caret);
-    if (m) {
-      setSlashQuery(m.query);
+    const s = detectSlashFragment(value, caret);
+    if (s) {
+      setSlashQuery(s.query);
       setSlashOpen(true);
-    } else {
-      setSlashOpen(false);
+      setAtOpen(false);
+      return;
     }
+    const a = detectAtFragment(value, caret);
+    if (a) {
+      setAtQuery(a.query);
+      setAtOpen(true);
+      setSlashOpen(false);
+      return;
+    }
+    setSlashOpen(false);
+    setAtOpen(false);
   }
 
   async function handleSend() {
     const trimmed = text.trim();
     if (!trimmed || streaming) return;
+
+    // v3.3 DEC-033: activeProjectId が無ければ送信不可（sidecar が無い）。
+    if (!activeProjectId) {
+      toast.error(
+        "プロジェクトが選択されていません。左のレールからプロジェクトを選ぶか追加してください。"
+      );
+      return;
+    }
+
+    // PRJ-012 v4 / Chunk C / DEC-028: Claude Code 組込 slash の intercept。
+    // 戻り値 true なら本入力欄が消費したと判断し、sidecar 送信せずクリアして終了。
+    if (handleBuiltinSlash(trimmed, { router, toast, workspaceRoot })) {
+      setText("");
+      setSlashOpen(false);
+      return;
+    }
+
+    // v3.5.13 crit fix (session 永続化): 送信時に session が無ければ自動作成する。
+    //
+    // 旧挙動: ユーザーが「新規セッション」ボタンを押さずに送信すると
+    //   currentSessionId が null のまま → chat store の appendMessage が DB に
+    //   書込まれず、リロードで会話が消失する致命バグがあった。
+    //
+    // 新挙動: paneId の currentSessionId が null なら、送信前に createNewSession
+    //   を await し、chat store の setSessionId までを同期的に済ませてから送る。
+    //   これで以降の appendMessage / finalizeStreamingMessage / updateToolUseStatus が
+    //   確定した session id に紐づいて DB に永続化される。
+    //
+    // 注意: createNewSession 内部で `useChatStore.getState().setSessionId(id)` が
+    // 呼ばれるが、paneId を明示指定していない（activePane 経由で書き込む）ため
+    // 念のため本 pane でも setSessionId を行って確実に紐付ける。
+    let sessionId =
+      useChatStore.getState().panes[paneId]?.currentSessionId ?? null;
+    if (!sessionId) {
+      try {
+        const session = await useSessionStore.getState().createNewSession();
+        sessionId = session.id;
+        useChatStore.getState().setSessionId(paneId, sessionId);
+      } catch (e) {
+        toast.error(
+          `セッション作成に失敗しました: ${e instanceof Error ? e.message : String(e)}`
+        );
+        return;
+      }
+    }
 
     const id =
       typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -125,37 +231,159 @@ export function InputArea() {
         : trimmed;
 
     // 画面には user message を添付画像付きで即追加（prompt は裏で sidecar へ）
-    appendMessage({
+    appendMessage(paneId, {
       id: `${id}:u`,
       role: "user",
       content: trimmed,
       attachments: [...attachments],
     });
     setText("");
-    setStreaming(true);
+    setStreaming(paneId, true);
+    // v3.3.2 Activity: 送信直後は thinking、最初の sidecar event で streaming / tool_use に遷移
+    useChatStore.getState().setActivity(paneId, { kind: "thinking" });
 
     try {
-      await callTauri<void>("send_agent_prompt", { id, prompt });
-      clearAttachments();
+      // v3.5.8 (2026-04-20): 停止中 sidecar の自動起動を廃止。
+      // 旧: 送信時に sidecar が未起動でも ensureSidecarRunning で自動起動し、
+      //     ユーザーが「停止」した意図が無視されていた。
+      // 新: stopped / error の場合は送信を拒否、TitleBar「起動」ボタンを促す。
+      //     starting / stopping（遷移中）の場合のみ polling で待つ。
+      const projectStore = useProjectStore.getState();
+      const initialStatus = projectStore.getSidecarStatus(activeProjectId);
+      if (initialStatus === "stopped" || initialStatus === "error") {
+        toast.error(
+          "Claude が停止中です。画面上部の「起動」ボタンを押してから送信してください。"
+        );
+        // 表示中のユーザーメッセージは残すが、streaming / thinking 状態を解除
+        setStreaming(paneId, false);
+        useChatStore.getState().setActivity(paneId, { kind: "idle" });
+        return;
+      }
+      if (initialStatus !== "running") {
+        // starting / stopping（遷移中）: running になるまで polling で待つ（最大 15s）
+        const POLL_INTERVAL_MS = 100;
+        const POLL_TIMEOUT_MS = 15_000;
+        let waited = 0;
+        while (waited < POLL_TIMEOUT_MS) {
+          const s = useProjectStore.getState().getSidecarStatus(activeProjectId);
+          if (s === "running") break;
+          if (s === "error" || s === "stopped") {
+            throw new Error(
+              "Claude が起動していません。画面上部の「起動」ボタンを押してください。"
+            );
+          }
+          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+          waited += POLL_INTERVAL_MS;
+        }
+        const finalStatus = useProjectStore
+          .getState()
+          .getSidecarStatus(activeProjectId);
+        if (finalStatus !== "running") {
+          throw new Error(
+            `Claude プロセスが起動中です（状態: ${finalStatus}）。数秒待ってから再送信してください。`
+          );
+        }
+      }
+
+      // v3.3 DEC-033: projectId を Rust に渡す。attachments は parallel sidecar
+      // 経路で渡せるよう配列 shape で同梱（現行 Rust command は `prompt` に
+      // `@"<path>"` 埋め込み済の文字列を受けるが、将来 attachment 分離に備え
+      // 別フィールドでも送っておく）。
+      //
+      // PM-830 (v3.5.14): 現 session の sdkSessionId があれば resume として渡す。
+      //   - 初回送信 (sdkSessionId == null) → SDK が新規 session を発行し、
+      //     sidecar が `sdk_session_ready` event で frontend に通知 → DB 保存
+      //   - 2 回目以降 → resume で前回会話 context を継続
+      //   - リロード後も session.sdkSessionId は DB に永続化されているため、
+      //     次の送信時にこの分岐で resume が付き Claude が文脈を覚えている
+      let sdkSessionId = getSdkSessionIdFromCache(sessionId);
+      // v3.5.19 PM-830 hotfix (2026-04-20): cache miss fallback (二重 safety net).
+      //
+      // root cause: `sdk_session_ready` event で updateSessionSdkId を呼んでも、
+      // 新規 session が session store cache (`sessions` 配列) に entry として
+      // 積まれていないと楽観更新 (`state.sessions.map(...)`) は no-op になり、
+      // cache に sdkSessionId が反映されない。結果、次回送信でこの cache lookup が
+      // null を返し resume=undefined で送信 → Claude が context を忘れる。
+      //
+      // fix: cache miss のとき fetchSessions() で DB から session 一覧を再 fetch
+      // し、直後に再度 lookup する。activeProjectId 経由の filter 付き query なので
+      // 当該 session が必ず返る（DB には sdk_session_ready 受信時に DB 書込み済み
+      // のはず）。fetchSessions が失敗しても送信 flow は継続（resume なし fallback）。
+      if (!sdkSessionId) {
+        try {
+          await useSessionStore.getState().fetchSessions();
+          const refreshed = getSdkSessionIdFromCache(sessionId);
+          if (refreshed) {
+            sdkSessionId = refreshed;
+            // PM-746 (2026-04-20): production gate のため logger.debug に移行。
+            logger.debug(
+              "[send] cache miss recovered via fetchSessions",
+              { sessionId, sdkSessionId },
+            );
+          }
+        } catch (e) {
+          // fetch 失敗時は resume なしで送信を続行（context は失われるが UX は止めない）
+          // PM-746: warn は production でも残すため console.warn 残置。
+          // eslint-disable-next-line no-console
+          console.warn("[send] fetchSessions fallback failed", e);
+        }
+      }
+      // v3.5.18 PM-830 hotfix debug (2026-04-20): model 切替後の resume 伝播を
+      // 可視化するため送信直前の値を log。root cause 特定後も dogfood 期間中は
+      // 残置し、後日 PM-746 相当のクリーンアップで削除予定。
+      // PM-746 (2026-04-20): production gate のため logger.debug に移行。
+      logger.debug(
+        "[send] resume=",
+        sdkSessionId,
+        "sessionId=",
+        sessionId,
+        "projectId=",
+        activeProjectId,
+        "cacheSessions=",
+        useSessionStore
+          .getState()
+          .sessions.map((s) => ({ id: s.id, sdk: s.sdkSessionId })),
+      );
+      // PRJ-012 PM-810 (v3.6 Step 1): 送信直前に自 paneId を pending FIFO キューに
+      // push する。sidecar からの最初の event 到着時に pop され `reqIdToPane` に
+      // 確定 mapping が作られる。以降同 requestId の event は必ず当該 pane に
+      // dispatch される (split second pane 送信時の DEFAULT_PANE_ID 誤配信を解消)。
+      claimNextSendForPane(activeProjectId, paneId);
+      await callTauri<void>("send_agent_prompt", {
+        projectId: activeProjectId,
+        id,
+        prompt,
+        attachments: attachments.map((a) => ({ path: a.path })),
+        // Rust 側は `resume: Option<String>`、null/undefined を送ると
+        // serde が None として扱う。明示的に null を渡しても same shape。
+        resume: sdkSessionId,
+      });
+      clearAttachments(paneId);
     } catch (e) {
       toast.error(`送信に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
-      setStreaming(false);
+      setStreaming(paneId, false);
     }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    // SlashPalette が開いている間は Ctrl+Enter 送信を抑制。
+    // SlashPalette / AtMentionPicker が開いている間は Ctrl+Enter 送信を抑制。
     // cmdk が Arrow / Enter を受けて選択するため、ここでは Escape だけ
     // 独自にハンドルする（Radix Popover が外側 Escape を取りこぼすことがあるため）。
-    if (slashOpen) {
+    //
+    // v3.4 Chunk B (DEC-034 Must 2): slash / at は排他 open なので、
+    // どちらか片方が open 状態 = palette open と同じ扱い。
+    const paletteOpen = slashOpen || atOpen;
+    if (paletteOpen) {
       if (e.key === "Escape") {
         e.preventDefault();
         setSlashOpen(false);
+        setAtOpen(false);
         return;
       }
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         // palette を閉じてから送信する（ユーザーが意図的に Ctrl+Enter するため）
         setSlashOpen(false);
+        setAtOpen(false);
         e.preventDefault();
         void handleSend();
         return;
@@ -205,12 +433,106 @@ export function InputArea() {
     });
   }
 
+  /**
+   * v3.4 Chunk B (DEC-034 Must 2): @file / @folder 選択時のコールバック。
+   *
+   * 現在の caret 左方向の `@...` 断片を `@"<path>" ` に置換し、末尾空白で
+   * カーソル続行可能に。既存の画像 attachment 経路（D&D で prompt 末尾に
+   * `@"<path>"` 追記）はそのまま維持し、本実装は textarea 内の任意位置に
+   * 挿入する点のみが差分。
+   *
+   * - path は project_root からの相対（Rust 側で `/` 正規化済）
+   * - ダブルクォート固定で日本語 / スペース対策（DEC-011 と同じ流儀）
+   * - Claude Code CLI / Agent SDK は `@"<path>"` を自動で Read tool に変換
+   */
+  function onAtSelect(path: string) {
+    const caret = textareaRef.current?.selectionStart ?? text.length;
+    const replaced = replaceAtFragment(text, caret, path);
+    setText(replaced.text);
+    setAtOpen(false);
+
+    queueMicrotask(() => {
+      const ta = textareaRef.current;
+      if (!ta) return;
+      ta.focus();
+      ta.setSelectionRange(replaced.caret, replaced.caret);
+    });
+  }
+
+  /**
+   * v3.4.7: ProjectTree からのファイルパス drop を受け付けて `@"<path>"` を
+   * textarea の caret 位置に注入する。既存の OS file drop（画像保存）とは
+   * カスタム MIME (`CCMUX_FILE_PATH_MIME`) で区別。
+   *
+   * - before / after の空白を解析して過不足ない space で連結
+   * - caret はメンション末尾に移動、textarea は focus
+   * - path の basename を toast で通知
+   */
+  function insertFileMentionAtCaret(path: string) {
+    const mention = formatFileMention(path);
+    const textarea = textareaRef.current;
+    if (!textarea) {
+      // fallback: 末尾追加
+      setText((prev) => {
+        const sep = prev.length === 0 || /\s$/.test(prev) ? "" : " ";
+        return `${prev}${sep}${mention} `;
+      });
+      toast.success(`${basename(path)} を追加しました`);
+      return;
+    }
+    const current = textarea.value;
+    const start = textarea.selectionStart ?? current.length;
+    const end = textarea.selectionEnd ?? current.length;
+    const before = current.slice(0, start);
+    const after = current.slice(end);
+    const needSpaceBefore = before.length > 0 && !/\s$/.test(before);
+    const needSpaceAfter = after.length > 0 && !/^\s/.test(after);
+    const insert = `${needSpaceBefore ? " " : ""}${mention}${needSpaceAfter ? " " : " "}`;
+    const next = before + insert + after;
+    setText(next);
+    // caret を挿入文字列の直後に移動
+    requestAnimationFrame(() => {
+      const pos = (before + insert).length;
+      textarea.setSelectionRange(pos, pos);
+      textarea.focus();
+    });
+    toast.success(`${basename(path)} を追加しました`);
+  }
+
   async function onDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setDragOver(false);
+
+    // v3.4.8 debug: drop 発火確認用（dogfood 後に削除予定）
+    // PM-746 (2026-04-20): production gate のため logger.debug に移行。
+    logger.debug("[drop] fired", {
+      types: Array.from(e.dataTransfer.types ?? []),
+      ccmux: e.dataTransfer.getData(CCMUX_FILE_PATH_MIME),
+      plain: e.dataTransfer.getData("text/plain"),
+      files: e.dataTransfer.files?.length ?? 0,
+    });
+
+    // v3.4.7: ProjectTree からの「ファイルパス drop」を優先処理。
+    // DOMStringList.includes 非互換環境に備えて直接 getData を試す（空文字なら未登録）。
+    const mentionPath = e.dataTransfer.getData(CCMUX_FILE_PATH_MIME);
+    if (mentionPath) {
+      insertFileMentionAtCaret(mentionPath);
+      return;
+    }
+    // fallback: text/plain に @"<path>" が入っていれば（ProjectTree が必ずセット）
+    // これを使って挿入する。
+    const plain = e.dataTransfer.getData("text/plain");
+    if (plain && plain.startsWith('@"') && plain.endsWith('"')) {
+      const fromPlain = plain.slice(2, -1);
+      if (fromPlain) {
+        insertFileMentionAtCaret(fromPlain);
+        return;
+      }
+    }
+
+    // 既存: OS からの画像 file drop（先頭 1 枚）を attachment に保存
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
-    // v3 制約: 先頭 1 枚のみ
     const file = files[0];
     if (!file.type.startsWith("image/")) {
       toast.error("画像ファイルのみドロップできます");
@@ -218,7 +540,7 @@ export function InputArea() {
     }
     try {
       const saved = await saveDroppedImage(file);
-      appendAttachment(saved);
+      appendAttachment(paneId, saved);
       toast.success("画像を添付しました");
     } catch (err) {
       toast.error(
@@ -227,10 +549,23 @@ export function InputArea() {
     }
   }
 
+  /** path の basename を取得（Windows / POSIX 両対応）。 */
+  function basename(p: string): string {
+    const parts = p.split(/[\\/]/).filter(Boolean);
+    return parts[parts.length - 1] ?? p;
+  }
+
   return (
     <div
+      onMouseDown={() => setActivePane(paneId)}
+      onFocusCapture={() => setActivePane(paneId)}
       onDragOver={(e) => {
+        // v3.4.7 再修正: Tauri WebView2 の `dataTransfer.types` は DOMStringList で
+        // `.includes()` が期待通り動かない実装が存在する。types チェック条件なしで
+        // 無条件に preventDefault + dropEffect="copy" にすると drop target として確実に
+        // 認識される。MIME の振り分けは onDrop 内で getData を試す方式で行う。
         e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
         setDragOver(true);
       }}
       onDragLeave={() => setDragOver(false)}
@@ -298,14 +633,38 @@ export function InputArea() {
               onKeyDown={onKeyDown}
               onKeyUp={onCaretMove}
               onClick={onCaretMove}
-              placeholder={
-                streaming
-                  ? "Claude が考え中です..."
-                  : "メッセージを入力（Ctrl+Enter で送信、/ でコマンド、画像は D&D または Ctrl+V）"
+              /*
+               * v3.4.7 修正: textarea は HTML5 DnD 仕様で browser default の
+               * テキスト挿入が発動し、親 div の onDrop に bubble しない。
+               * ProjectTree からのカスタム MIME drop をこの要素で受けるため
+               * 自身に onDragOver / onDrop を配置し、parent と同じ handler で処理。
+               * dragOver で `dropEffect = "copy"` を明示しないとカスタム MIME で
+               * 禁止マークが出るブラウザがあるため setData 互換化。
+               */
+              onDragOver={(e) => {
+                // v3.4.7 再修正: Tauri WebView2 の DOMStringList 互換性問題を回避。
+                // 無条件 preventDefault + dropEffect="copy" で drop target を確実化。
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "copy";
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              // onDrop は親 div と同ロジックを共有したいため、イベント要素型を揃える。
+              // React の型は要素ごとに別 handler を要求するが、内部で触るのは
+              // dataTransfer のみなので cast で安全に流用する。
+              onDrop={(e) =>
+                onDrop(e as unknown as React.DragEvent<HTMLDivElement>)
               }
-              disabled={streaming}
-              rows={3}
-              className="min-h-[72px] resize-none"
+              placeholder={
+                !activeProjectId
+                  ? "プロジェクトを選択してください（左のレールから ＋ で追加）"
+                  : streaming
+                    ? "Claude が考え中です..."
+                    : "メッセージを入力（Ctrl+Enter で送信、/ でコマンド、画像は D&D または Ctrl+V、ファイルは Files タブからドラッグ）"
+              }
+              disabled={streaming || !activeProjectId}
+              rows={2}
+              className="min-h-[52px] resize-none"
             />
             <SlashPalette
               open={slashOpen}
@@ -314,10 +673,20 @@ export function InputArea() {
               onSelect={onSlashSelect}
               anchorRef={wrapperRef}
             />
+            {/* v3.4 Chunk B (DEC-034 Must 2): @file / @folder mention picker */}
+            <AtMentionPicker
+              open={atOpen}
+              query={atQuery}
+              onOpenChange={(v) => {
+                if (!v) setAtOpen(false);
+              }}
+              onSelect={(p) => onAtSelect(p)}
+              anchorRef={wrapperRef}
+            />
           </div>
           <Button
             onClick={handleSend}
-            disabled={streaming || !text.trim()}
+            disabled={streaming || !text.trim() || !activeProjectId}
             className="h-10 shrink-0"
             aria-label="送信"
           >
@@ -326,6 +695,13 @@ export function InputArea() {
           </Button>
         </div>
       </div>
+
+      {/* PRJ-012 v4 / Chunk C: 組込 slash 用 dialog（open/close は useDialogStore） */}
+      <HelpDialog />
+      <ClearSessionDialog />
+      <ModelPickerDialog />
+      {/* v3.5.18 PM-840 派生: /effort で開く推論工数 picker */}
+      <EffortPickerDialog />
     </div>
   );
 }
@@ -420,6 +796,89 @@ export function replaceSlashFragment(
   const after = text.slice(match.end);
   // 末尾に空白を足して caret 続行
   const replacement = `${newSlash} `;
+  const nextText = `${before}${replacement}${after}`;
+  const nextCaret = match.start + replacement.length;
+  return { text: nextText, caret: nextCaret };
+}
+
+// ---------------------------------------------------------------------------
+// v3.4 Chunk B (DEC-034 Must 2): @file / @folder mention の detection / replacement
+// ---------------------------------------------------------------------------
+
+/**
+ * caret 左方向の `@...` トークン情報。
+ *
+ * - `query`: `@` を含まないクエリ文字列（例: `@proj` なら `"proj"`、`@` 単独なら `""`）
+ * - `start`: 置換対象の開始 index（`@` の位置）
+ * - `end`  : 置換対象の終了 index（caret 位置、exclusive）
+ */
+export interface AtMatch {
+  query: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * caret 左方向に at mention トークンを探す。
+ *
+ * 条件:
+ *  - caret 直前の連続非空白文字列が `@` で始まる
+ *  - その `@` の直前が「行頭」「空白」「改行」のいずれか（email 等の誤検出回避）
+ *  - 既に `@"..."` 形式で quote 内部にある場合は検出しない（クォート途中の `@` 誤爆防止）
+ *
+ * 注意: `@"<path>"` で既に quote された文字列は再編集対象にしない。この関数は
+ * 「quote を含まない素の `@foo`」のみを返す。
+ */
+export function detectAtFragment(text: string, caret: number): AtMatch | null {
+  if (caret <= 0) return null;
+  const left = text.slice(0, caret);
+  // 左方向に空白 / 改行まで後退
+  let i = left.length - 1;
+  while (i >= 0) {
+    const c = left[i];
+    if (c === " " || c === "\n" || c === "\t" || c === "\u3000") break;
+    i--;
+  }
+  const tokenStart = i + 1;
+  const token = left.slice(tokenStart);
+  if (!token.startsWith("@")) return null;
+
+  // `@"` で開始する token は既に quoted mention。picker を出さない。
+  if (token.startsWith('@"')) return null;
+
+  // token 内部に `"` / `/` を含む場合は URL/path 途中の `@` なので skip
+  // （ただし subpath 補完も欲しくなったら将来拡張）。
+  // 現実的には `@path/to/file` 相当は Rust 側 fuzzy で拾える前提で、
+  // 素のユーザー入力で `/` まで自分で打つケースは稀。ここでは stricter に
+  // ユーザー入力の `/` を許容する（path 絞込みに便利）ので `/` はスキップしない。
+  if (token.includes('"')) return null;
+
+  const query = token.slice(1);
+  return { query, start: tokenStart, end: caret };
+}
+
+/**
+ * `detectAtFragment` で検出された範囲を `@"<path>" ` に置換する。
+ *
+ * - path 内のダブルクォートは `\"` に escape（保険、通常のパスには含まれない）
+ * - 末尾に空白を付けてカーソル続行
+ *
+ * 選択後のカーソルは置換後の空白の**直後**に配置する。
+ */
+export function replaceAtFragment(
+  text: string,
+  caret: number,
+  path: string
+): { text: string; caret: number } {
+  const safePath = path.replace(/"/g, '\\"');
+  const replacement = `@"${safePath}" `;
+  const match = detectAtFragment(text, caret);
+  if (!match) {
+    const inserted = `${text.slice(0, caret)}${replacement}${text.slice(caret)}`;
+    return { text: inserted, caret: caret + replacement.length };
+  }
+  const before = text.slice(0, match.start);
+  const after = text.slice(match.end);
   const nextText = `${before}${replacement}${after}`;
   const nextCaret = match.start + replacement.length;
   return { text: nextText, caret: nextCaret };

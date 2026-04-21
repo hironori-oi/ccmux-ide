@@ -21,4 +21,24 @@ pub mod oauth_usage;
 pub mod search_fts;
 pub mod slash;
 pub mod usage;
-pub mod worktree;
+// PRJ-012 v3.5 / PM-771 (2026-04-20): `worktree` / `status` / `git` module は
+// v3.5.3 UI 再配置で frontend 呼出 0 となり PM-770 で列挙、本 round で物理削除。
+
+// PRJ-012 v4 / Chunk C: Claude Code 組込 slash コマンドの GUI ネイティブ実装。
+// （Chunk B との衝突回避のため末尾に append している。順序は意味を持たない。）
+pub mod builtin_slash;
+
+// PRJ-012 v3.4 / Chunk B (DEC-034 Must 2): @file / @folder mention picker 用。
+// project_root 配下を .gitignore 尊重で列挙する汎用 file lister。
+// 他 Chunk（A / C）との衝突回避のため末尾に append。
+pub mod file_list;
+
+// PRJ-012 v3.4.5 (2026-04-20 hot-fix): tauri-plugin-fs の readDir / readFile が
+// Windows 絶対パス + 大量フォルダで hang する事象を回避する std::fs 版ユーティリティ。
+// ProjectTree の汎用化と FilePreviewDialog の画像プレビューで invoke される。
+pub mod fs_util;
+
+// PRJ-012 v1.0 / PM-920 / DEC-045 (2026-04-21): 組込ターミナル (xterm.js + Rust PTY)。
+// portable-pty 経由で cmd.exe / bash / zsh / python REPL / vim 等の interactive
+// command を native pseudo-terminal で起動する。末尾 append で他 module と排他。
+pub mod pty;

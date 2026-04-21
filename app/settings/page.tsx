@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { ArrowLeft, KeyRound, Keyboard, Palette } from "lucide-react";
+import { ArrowLeft, KeyRound, Keyboard, Palette, Plug } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -33,7 +33,8 @@ export default function SettingsPage() {
   const router = useRouter();
 
   return (
-    <div className="flex h-screen flex-col bg-background">
+    // PM-870: 背景画像 html::before を見せるため bg-background → bg-transparent。
+    <div className="flex h-screen flex-col bg-transparent">
       {/* ヘッダ */}
       <header className="flex items-center gap-3 border-b px-4 py-3">
         <Button
@@ -86,6 +87,18 @@ export default function SettingsPage() {
               <Keyboard className="h-4 w-4" aria-hidden />
               キーバインド
             </TabsTrigger>
+            {/* PRJ-012 v4 / Chunk C / DEC-028: MCP サーバ設定への導線。
+                Tabs の TabsContent ではなく専用ルート (/settings/mcp) を持たせている
+                のは、Monaco Editor を含む重い画面を遅延 load させるため。 */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => router.push("/settings/mcp")}
+              className="mt-1 justify-start gap-2 px-3 text-sm font-medium"
+            >
+              <Plug className="h-4 w-4" aria-hidden />
+              MCP
+            </Button>
           </TabsList>
 
           {/* 右コンテンツ */}

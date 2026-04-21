@@ -17,7 +17,7 @@ tauri-build = { version = "2.1", features = [] }
 
 [dependencies]
 # --- Tauri 2.1 本体 ---
-tauri = { version = "2.1", features = ["devtools"] }
+tauri = { version = "2.1", features = ["protocol-asset", "devtools"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
@@ -47,6 +47,11 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 similar = "2"
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
+# PRJ-012 v3.4 / Chunk B (DEC-034 Must 2): @file / @folder mention picker。
+# project_root 配下を .gitignore 尊重で列挙するために `ignore` crate を使う。
+# BurntSushi 氏の ripgrep 由来実装で、walkdir 互換 API + gitignore 解析を統合。
+# Linux/macOS/Windows いずれも追加 OS dep なしで動作する。
+ignore = "0.4"
 time = { version = "0.3", features = ["formatting", "macros"] }
 dirs = "5"
 # PRJ-012 Stage B: ~/.claude/projects/**/*.jsonl の ISO8601 timestamp を DateTime<Utc>
@@ -57,6 +62,30 @@ chrono = { version = "0.4", features = ["serde"] }
 # rustls-tls を選ぶ理由は (1) Windows/macOS/Linux で追加 OS dep 不要、
 # (2) Tauri の bundle size を抑える、(3) OpenSSL 依存を避けて CI を単純化。
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル (xterm.js + Rust PTY)。
+# portable-pty は ConPTY (Windows) / openpty (unix) をラップし、cmd.exe /
+# PowerShell / bash / zsh / python REPL / vim 等の interactive command を
+# native pseudo-terminal 経由で起動できる。
+# - Windows は内部で ConPTY を呼ぶ (Windows 10 1809+ 必須)
+# - unix は forkpty + TIOCSWINSZ で resize もサポート
+# - sidecar (Node.js) とは別ライフサイクル、AgentState の JobObject には載せず、
+#   本 module で独自に kill-on-drop を保証する。
+portable-pty = "0.8"
+
+# --- Windows-only: Sidecar orphan-process 対策 (DEC-033 v3.3.1 / Chunk A) ---
+# JobObject (CreateJobObjectW + AssignProcessToJobObject + JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+# で sidecar Node プロセスを親 Tauri に紐付け、親が強制終了されても子プロセス
+# (タスクマネージャ kill / Ctrl+C / panic) が必ず一緒に kill されるようにする。
+# Linux / macOS では nix の setpgid は plugin-shell の現状仕様で後付けが困難な
+# ため、Drop + Tauri exit hook の冗長 cleanup でカバー (本 DEC 末尾 §macOS/Linux)。
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_Security",
+] }
 
 [dev-dependencies]
 tempfile = "3"
