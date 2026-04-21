@@ -42,6 +42,13 @@ export interface TauriFixtureOptions {
     createdAt: number;
     updatedAt: number;
     projectPath: string | null;
+    /**
+     * v1.1.1 PM-946 (v5 Chunk B / DEC-032 以降 SessionSummary 必須 field):
+     * session を紐付けた project registry id。null は未分類。SessionList は
+     * これで activeProjectId filter を行う。
+     */
+    projectId?: string | null;
+    sdkSessionId?: string | null;
     lastMessageExcerpt: string | null;
     lastMessageRole: string | null;
   }>;
@@ -177,6 +184,19 @@ export async function installTauriMock(
       clipboardImagePath: string | null;
       messagesBySession: Record<string, unknown[]>;
       invokeLog: Array<{ cmd: string; args: unknown }>;
+      /**
+       * v1.1.1 PM-946: `plugin:fs|exists` を true 扱いにする path 集合。
+       *
+       * 旧 fixture は `plugin:fs|exists` を常に false で返していたため、
+       * `pruneStaleProjects()` が `initialProjects` で投入した project path を
+       * 「消えた」と判定して drop していた (= activeProjectId が null に戻り
+       * textarea / SessionList / PreviewPane が描画されない)。
+       *
+       * initialProjects の各 path を exists=true 扱いにすることで drop を回避。
+       * それ以外の path は従来通り false (prune 対象) を返す。
+       */
+      existingPaths: Set<string>;
+      runningSidecarIds: Set<string>;
     } = {
       apiKey: opts.apiKey as string | null,
       sessions: [...opts.sessions],
@@ -185,6 +205,23 @@ export async function installTauriMock(
       clipboardImagePath: opts.clipboardImagePath as string | null,
       messagesBySession: {},
       invokeLog: [],
+      existingPaths: new Set(
+        Array.isArray(opts.initialProjects)
+          ? (opts.initialProjects as Array<{ path: string }>).map((p) => p.path)
+          : []
+      ),
+      /**
+       * v1.1.1 PM-946: sidecar "running" 扱いの projectId 集合。
+       *
+       * `activeProjectId` が渡された場合、最初から running とみなして seed する。
+       * これにより chat spec 等で textarea から送信する際の `InputArea` の
+       * `status === "running"` guard が通過する。
+       *
+       * `start_agent_sidecar` / `stop_agent_sidecar` 経由でも更新される。
+       */
+      runningSidecarIds: new Set(
+        typeof opts.activeProjectId === "string" ? [opts.activeProjectId] : []
+      ),
     };
 
     (window as unknown as { __mockState: typeof mockState }).__mockState =
@@ -271,10 +308,29 @@ export async function installTauriMock(
       }
 
       // ---------- agent sidecar (v3.3 DEC-033 Multi-Sidecar) ----------
-      if (cmd === "start_agent_sidecar") return null;
-      if (cmd === "stop_agent_sidecar") return null;
+      if (cmd === "start_agent_sidecar") {
+        // v1.1.1 PM-946: sidecar 起動を mock。以降 `list_active_sidecars` は
+        // 本 projectId を "running" として返す (= sidecarStatus map が `running`
+        // に rebuild され、InputArea の送信 guard を通過する)。
+        const pid = (args?.projectId as string) ?? null;
+        if (pid) mockState.runningSidecarIds.add(pid);
+        return null;
+      }
+      if (cmd === "stop_agent_sidecar") {
+        const pid = (args?.projectId as string) ?? null;
+        if (pid) mockState.runningSidecarIds.delete(pid);
+        return null;
+      }
       if (cmd === "send_agent_interrupt") return null;
-      if (cmd === "list_active_sidecars") return [];
+      if (cmd === "list_active_sidecars") {
+        // v1.1.1 PM-946: runningSidecarIds の各 id を `SidecarInfo` 形で返す。
+        // `activeProjectId` が渡された spec は mockState 初期化時に seed 済。
+        return Array.from(mockState.runningSidecarIds).map((id) => ({
+          projectId: id,
+          cwd: "/tmp/ccmux-e2e/mock-cwd",
+          startedAt: Date.now(),
+        }));
+      }
       if (cmd === "send_agent_prompt") {
         const id = (args?.id as string) ?? "mock-id";
         const projectId = (args?.projectId as string | undefined) ?? null;
@@ -380,9 +436,30 @@ export async function installTauriMock(
       if (cmd === "check_updates") return { available: false };
       if (cmd === "install_update") return null;
 
+      // ---------- v1.1 PM-938 / DEC-046: Welcome 撤去後の認証 check ----------
+      // `app/page.tsx` (RootPage) は `/` アクセス時に `check_claude_authenticated`
+      // を invoke し、結果に関わらず `/workspace` に遷移する。spec は基本
+      // `/workspace` 直叩きだが、fixture が本 cmd を返せないと `console.warn`
+      // (logger) が出て debug ログが汚れるので mock しておく。
+      if (cmd === "check_claude_authenticated") return "Authenticated";
+
+      // ---------- v1.1 PM-944 (Preview Phase 4.1): Rust spawn_preview_window ----------
+      // PreviewPane から `callTauri("spawn_preview_window", { label, url, title })`
+      // が呼ばれる。E2E 環境では WebView2 / OS window は実在しないので、
+      // 成功 stub (`null`) を返す。spec 側は invokeLog で cmd / args を検証する。
+      if (cmd === "spawn_preview_window") return null;
+
       // ---------- plugin:* passthrough ----------
       if (cmd.startsWith("plugin:")) {
-        if (cmd === "plugin:fs|exists") return false;
+        if (cmd === "plugin:fs|exists") {
+          // v1.1.1 PM-946: initialProjects で投入した path は true を返し、
+          // `pruneStaleProjects()` が project を drop しないようにする。
+          const path = (args as { path?: string } | undefined)?.path;
+          if (typeof path === "string" && mockState.existingPaths.has(path)) {
+            return true;
+          }
+          return false;
+        }
         if (cmd === "plugin:fs|read_dir") return [];
         if (cmd === "plugin:fs|read_text_file") return "# mock\n";
         if (cmd === "plugin:path|resolve_directory") return "/tmp";

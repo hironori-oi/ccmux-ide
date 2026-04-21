@@ -67,8 +67,10 @@ test.describe("Monaco Diff for Edit tool", () => {
       .click();
 
     // Monaco 本体は lazy load、初回描画に数秒かかる。
-    // `.monaco-editor` クラスの DOM が出るのを待つ。
-    await expect(page.locator(".monaco-editor").first()).toBeVisible({
+    // v1.1.1 PM-946: Monaco の DOM は `<div class="monaco-editor">` を複数持つ
+    // (`gutter monaco-editor` 内部 div は hidden)。`.monaco-diff-editor` を
+    // target にすると diff 専用 root がヒットし、visible 判定が安定する。
+    await expect(page.locator(".monaco-diff-editor").first()).toBeVisible({
       timeout: 15_000,
     });
 

@@ -932,6 +932,14 @@ export const useProjectStore = create<ProjectState>()(
           // 新: **Rust 側の `list_active_sidecars` で実態を取得し、sidecarStatus map を
           //     実態に合わせて復元する**。frontend の表示と Rust の HashMap が一致する。
           //     起動は明示操作（TitleBar の「起動」ボタン / 新規 registerProject）のみ。
+          //
+          // v1.1.1 PM-946 hotfix: SSR / Next.js build 時は `window` が無いので
+          // `@tauri-apps/api/core` の invoke が即死する (ReferenceError: window is not
+          // defined at project.ts:943)。persist middleware は onRehydrateStorage を
+          // SSR でも叩くケースがあるため、ここで明示的に server-side を早期 return する。
+          if (typeof window === "undefined") {
+            return;
+          }
           const live = useProjectStore.getState();
           try {
             const { invoke } = await import("@tauri-apps/api/core");

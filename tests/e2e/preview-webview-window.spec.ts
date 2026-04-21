@@ -8,14 +8,17 @@ import {
 /**
  * PRJ-012 v1.1 / PM-943 (2026-04-20): Preview Phase 4.1 — Tauri 2 secondary
  * `WebviewWindow` での in-app preview spawn smoke test。
+ * PRJ-012 v1.1.1 / PM-944 / PM-946 (2026-04-20): spawn 経路を Rust 側
+ * `spawn_preview_window` command に切替 (JS API `plugin:webview|create_webview_window`
+ * は PM-944 で廃止)。spec も invoke 名を追随。
  *
  * E2E は `next dev` を相手にしているので Tauri 本体は存在しない。fixtures の
- * `plugin:webview|create_webview_window` / `plugin:window|get_all_windows` 等を
- * 空 stub で mock し、PreviewPane から「アプリ内で開く」クリックで:
+ * `spawn_preview_window` / `plugin:window|get_all_windows` 等を空 stub で mock し、
+ * PreviewPane から「アプリ内で開く」クリックで:
  *
- * 1. `plugin:webview|create_webview_window` が **呼ばれる**（= 新規 spawn 経路に
- *    入った）ことを invoke log で検証
- * 2. URL が store に commit され、options.url として WebviewWindow に渡されることを検証
+ * 1. `spawn_preview_window` が **呼ばれる**（= 新規 spawn 経路に入った）ことを
+ *    invoke log で検証
+ * 2. URL が store に commit され、`url` として Rust command に渡されることを検証
  * 3. 「ブラウザで開く」クリックで `plugin:shell|open` が呼ばれることも検証
  *    (regression を回避)
  *
@@ -53,13 +56,13 @@ async function patchFsExistsTrue(
   });
 }
 
-test.describe("PreviewPane — in-app WebviewWindow (PM-943)", () => {
+test.describe("PreviewPane — in-app WebviewWindow (PM-944)", () => {
   test.beforeEach(async ({ page }) => {
     await setupE2EPage(page, FIXTURE_WITH_TEST_PROJECT);
     await patchFsExistsTrue(page);
   });
 
-  test("clicking 'アプリ内で開く' invokes create_webview_window", async ({
+  test("clicking 'アプリ内で開く' invokes spawn_preview_window", async ({
     page,
   }) => {
     await page.goto("/workspace");
@@ -77,30 +80,30 @@ test.describe("PreviewPane — in-app WebviewWindow (PM-943)", () => {
     // 「アプリ内で開く」ボタンクリック
     await page.getByRole("button", { name: "アプリ内で開く" }).click();
 
-    // invoke log に create_webview_window が乗っていること（mock 経由）
+    // invoke log に spawn_preview_window が乗っていること (PM-944 Rust command)
     await expect
       .poll(
         async () => {
           const log = await getInvokeLog(page);
-          return log.some(
-            (l) => l.cmd === "plugin:webview|create_webview_window"
-          );
+          return log.some((l) => l.cmd === "spawn_preview_window");
         },
         { timeout: 5_000 }
       )
       .toBe(true);
 
-    // spawn 時に渡された options.url が入力値と一致すること
+    // spawn 時に渡された url / label が入力値と一致すること
     const log = await getInvokeLog(page);
-    const spawn = log.find(
-      (l) => l.cmd === "plugin:webview|create_webview_window"
-    );
+    const spawn = log.find((l) => l.cmd === "spawn_preview_window");
     expect(spawn).toBeTruthy();
+    // PM-944: Rust command の引数は { label, url, title } の flat shape。
+    // PM-943 の JS API は { options: { url, label, ... } } だったが、v1.1.1 で廃止。
     const args = (spawn?.args ?? {}) as {
-      options?: { url?: string; label?: string };
+      label?: string;
+      url?: string;
+      title?: string;
     };
-    expect(args.options?.url).toBe("http://localhost:4321");
-    expect(args.options?.label).toMatch(/^preview:/);
+    expect(args.url).toBe("http://localhost:4321");
+    expect(args.label).toMatch(/^preview-/);
   });
 
   test("clicking 'ブラウザで開く' invokes shell open", async ({ page }) => {

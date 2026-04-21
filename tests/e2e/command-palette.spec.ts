@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { setupE2EPage } from "./helpers";
-import { getInvokeLog } from "./fixtures";
+import { FIXTURE_WITH_TEST_PROJECT, getInvokeLog } from "./fixtures";
 
 /**
  * PM-290 シナリオ 6: Command Palette。
@@ -8,10 +8,14 @@ import { getInvokeLog } from "./fixtures";
  * - /workspace で Ctrl+K → Dialog が開く
  * - 「新規セッション」項目が見える
  * - クリックで `create_session` invoke が呼ばれる
+ *
+ * v1.1 PM-939 / v1.1.1 PM-946: `create_session` は activeProjectId が null だと
+ * CommandItem 自体が disabled + Store 側で reject される。本 spec でも
+ * `FIXTURE_WITH_TEST_PROJECT` を渡して project を登録済 / active 状態にする。
  */
 test.describe("Command Palette (Ctrl+K)", () => {
   test.beforeEach(async ({ page }) => {
-    await setupE2EPage(page);
+    await setupE2EPage(page, FIXTURE_WITH_TEST_PROJECT);
   });
 
   test("opens on Ctrl+K and invokes create_session from 新規セッション", async ({
@@ -28,10 +32,16 @@ test.describe("Command Palette (Ctrl+K)", () => {
       page.getByPlaceholder(/操作を検索/)
     ).toBeVisible();
 
-    // 「新規セッション」項目（CommandShortcut ⌘⇧N が付く）
-    await expect(page.getByText("新規セッション").first()).toBeVisible();
-
-    await page.getByText("新規セッション").first().click();
+    // v1.1.1 PM-946: Welcome 撤去 + activeProjectId 登録後、sidebar の「新規
+    // セッション」ボタンも enabled になるため、`getByText("新規セッション").first()`
+    // は sidebar button を先に拾ってしまい、上に open しているコマンドパレット
+    // dialog の overlay (`bg-black/80`) に pointer event を block される。
+    // CommandPalette 内の CommandItem (role=option) に限定する。
+    const paletteItem = page
+      .getByRole("dialog")
+      .getByRole("option", { name: /新規セッション/ });
+    await expect(paletteItem).toBeVisible();
+    await paletteItem.click();
 
     // create_session が呼ばれたはず
     await page.waitForTimeout(300);
