@@ -157,6 +157,20 @@ pub struct OAuthUsageCache(pub Arc<Mutex<Option<(Instant, ClaudeOAuthUsage)>>>);
 // token 取得（OS 共通、`~/.claude/.credentials.json` 直読み）
 // ---------------------------------------------------------------------------
 
+/// `~/.claude/.credentials.json` のフルパスを返す（OS 間の HOME 差異を吸収）。
+///
+/// Windows では `USERPROFILE`、POSIX では `HOME` を参照する。どちらも未設定
+/// の場合は Err を返す（本プロジェクトの token 探索は常にこのパスからなので、
+/// `read_access_token` / `check_claude_authenticated` 両方で同じ基準を使う）。
+fn credentials_path() -> Result<PathBuf, String> {
+    let home = if cfg!(windows) {
+        std::env::var("USERPROFILE").map_err(|e| format!("USERPROFILE 環境変数が未設定: {e}"))?
+    } else {
+        std::env::var("HOME").map_err(|e| format!("HOME 環境変数が未設定: {e}"))?
+    };
+    Ok(PathBuf::from(home).join(".claude").join(".credentials.json"))
+}
+
 /// `~/.claude/.credentials.json` から OAuth access token を抽出する。
 ///
 /// 構造候補:
@@ -166,13 +180,7 @@ pub struct OAuthUsageCache(pub Arc<Mutex<Option<(Instant, ClaudeOAuthUsage)>>>);
 /// セキュリティ: 失敗メッセージには token を**絶対に含めない**。具体的な
 /// 「どこに何が無かったか」だけ返す。
 fn read_access_token() -> Result<String, String> {
-    // HOME / USERPROFILE の OS 分岐
-    let home = if cfg!(windows) {
-        std::env::var("USERPROFILE").map_err(|e| format!("USERPROFILE 環境変数が未設定: {e}"))?
-    } else {
-        std::env::var("HOME").map_err(|e| format!("HOME 環境変数が未設定: {e}"))?
-    };
-    let path = PathBuf::from(home).join(".claude").join(".credentials.json");
+    let path = credentials_path()?;
 
     if !path.exists() {
         return Err(format!(
@@ -200,6 +208,76 @@ fn read_access_token() -> Result<String, String> {
         "credentials JSON に access token が見つかりません (claudeAiOauth.accessToken / access_token いずれも無し)"
             .to_string(),
     )
+}
+
+// ---------------------------------------------------------------------------
+// 認証状態判定（PM-938 / v1.1 Welcome Wizard 撤去）
+// ---------------------------------------------------------------------------
+
+/// Claude Max / Pro 認証状態のスナップショット。
+///
+/// `app/page.tsx` の起動フローが `check_claude_authenticated` を invoke し、
+/// `Authenticated` なら `/workspace` へ直遷移、`NotFound` / `TokenMissing`
+/// なら toast で `claude login` を案内する。Network 呼出は一切しない（純粋に
+/// local file の存在 + JSON 構造チェックのみ）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "PascalCase")]
+pub enum AuthStatus {
+    /// `~/.claude/.credentials.json` が存在し、`claudeAiOauth.accessToken` が
+    /// 非空文字列で取得できた状態。token の *有効性* は検証しない
+    /// （期限切れかどうかは `/api/oauth/usage` の 401 で初めて分かる）。
+    Authenticated,
+    /// credentials.json 自体が未作成。`claude login` 未実施 or 別環境からの初回起動。
+    NotFound,
+    /// credentials.json はあるが、token 抽出に失敗した
+    /// （JSON parse 失敗 / accessToken 空 / path 不一致 等も含む）。
+    TokenMissing,
+}
+
+/// ローカル `~/.claude/.credentials.json` を読んで OAuth token の有無を判定する。
+///
+/// - Network 呼出なし（I/O は file read のみ、TTL は呼出し側で管理）。
+/// - token 文字列そのものは戻り値にも log にも**絶対に載せない**。
+/// - HOME / USERPROFILE 未設定等の異常系も `TokenMissing` に寄せる
+///   （frontend 起動フローが止まらないよう、Err 返却は最後の保険として残す）。
+///
+/// 返り値は enum なので、Tauri は `{ "Authenticated": null }` のような
+/// variant 形式ではなく、`#[serde(rename_all = "PascalCase")]` により
+/// `"Authenticated" | "NotFound" | "TokenMissing"` の文字列として渡す。
+#[tauri::command]
+pub fn check_claude_authenticated() -> Result<AuthStatus, String> {
+    let path = match credentials_path() {
+        Ok(p) => p,
+        // HOME / USERPROFILE が無い極端なケースは NotFound 同等で返す。
+        Err(_) => return Ok(AuthStatus::NotFound),
+    };
+
+    if !path.exists() {
+        return Ok(AuthStatus::NotFound);
+    }
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        // 読めないが file は存在する（permission 等）→ TokenMissing 扱い。
+        Err(_) => return Ok(AuthStatus::TokenMissing),
+    };
+
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return Ok(AuthStatus::TokenMissing),
+    };
+
+    let token = json
+        .pointer("/claudeAiOauth/accessToken")
+        .and_then(|v| v.as_str())
+        .or_else(|| json.pointer("/access_token").and_then(|v| v.as_str()))
+        .filter(|s| !s.is_empty());
+
+    if token.is_some() {
+        Ok(AuthStatus::Authenticated)
+    } else {
+        Ok(AuthStatus::TokenMissing)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -375,5 +453,72 @@ mod tests {
     #[test]
     fn cache_ttl_is_five_minutes() {
         assert_eq!(CACHE_TTL, Duration::from_secs(300));
+    }
+
+    // -----------------------------------------------------------------------
+    // PM-938 / v1.1: check_claude_authenticated の判定ロジック確認。
+    //
+    // token 文字列そのものを誤って戻り値に混ぜないことが最重要なので、
+    // 各 variant に対して serde で round-trip し、期待通りの文字列に serialize
+    // されることだけ確認する（実 file 読みは test 環境依存なので行わない）。
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn auth_status_serializes_as_pascal_string() {
+        let a = serde_json::to_string(&AuthStatus::Authenticated).unwrap();
+        let n = serde_json::to_string(&AuthStatus::NotFound).unwrap();
+        let t = serde_json::to_string(&AuthStatus::TokenMissing).unwrap();
+        assert_eq!(a, "\"Authenticated\"");
+        assert_eq!(n, "\"NotFound\"");
+        assert_eq!(t, "\"TokenMissing\"");
+    }
+
+    #[test]
+    fn auth_status_roundtrip() {
+        for v in [
+            AuthStatus::Authenticated,
+            AuthStatus::NotFound,
+            AuthStatus::TokenMissing,
+        ] {
+            let s = serde_json::to_string(&v).unwrap();
+            let back: AuthStatus = serde_json::from_str(&s).unwrap();
+            assert_eq!(v, back);
+        }
+    }
+
+    /// `claudeAiOauth.accessToken` が非空文字列なら Authenticated 相当の判定になる、
+    /// という本体ロジックを JSON 単体で検証する（file I/O は test しない）。
+    #[test]
+    fn token_extraction_mirror_authenticated_path() {
+        let body = r#"{ "claudeAiOauth": { "accessToken": "dummy-not-a-real-token" } }"#;
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        let token = json
+            .pointer("/claudeAiOauth/accessToken")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        assert!(token.is_some());
+    }
+
+    #[test]
+    fn token_extraction_mirror_empty_is_missing() {
+        let body = r#"{ "claudeAiOauth": { "accessToken": "" } }"#;
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        let token = json
+            .pointer("/claudeAiOauth/accessToken")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        assert!(token.is_none());
+    }
+
+    #[test]
+    fn token_extraction_mirror_legacy_fallback() {
+        let body = r#"{ "access_token": "legacy-shape" }"#;
+        let json: serde_json::Value = serde_json::from_str(body).unwrap();
+        let token = json
+            .pointer("/claudeAiOauth/accessToken")
+            .and_then(|v| v.as_str())
+            .or_else(|| json.pointer("/access_token").and_then(|v| v.as_str()))
+            .filter(|s| !s.is_empty());
+        assert!(token.is_some());
     }
 }

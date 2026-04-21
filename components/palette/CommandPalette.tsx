@@ -34,6 +34,7 @@ import {
 import { callTauri } from "@/lib/tauri-api";
 import { useChatStore } from "@/lib/stores/chat";
 import { useSessionStore } from "@/lib/stores/session";
+import { useProjectStore } from "@/lib/stores/project";
 
 /**
  * PM-171: Command Palette（Ctrl+K / Cmd+K で起動）。
@@ -66,6 +67,8 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
 
   const sessions = useSessionStore((s) => s.sessions);
   const appendAttachment = useChatStore((s) => s.appendAttachment);
+  // PM-939 (v3.5.22): プロジェクト未選択時は「新規セッション」項目を disabled にする。
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
   // mod+k = Cmd+K on Mac / Ctrl+K on Win/Linux（react-hotkeys-hook）
   useHotkeys(
@@ -91,6 +94,15 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
   // ----------------------- セッション -----------------------
 
   const handleNewSession = run(async () => {
+    // PM-939 (v3.5.22): プロジェクト未選択時はセッション作成不可。
+    // CommandItem を disabled にしているが、Ctrl+K 入力後 Enter で select が
+    // 飛ぶケース等の安全網として明示的に reject する。
+    if (!activeProjectId) {
+      toast.error(
+        "プロジェクトが選択されていません。左のレールからプロジェクトを作成/選択してください。"
+      );
+      return;
+    }
     try {
       await useSessionStore.getState().createNewSession();
       toast.success("新規セッションを開始しました");
@@ -199,9 +211,17 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
               <CommandItem
                 value="new-session 新規セッション new session"
                 onSelect={handleNewSession}
+                disabled={!activeProjectId}
               >
                 <MessageSquarePlus aria-hidden />
-                <span>新規セッション</span>
+                <span>
+                  新規セッション
+                  {!activeProjectId && (
+                    <span className="ml-2 text-[10px] text-muted-foreground">
+                      （プロジェクトを先に選択）
+                    </span>
+                  )}
+                </span>
                 <CommandShortcut>⌘⇧N</CommandShortcut>
               </CommandItem>
               {recentSessions.map((s) => {

@@ -29,7 +29,7 @@ use commands::{
     },
     image_paste::save_clipboard_image,
     memory_tree::scan_memory_tree,
-    oauth_usage::{get_oauth_usage, OAuthUsageCache},
+    oauth_usage::{check_claude_authenticated, get_oauth_usage, OAuthUsageCache},
     search_fts::{reindex_conversations, search_conversations, search_messages},
     slash::list_slash_commands,
     usage::get_usage_stats,
@@ -148,6 +148,10 @@ pub fn run() {
             get_claude_rate_limits,
             // PRJ-012 Round D': 公式 OAuth Usage API
             get_oauth_usage,
+            // PRJ-012 v1.1 / PM-938 (2026-04-20): Welcome Wizard 撤去後の起動時
+            // 認証自動検出。`~/.claude/.credentials.json` の claudeAiOauth.accessToken
+            // の有無だけを返す（network I/O なし、token 文字列は戻さない）。
+            check_claude_authenticated,
             // PRJ-012 v4 / Chunk C / DEC-028: Claude Code 組込 slash の GUI ネイティブ実装
             list_builtin_slashes,
             builtin_init_claude_md,
