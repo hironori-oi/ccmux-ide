@@ -197,26 +197,32 @@ export function PreviewPane() {
         logger.warn("[preview] enumerate windows failed:", enumErr);
       }
 
-      // 新規 spawn (必ず)
+      // PM-943 hotfix5: spawn config をシンプル化 + show を明示。
+      // hotfix4 で center+alwaysOnTop を付与したが OS 上に window が現れず
+      // 「一瞬緑に光る」症状発生。spawn 時は最小 config のみ、created で show+focus。
       const title = `Preview - ${target}`;
       const preview = new WebviewWindow(label, {
         url: target,
         title,
         width: 1280,
         height: 800,
-        resizable: true,
-        focus: true,
-        visible: true,
-        center: true,
-        alwaysOnTop: true, // PM-943 hotfix4: 前面表示を確実化、created 後に false に戻す
       });
 
-      // Promise を race させず、それぞれ once で listen する (Tauri の想定 API 使用法)。
-      // created / error はどちらか 1 つだけ発火する。
+      // Promise を race させず、それぞれ once で listen する。
       preview.once("tauri://created", async () => {
         registerWebviewWindow(activeProjectId, label);
-        // PM-943 hotfix4: create 直後に show / unminimize / setFocus を明示呼出、
-        // その後 alwaysOnTop を false に戻す (ユーザーが window を重ねられるよう)。
+        // debug: window state を log で確認 (visible / size / position)
+        try {
+          const isVisible = await preview.isVisible();
+          const isMinimized = await preview.isMinimized();
+          logger.info("[preview] window state after create:", {
+            label,
+            isVisible,
+            isMinimized,
+          });
+        } catch (stateErr) {
+          logger.warn("[preview] state probe failed:", stateErr);
+        }
         try {
           await preview.show();
         } catch (e) {
@@ -232,14 +238,6 @@ export function PreviewPane() {
         } catch (e) {
           logger.warn("[preview] setFocus after create failed:", e);
         }
-        // 200ms 待って alwaysOnTop を解除 (前面表示確定してから)
-        setTimeout(async () => {
-          try {
-            await preview.setAlwaysOnTop(false);
-          } catch (e) {
-            logger.warn("[preview] release alwaysOnTop failed:", e);
-          }
-        }, 200);
         toast.success("アプリ内プレビューを開きました");
         logger.info("[preview] webview window created:", label, target);
       });
