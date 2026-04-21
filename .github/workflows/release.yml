@@ -71,7 +71,10 @@ jobs:
               src-tauri/target/release/bundle/nsis/*.exe
               src-tauri/target/release/bundle/msi/*.msi
           - label: 'darwin-x86_64'
-            runner: macos-13
+            # v1.0.1: macos-13 は GitHub で deprecated、macos-14 (Apple Silicon)
+            # で x86_64-apple-darwin を cross-compile する方針に変更。
+            # rustup の target 追加 + `--target x86_64-apple-darwin` で動作。
+            runner: macos-14
             rust_target: x86_64-apple-darwin
             tauri_args: '--target x86_64-apple-darwin'
             bundle_globs: |
