@@ -1,14 +1,17 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 
 import { logger } from "@/lib/logger";
-import { callTauri, onTauriEvent } from "@/lib/tauri-api";
+import { callTauri } from "@/lib/tauri-api";
 import {
   registerTerminalReset,
   unregisterTerminalReset,
 } from "@/components/terminal/terminal-reset-registry";
+import {
+  registerActiveTerminal,
+  unregisterActiveTerminal,
+} from "@/hooks/useTerminalListener";
 import "@xterm/xterm/css/xterm.css";
 
 /**
@@ -54,6 +57,18 @@ import "@xterm/xterm/css/xterm.css";
  *   作り、その内部に canvas を配置する。`inner` 自身の background は透明
  *   (wrapper の overlay が見える) にすることで合成成立。
  * - ResizeObserver は `innerRef` を観察 (canvas の描画先サイズ基準)。
+ *
+ * ## PM-941 (2026-04-20): tab 切替 scrollback 保持
+ * - PM-935 の conditional mount で 0x0 race は消滅したが、tab 切替で
+ *   TerminalPane が unmount → xterm dispose → scrollback 消失の回帰が発生。
+ * - 対策: `pty:{id}:data` の subscribe を `useTerminalListener` (Shell
+ *   singleton) へ移管し、module-level の ring buffer に常時蓄積する。
+ *   TerminalPane は mount 時に `registerActiveTerminal(ptyId, term)` を
+ *   呼ぶだけで、buffer の再現と以降の live write を subscriber pattern で
+ *   受け取る。unmount 時は `unregisterActiveTerminal(ptyId, term)` で
+ *   解除 (buffer 自体は保持、pty が store から消えた時点で buffer も削除)。
+ * - pendingWrites の pane-local 先取り buffer は本変更で不要化 (singleton
+ *   listener が pane mount 前の出力も buffer に貯めているため)。
  *
  * ## PM-934 (2026-04-20): 0x0 defer 無限ループの hotfix
  * - PM-932 で wrapper + inner の 2 層化を行った結果、以下の症状が発生:
@@ -184,12 +199,14 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
         //      既に canvas が壊れているため text は表示されない (背景画像のみ見える)
         //
         // 対策: container が非 0 サイズになるまで term.open() を遅延する。
-        // その間の pty stdout は pendingWrites buffer に貯めて、open 後に flush。
+        // PM-941 以降、遅延期間中の pty stdout は useTerminalListener の
+        // module-level ring buffer に singleton で蓄積されており、open 成功
+        // 直後の `registerActiveTerminal` で一括再現される (pane-local
+        // pendingWrites は不要)。
         //
         // container が初期から visible なら即座に open、hidden なら ResizeObserver
         // で visibility を待つ。どちらの経路でも pty stdout は取り逃さない。
 
-        const pendingWrites: string[] = [];
         let termOpened = false;
         // PM-934: rAF 再試行 loop の attempt counter。ID 自体は outer scope の
         // `pendingRafId` に保持 (cleanup から cancel できるように)。
@@ -254,14 +271,16 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
             rows: term.rows,
             width: rect.width,
             height: rect.height,
-            pending: pendingWrites.length,
           });
-          // 貯めていた stdout を flush (順序保持)。
-          if (pendingWrites.length > 0) {
-            for (const chunk of pendingWrites) {
-              term.write(chunk);
-            }
-            pendingWrites.length = 0;
+          // PM-941: singleton listener 側の scrollback buffer を一括再現 +
+          // 以降の live data event の subscriber として term を登録。
+          // 登録は register 関数内で atomic (buffer write → active map set)
+          // に実行されるため、登録前後で data event が重複 / 欠落することは
+          // ない (JS event loop の単一スレッド性質を利用)。
+          try {
+            registerActiveTerminal(ptyId, term);
+          } catch (e) {
+            logger.debug("[TerminalPane] registerActiveTerminal failed:", e);
           }
           try {
             term.focus();
@@ -326,31 +345,14 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
         cleanups.push(() => dataDisp.dispose());
 
         // stdout: Rust → xterm
-        // PM-930: term がまだ open されていない場合 (container 0x0 で遅延中) は
-        // pendingWrites に貯めて、flushAndOpen() で flush する。これにより
-        // tab 切替前に pty から届いた最初の prompt (`C:\...>` や bash の PS1) も
-        // 取りこぼさず表示できる。
-        let unlistenData: UnlistenFn | null = null;
-        try {
-          unlistenData = await onTauriEvent<string>(
-            `pty:${ptyId}:data`,
-            (payload) => {
-              if (typeof payload !== "string") return;
-              if (termOpened) {
-                term.write(payload);
-              } else {
-                pendingWrites.push(payload);
-              }
-            }
-          );
-        } catch (e) {
-          logger.warn("[TerminalPane] listen data failed:", e);
-        }
-        if (disposed) {
-          unlistenData?.();
-          return;
-        }
-        if (unlistenData) cleanups.push(unlistenData);
+        // PM-941: `pty:{ptyId}:data` の購読は useTerminalListener (Shell
+        // singleton) 側で一元管理する。TerminalPane は registerActiveTerminal
+        // で subscriber として登録されており、以降の data event は
+        // buffer 追記 + term.write() の両方が singleton 経路で処理される。
+        // 旧実装の pane-local listener は tab 切替で unmount される間の
+        // scrollback を保持できなかったため PM-941 で廃止。
+        cleanups.push(() => unregisterActiveTerminal(ptyId, term));
+        if (disposed) return;
 
         // resize: ResizeObserver で container size 変化を追い FitAddon + backend resize
         // 短時間に連続 resize されるケース (window 拡大中) は debounce で抑える。
