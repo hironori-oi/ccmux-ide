@@ -207,12 +207,39 @@ export function PreviewPane() {
         resizable: true,
         focus: true,
         visible: true,
+        center: true,
+        alwaysOnTop: true, // PM-943 hotfix4: 前面表示を確実化、created 後に false に戻す
       });
 
       // Promise を race させず、それぞれ once で listen する (Tauri の想定 API 使用法)。
       // created / error はどちらか 1 つだけ発火する。
-      preview.once("tauri://created", () => {
+      preview.once("tauri://created", async () => {
         registerWebviewWindow(activeProjectId, label);
+        // PM-943 hotfix4: create 直後に show / unminimize / setFocus を明示呼出、
+        // その後 alwaysOnTop を false に戻す (ユーザーが window を重ねられるよう)。
+        try {
+          await preview.show();
+        } catch (e) {
+          logger.warn("[preview] show failed:", e);
+        }
+        try {
+          await preview.unminimize();
+        } catch (e) {
+          logger.warn("[preview] unminimize failed:", e);
+        }
+        try {
+          await preview.setFocus();
+        } catch (e) {
+          logger.warn("[preview] setFocus after create failed:", e);
+        }
+        // 200ms 待って alwaysOnTop を解除 (前面表示確定してから)
+        setTimeout(async () => {
+          try {
+            await preview.setAlwaysOnTop(false);
+          } catch (e) {
+            logger.warn("[preview] release alwaysOnTop failed:", e);
+          }
+        }, 200);
         toast.success("アプリ内プレビューを開きました");
         logger.info("[preview] webview window created:", label, target);
       });
