@@ -72,15 +72,19 @@ import {
  *   close/create を navigate に置き換えて reload コストを削減する。
  */
 
-// PM-943: WebviewWindow label は `preview:${projectId}` で統一。
-// ただし Tauri の label 仕様 (alphanumeric / `-/:_` のみ) に合わせ、projectId に
-// 混入し得る記号をサニタイズする。
+// PM-943: WebviewWindow label の prefix は `preview-${projectId}-`。
+// PM-943 hotfix3: 固定 label だと `already exists` race (destroy 未完了 / OS 残存 /
+// enumerate 漏れ) を完全には回避できなかったため、timestamp nonce を付与して毎回
+// unique label で spawn する方式に変更。古い window は label prefix 一致で destroy。
 //
-// projectId は UUID (例: `e2e-project-fixed-uuid-0000-0001`) 前提なので `-` / 英数字
-// のみで既に safe な想定だが、将来ゆるめた値が来ても落ちないよう保険を入れる。
+// Tauri 2 の label 仕様は alphanumeric / `-` / `_` を推奨。`:` は実装上許容だが
+// 安全側に `-` に統一。
+function buildPreviewWindowLabelPrefix(projectId: string): string {
+  const sanitized = projectId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `preview-${sanitized}-`;
+}
 function buildPreviewWindowLabel(projectId: string): string {
-  const sanitized = projectId.replace(/[^a-zA-Z0-9\-/:_]/g, "_");
-  return `preview:${sanitized}`;
+  return `${buildPreviewWindowLabelPrefix(projectId)}${Date.now()}`;
 }
 
 export function PreviewPane() {
@@ -173,14 +177,14 @@ export function PreviewPane() {
         "@tauri-apps/api/webviewWindow"
       );
 
-      // PM-943 hotfix2: getByLabel で漏れる残留 window (hidden / stale handle / destroy 未完了)
-      // を確実に除去するため、getAllWebviewWindows で label 一致するもの全 destroy。
-      // さらに Tauri 内部の label cleanup 完了を待つため短い delay を挟む
-      // (これをしないと `already exists` エラーで新規 spawn が失敗する)。
+      // PM-943 hotfix3: 古い preview window は label prefix 一致で全 destroy。
+      // 新 label は Date.now() 付与で unique のため、destroy 失敗しても
+      // `already exists` は発生しない (衝突しない新 label で spawn)。
+      const labelPrefix = buildPreviewWindowLabelPrefix(activeProjectId);
       try {
         const allWindows = await getAllWebviewWindows();
         for (const w of allWindows) {
-          if (w.label === label) {
+          if (w.label.startsWith(labelPrefix)) {
             try {
               await w.destroy();
             } catch (destroyErr) {
@@ -189,8 +193,6 @@ export function PreviewPane() {
           }
         }
         unregisterWebviewWindow(activeProjectId, label);
-        // Tauri 内部の label 解放を待つ (race 回避)
-        await new Promise((resolve) => setTimeout(resolve, 150));
       } catch (enumErr) {
         logger.warn("[preview] enumerate windows failed:", enumErr);
       }
