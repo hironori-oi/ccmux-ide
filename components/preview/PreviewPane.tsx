@@ -171,33 +171,21 @@ export function PreviewPane() {
       // runtime は Tauri webview 内でのみ動くので、lazy load で初回 bundle を軽くする。
       const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
 
-      // Step 1: 既存 window を探して focus を優先する。
+      // PM-943 hotfix: 既存 window を focus する方式は、getByLabel が stale な
+      // handle を返す / window が hidden で setFocus が silent 成功するケースで
+      // 「toast だけ出て実体が見えない」症状が発生する。確実性優先で毎回
+      // close → 新規 spawn に変更 (URL 変更時の反映もこの方が自然)。
       const existing = await WebviewWindow.getByLabel(label);
       if (existing) {
-        let focusOk = false;
         try {
-          await existing.setFocus();
-          focusOk = true;
-        } catch (focusErr) {
-          // setFocus 失敗 → 壊れている疑い、一度 destroy して下で再作成。
-          logger.warn("[preview] setFocus failed, recreating:", focusErr);
-          try {
-            await existing.destroy();
-          } catch (destroyErr) {
-            logger.warn("[preview] destroy after focus fail:", destroyErr);
-          }
-          unregisterWebviewWindow(activeProjectId, label);
+          await existing.destroy();
+        } catch (destroyErr) {
+          logger.warn("[preview] destroy existing failed:", destroyErr);
         }
-        if (focusOk) {
-          // 既存 window を復帰させるだけで完了。store の整合を念のため取る。
-          registerWebviewWindow(activeProjectId, label);
-          toast.info("アプリ内プレビューをフォーカスしました");
-          return;
-        }
-        // focusOk=false のまま下の新規 spawn パスへ fall-through。
+        unregisterWebviewWindow(activeProjectId, label);
       }
 
-      // Step 2: 新規 spawn
+      // 新規 spawn (必ず)
       const title = `Preview - ${target}`;
       const preview = new WebviewWindow(label, {
         url: target,
@@ -206,6 +194,7 @@ export function PreviewPane() {
         height: 800,
         resizable: true,
         focus: true,
+        visible: true,
       });
 
       // Promise を race させず、それぞれ once で listen する (Tauri の想定 API 使用法)。
