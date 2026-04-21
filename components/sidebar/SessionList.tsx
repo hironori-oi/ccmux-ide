@@ -155,6 +155,15 @@ export function SessionList() {
   }, [sessions, activeProjectId]);
 
   async function handleNewSession() {
+    // PM-939 (v3.5.22): プロジェクト未選択時は作成不可。
+    // button の disabled で塞いではいるが、keyboard 経由 (Enter / Space) での
+    // fallback として二重ガード。toast で理由を明示する。
+    if (!activeProjectId) {
+      toast.error(
+        "プロジェクトが選択されていません。左のレールからプロジェクトを作成/選択してください。"
+      );
+      return;
+    }
     try {
       await createNewSession();
       toast.success("新規セッションを作成しました");
@@ -200,10 +209,19 @@ export function SessionList() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* 新規セッションボタン */}
+      {/* 新規セッションボタン
+          PM-939 (v3.5.22): activeProjectId が null の時は disabled。
+          title 属性で理由を提示し、ボタン直下に静的な案内テキストも出す。 */}
       <div className="p-2">
         <Button
           onClick={handleNewSession}
+          disabled={!activeProjectId}
+          title={
+            !activeProjectId
+              ? "先にプロジェクトを作成/選択してください"
+              : "新規セッションを作成"
+          }
+          aria-disabled={!activeProjectId}
           className="w-full justify-start gap-2"
           size="sm"
           variant="default"
@@ -211,6 +229,11 @@ export function SessionList() {
           <Plus className="h-4 w-4" aria-hidden />
           新規セッション
         </Button>
+        {!activeProjectId && (
+          <p className="mt-1.5 px-1 text-[11px] leading-tight text-muted-foreground">
+            プロジェクトを選択するとセッションを作成できます
+          </p>
+        )}
       </div>
 
       {/* セッション一覧 */}
@@ -220,7 +243,7 @@ export function SessionList() {
         aria-label="セッション一覧"
       >
         {showEmpty ? (
-          <EmptyState />
+          <EmptyState projectSelected={activeProjectId !== null} />
         ) : (
           <>
             {/* active project の session（通常ケース） */}
@@ -386,14 +409,27 @@ export function SessionList() {
   );
 }
 
-function EmptyState() {
+function EmptyState({ projectSelected }: { projectSelected: boolean }) {
+  // PM-939 (v3.5.22): プロジェクト未選択時は「先にプロジェクト」を促す文言に差替え。
+  // 選択済みならこれまでどおり「送信で自動作成」を案内する。
   return (
     <div className="flex flex-col items-center gap-2 rounded-md border border-dashed p-6 text-center">
       <Sparkles className="h-6 w-6 text-muted-foreground" aria-hidden />
-      <p className="text-sm font-medium">まだセッションがありません</p>
-      <p className="text-xs text-muted-foreground">
-        チャットを送信すると自動作成されます
-      </p>
+      {projectSelected ? (
+        <>
+          <p className="text-sm font-medium">まだセッションがありません</p>
+          <p className="text-xs text-muted-foreground">
+            チャットを送信すると自動作成されます
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="text-sm font-medium">プロジェクトを選択してください</p>
+          <p className="text-xs text-muted-foreground">
+            左のレールからプロジェクトを作成/選択すると、セッション一覧がここに表示されます
+          </p>
+        </>
+      )}
     </div>
   );
 }

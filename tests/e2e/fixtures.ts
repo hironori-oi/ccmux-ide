@@ -395,6 +395,14 @@ export async function installTauriMock(
         if (cmd === "plugin:dialog|open") return null;
         if (cmd === "plugin:notification|is_permission_granted") return true;
         if (cmd === "plugin:notification|notify") return null;
+        // PM-943: WebviewWindow 系 invoke を空 stub で返す（E2E 環境では Tauri 本体
+        // が不在なので、通常は never called だが、`getByLabel` が
+        // `plugin:window|get_all_windows` を呼ぶので配列を返す必要がある）。
+        if (cmd === "plugin:window|get_all_windows") return [];
+        if (cmd === "plugin:webview|create_webview_window") return null;
+        if (cmd === "plugin:window|set_focus") return null;
+        if (cmd === "plugin:window|close") return null;
+        if (cmd === "plugin:window|destroy") return null;
         return null;
       }
 

@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useChatStore } from "@/lib/stores/chat";
 import { useSessionStore } from "@/lib/stores/session";
+import { useProjectStore } from "@/lib/stores/project";
 import { cn } from "@/lib/utils";
 
 /**
@@ -49,6 +50,8 @@ export function ChatPaneHeader({
   const allPanes = useChatStore((s) => s.panes);
   const removePane = useChatStore((s) => s.removePane);
   const setActivePane = useChatStore((s) => s.setActivePane);
+  // PM-939 (v3.5.22): プロジェクト未選択時は「新規セッション」メニューを disable する。
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
   const currentSession = useMemo(
     () => sessions.find((s) => s.id === currentSessionId) ?? null,
@@ -87,6 +90,14 @@ export function ChatPaneHeader({
   }
 
   async function handleNewSession() {
+    // PM-939 (v3.5.22): activeProjectId が null ならセッション作成を拒否。
+    // DropdownMenuItem 側でも disabled にしているが keyboard 経路の安全網として残す。
+    if (!activeProjectId) {
+      toast.error(
+        "プロジェクトが選択されていません。左のレールからプロジェクトを作成/選択してください。"
+      );
+      return;
+    }
     setActivePane(paneId);
     try {
       await useSessionStore.getState().createNewSession();
@@ -124,8 +135,19 @@ export function ChatPaneHeader({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="max-h-80 w-[280px] overflow-y-auto">
           <DropdownMenuLabel>セッションを選択</DropdownMenuLabel>
-          <DropdownMenuItem onSelect={() => void handleNewSession()}>
-            新規セッション
+          <DropdownMenuItem
+            disabled={!activeProjectId}
+            onSelect={() => void handleNewSession()}
+            className={cn(
+              !activeProjectId && "flex flex-col items-start gap-0.5"
+            )}
+          >
+            <span>新規セッション</span>
+            {!activeProjectId && (
+              <span className="text-[10px] text-muted-foreground">
+                プロジェクトを選択してください
+              </span>
+            )}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {sessions.length === 0 ? (

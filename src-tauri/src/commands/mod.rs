@@ -42,3 +42,9 @@ pub mod fs_util;
 // portable-pty 経由で cmd.exe / bash / zsh / python REPL / vim 等の interactive
 // command を native pseudo-terminal で起動する。末尾 append で他 module と排他。
 pub mod pty;
+
+// PRJ-012 v1.1 / PM-944 (2026-04-20): Preview window を Rust 側で spawn する module。
+// PM-943 の JS API 経路 (`new WebviewWindow()`) では Windows で user data dir 共有
+// 起因の WebView2 即死が解消せず、`WebviewWindowBuilder::data_directory` を
+// 明示指定する Rust 側 command に切替。末尾 append で他 module と排他。
+pub mod preview;

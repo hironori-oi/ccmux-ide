@@ -209,9 +209,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   createNewSession: async (title, projectPath) => {
     set({ isLoading: true, error: null });
     try {
-      // v5 Chunk B / DEC-032: activeProjectId を自動 attach。
-      // null（未選択）なら project_id = null（未分類）で INSERT される。
+      // PM-939 (v3.5.22): セッションは必ずプロジェクトに紐づく。
+      //
+      // 旧（v5 Chunk B / DEC-032）: activeProjectId = null でも未分類セッションとして
+      // INSERT していたが、オーナー要望（2026-04-20）で「プロジェクト → セッション」の
+      // 作成順を強制することになった。UI 層（SessionList / ChatPaneHeader /
+      // CommandPalette / InputArea）でも disable ガードを張っているが、将来のコード
+      // 追加や slash / keyboard shortcut 経由の抜け穴を塞ぐため store 層でも reject する。
+      //
+      // 既存の未分類 session (DB に project_id IS NULL で残存) は読込 / 表示側では
+      // 従来どおり扱える（SessionList の「未分類を表示」トグル経由）。本 guard は
+      // あくまで **新規作成** のみに効くので後方互換性は維持。
       const projectId = await readActiveProjectId();
+      if (!projectId) {
+        const err = new Error(
+          "プロジェクトが選択されていません。左のレールからプロジェクトを作成/選択してから新規セッションを作成してください。"
+        );
+        set({ error: err.message, isLoading: false });
+        throw err;
+      }
       const session = await callTauri<Session>("create_session", {
         title: title ?? null,
         projectPath: projectPath ?? null,

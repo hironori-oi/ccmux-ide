@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   Check,
@@ -45,10 +52,12 @@ import {
   EDITOR_MAX_PANES,
 } from "@/lib/stores/editor";
 import { useProjectStore } from "@/lib/stores/project";
+import { useSessionStore } from "@/lib/stores/session";
 import {
   useTerminalStore,
   TERMINAL_MAX_PANES,
 } from "@/lib/stores/terminal";
+import { logger } from "@/lib/logger";
 import { cn } from "@/lib/utils";
 
 /**
@@ -92,6 +101,122 @@ export function Shell({ children }: { children?: ReactNode }) {
 
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const reduceMotion = useReducedMotion();
+
+  // -------------------------------------------------------------------------
+  // PRJ-012 PM-890 (v1.1): project 切替時 snapshot save/restore orchestrate。
+  //
+  // ## 背景
+  //
+  // PM-810 regression hotfix (2026-04-20) で ChatPanel.tsx 側に `initialMountRef`
+  // guard を入れたことで、project 切替時の snapshot save/restore が縮退していた:
+  //
+  //  - Before: project 切替で streaming 中メッセージも snapshot として保持
+  //  - After (PM-810 hotfix): 切替時は DB load のみで復元 → **streaming 中メッセージが
+  //    切替で失われる**
+  //
+  // また ChatPanel 側で orchestrate する方式は addPane で新 pane が mount された瞬間
+  // にも useEffect が走り、panes 全体を破壊するバグを生んでいた（PM-810 regression 本体）。
+  //
+  // ## PM-890 の解決
+  //
+  // Shell 側で activeProjectId の変化を監視し、ChatPanel の mount タイミング **に依存
+  // せずに** snapshot を orchestrate する。ChatPanel は snapshot swap を持たない
+  // subscriber に戻る。
+  //
+  //  - 初回 mount (prev === undefined): 何もしない（起動直後 or リロード直後の復元は
+  //    ChatPanel 側の `mountLoadRanRef` パスで persisted currentSessionId から DB load）
+  //  - prev → next 変化:
+  //    1. prev が truthy なら `saveProjectSnapshot(prev)` で現 panes を丸ごと退避
+  //    2. next が truthy なら `restoreProjectSnapshot(next)`
+  //       - cache hit (true): snapshot を panes に復元 → streaming 中 message も
+  //         そのまま戻る。DB との差分 merge は Chunk E 以降で対応。
+  //       - cache miss (false): panes は初期 pane 1 個にリセット済。project の
+  //         lastSessionId があれば DB から loadSession で復元する。
+  //    3. next が null (未選択) なら panes を初期化のみ
+  //
+  // ## PM-810 paneId routing への影響
+  //
+  // `reqIdToPane` / `pendingSendsByProject` map は useAllProjectsSidecarListener
+  // 内で独立に管理されており、本 effect は touch しない。split pane の routing は
+  // 非 regression。
+  // -------------------------------------------------------------------------
+  const prevActiveProjectIdRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevActiveProjectIdRef.current;
+    const next = activeProjectId;
+    // 初回 mount (起動直後 / リロード後) は sentinel から抜けるだけで orchestrate 無し。
+    // persisted currentSessionId からの復元は ChatPanel 側 mountLoadRanRef が担当。
+    if (prev === undefined) {
+      prevActiveProjectIdRef.current = next;
+      return;
+    }
+    if (prev === next) return;
+    prevActiveProjectIdRef.current = next;
+
+    const chat = useChatStore.getState();
+    const projectStore = useProjectStore.getState();
+
+    // 1) 切替直前の project の panes を snapshot に退避（streaming 中 message ごと保持）。
+    //    同時に lastSessionId の write back（従来挙動維持、旧 ChatPanel 経路のコピー）。
+    if (prev) {
+      const activePaneId = chat.activePaneId;
+      const currentSessionId =
+        chat.panes[activePaneId]?.currentSessionId ?? null;
+      const projectStoreAny = projectStore as unknown as {
+        updateProject?: (
+          id: string,
+          patch: { lastSessionId?: string | null }
+        ) => void;
+      };
+      if (
+        typeof projectStoreAny.updateProject === "function" &&
+        currentSessionId
+      ) {
+        try {
+          projectStoreAny.updateProject(prev, { lastSessionId: currentSessionId });
+        } catch {
+          // silent
+        }
+      }
+      chat.saveProjectSnapshot(prev);
+    }
+
+    // 2) 切替後の project の snapshot を復元 or 初期化。
+    if (!next) {
+      // 未選択遷移: panes を初期化のみ（__none__ は cache miss 固定で panes を reset）
+      chat.restoreProjectSnapshot("__none__");
+      return;
+    }
+    const hit = chat.restoreProjectSnapshot(next);
+    logger.debug("[pm890-orchestrate]", { prev, next, hit });
+
+    if (!hit) {
+      // cache miss: panes は初期 pane 1 個に reset 済。
+      // project.lastSessionId があれば DB から load（従来経路踏襲）。
+      // persist 復元された currentSessionId が優先されるべきケースは
+      // ChatPanel の mountLoadRanRef が拾うため、ここでは lastSessionId のみ考慮。
+      const projectStoreAny2 = projectStore as unknown as {
+        projects: Array<{ id: string; lastSessionId?: string | null }>;
+      };
+      const nextProject = projectStoreAny2.projects.find((p) => p.id === next);
+      const lastSessionId = nextProject?.lastSessionId ?? null;
+      if (lastSessionId) {
+        void (async () => {
+          try {
+            await useSessionStore.getState().loadSession(lastSessionId);
+          } catch {
+            // loadSession 失敗は致命でない（空 pane のまま継続）
+            const chat2 = useChatStore.getState();
+            const activePaneId2 = chat2.activePaneId;
+            chat2.clearSession(activePaneId2);
+            chat2.setSessionId(activePaneId2, null);
+          }
+        })();
+      }
+    }
+    // v3.5.10 方針踏襲: cache hit 時は snapshot を 100% 信じて DB load しない
+    // （streaming / activity を消さないため）。DB 差分取り込みは別 chunk で対応。
+  }, [activeProjectId]);
 
   // v3.4 Chunk A: Chat / Editor 切替
   const viewMode = useEditorStore((s) => s.viewMode);

@@ -29,7 +29,7 @@ use commands::{
     },
     image_paste::save_clipboard_image,
     memory_tree::scan_memory_tree,
-    oauth_usage::{get_oauth_usage, OAuthUsageCache},
+    oauth_usage::{check_claude_authenticated, get_oauth_usage, OAuthUsageCache},
     search_fts::{reindex_conversations, search_conversations, search_messages},
     slash::list_slash_commands,
     usage::get_usage_stats,
@@ -45,6 +45,11 @@ use commands::{
     // PRJ-012 v1.0 / PM-920 / DEC-045 (2026-04-21): 組込ターミナル (xterm.js + Rust PTY)。
     // portable-pty で cmd.exe / bash / vim / python REPL 等の interactive command を起動。
     pty::{list_active_ptys, pty_kill, pty_resize, pty_spawn, pty_write, PtyState},
+    // PRJ-012 v1.1 / PM-944 (2026-04-20): Preview window の Rust spawn。
+    // PM-943 の JS API 経路は Windows WebView2 user data dir 競合で spawn 直後に
+    // process が死ぬ問題が解消せず、`WebviewWindowBuilder::data_directory` を
+    // 明示指定する Rust command に切替。
+    preview::spawn_preview_window,
 };
 use events::monitor::{self, MonitorHandle};
 
@@ -148,6 +153,10 @@ pub fn run() {
             get_claude_rate_limits,
             // PRJ-012 Round D': 公式 OAuth Usage API
             get_oauth_usage,
+            // PRJ-012 v1.1 / PM-938 (2026-04-20): Welcome Wizard 撤去後の起動時
+            // 認証自動検出。`~/.claude/.credentials.json` の claudeAiOauth.accessToken
+            // の有無だけを返す（network I/O なし、token 文字列は戻さない）。
+            check_claude_authenticated,
             // PRJ-012 v4 / Chunk C / DEC-028: Claude Code 組込 slash の GUI ネイティブ実装
             list_builtin_slashes,
             builtin_init_claude_md,
@@ -172,6 +181,10 @@ pub fn run() {
             pty_resize,
             pty_kill,
             list_active_ptys,
+            // PRJ-012 v1.1 / PM-944 (2026-04-20): Preview window を Rust 側で
+            // `WebviewWindowBuilder::data_directory` 付きで spawn する command。
+            // frontend は `invoke("spawn_preview_window", { label, url, title })`。
+            spawn_preview_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

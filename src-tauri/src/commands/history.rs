@@ -414,6 +414,12 @@ fn load_attachments(conn: &Connection, message_id: &str) -> Result<Vec<Attachmen
 ///
 /// v5 Chunk B / DEC-032: `project_id: Option<String>` を受け取り、null なら未分類
 /// として INSERT。frontend 側では activeProjectId を自動 attach する想定。
+///
+/// PM-939 (v3.5.22): セッションは必ずプロジェクトに紐づく。`project_id` が
+/// `None` または空文字の場合は Err を返す（frontend の store / UI でも同等の
+/// ガードを張っているが、slash / keyboard 経路や将来の新規 invoke 呼出に備えた
+/// 最後の防衛線）。既存の未分類 session (project_id IS NULL) は読込 / 表示は
+/// そのまま可能で、本 guard は **新規作成** のみに効く。
 #[tauri::command]
 pub async fn create_session(
     state: State<'_, HistoryState>,
@@ -421,6 +427,18 @@ pub async fn create_session(
     project_path: Option<String>,
     project_id: Option<String>,
 ) -> Result<Session, String> {
+    // PM-939: project_id が無い / 空文字なら拒否。
+    let pid_present = project_id
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false);
+    if !pid_present {
+        return Err(
+            "プロジェクトが選択されていません。プロジェクトを作成/選択してから新規セッションを作成してください。"
+                .to_string(),
+        );
+    }
+
     let id = new_uuid();
     let now = now_epoch();
     let title_c = title.clone();
