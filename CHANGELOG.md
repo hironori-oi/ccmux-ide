@@ -11,6 +11,42 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.1.0] - 2026-04-22
+
+### Added
+- **Preview タブにアプリ内プレビュー**。Tauri 2 `WebviewWindow` を Rust 側 `WebviewWindowBuilder` で spawn、任意 HTTPS URL (yahoo.co.jp / github.com 等) を別 window で表示可能。user data dir を project/label 別に分離し、Windows WebView2 の multi-webview lock 競合を回避 (PM-943 / PM-944)
+- **Terminal scrollback 保持**。tab 切替で xterm が unmount されても 256KB/pty の ring buffer に PTY output を蓄積、再 mount 時に即復元 (PM-941)
+
+### Changed
+- **Welcome Wizard 撤去 + Claude 認証自動検出**。起動時に `~/.claude/.credentials.json` の OAuth token を検出、認証済なら即 Workspace、未認証なら toast 案内 + 「ターミナルを開く」誘導 (PM-938)
+- **snapshot orchestrate を Shell 側 effect に移管**。project 切替時の streaming 中 message / activity が deep copy で保持され、戻した時に途中のまま復活 (PM-890、PM-810 regression hotfix の縮退を解消)
+
+### Fixed
+- **セッション作成時にプロジェクト必須化 (3 層 validate)**。UI disable + tooltip + Store guard + Rust backend rejection (PM-939)
+- PreviewPane の Tooltip が `<p>` 内にネストされて起きる React hydration error を `<div>` ラッピングに修正
+
+### Security
+- **GitHub Actions を Node 24 対応にバンプ** (PM-940)。`actions/checkout@v6` / `setup-node@v6` / `cache@v5` / `upload-artifact@v7` / `download-artifact@v8` / `action-gh-release@v3` で Node.js 20 deprecation 警告解消 (2026-06 強制切替前に対応済)
+- Preview window 用の WebView2 user data dir を `$APPLOCALDATA/preview-webview/{label}/` 配下に分離、メイン webview と credential / cache 共有を回避
+
+### Infra
+- `darwin-x86_64` の runner を `macos-13` (deprecated) → `macos-14` (Apple Silicon) に変更、`x86_64-apple-darwin` は cross-compile で生成
+- `v1.0.1` → `v1.1.0` tag で workflow 再 trigger、全 4 matrix (win/linux/darwin-x64/darwin-arm64) が macOS 14 以降の runner で安定動作
+
+### Known Issues
+- In-window Preview (Cursor 同等 UX、案 D2) は Tauri 2 の multi-webview `unstable` feature が必要なため **v1.1 見送り**。Tauri multi-webview stable 化を待って v1.2+ で再検討
+- Preview 別 window の position / size は非記憶 (次回 open で default 位置、v1.2 候補)
+- Terminal 4 pane 同時使用時の memory 消費は PTY × 4 + scrollback buffer × 4 (256KB each)
+- Node.js 20 deprecation 対応は完了だが、各 action の major bump に伴う細かい挙動差分は dogfood で観察
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed
+- 組織運営統合は [claude-code-company](https://github.com/hironori-oi/claude-code-company) のメタ設計に基づく
+
+### Acceptance
+- v1.1 実機検証: Preview / Terminal / Welcome 撤去 / セッション必須化 すべて合格
+- v1.1-dev branch で 6 PM (938/939/940/890/941/944) + 8 hotfix を累積、実機検証合格で main merge
+
 ## [v1.0.0] - 2026-04-21
 
 ### Added
