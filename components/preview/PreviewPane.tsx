@@ -169,20 +169,30 @@ export function PreviewPane() {
     try {
       // dynamic import: SSR / Next.js dev server 配下で @tauri-apps/api を評価しても
       // runtime は Tauri webview 内でのみ動くので、lazy load で初回 bundle を軽くする。
-      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const { WebviewWindow, getAllWebviewWindows } = await import(
+        "@tauri-apps/api/webviewWindow"
+      );
 
-      // PM-943 hotfix: 既存 window を focus する方式は、getByLabel が stale な
-      // handle を返す / window が hidden で setFocus が silent 成功するケースで
-      // 「toast だけ出て実体が見えない」症状が発生する。確実性優先で毎回
-      // close → 新規 spawn に変更 (URL 変更時の反映もこの方が自然)。
-      const existing = await WebviewWindow.getByLabel(label);
-      if (existing) {
-        try {
-          await existing.destroy();
-        } catch (destroyErr) {
-          logger.warn("[preview] destroy existing failed:", destroyErr);
+      // PM-943 hotfix2: getByLabel で漏れる残留 window (hidden / stale handle / destroy 未完了)
+      // を確実に除去するため、getAllWebviewWindows で label 一致するもの全 destroy。
+      // さらに Tauri 内部の label cleanup 完了を待つため短い delay を挟む
+      // (これをしないと `already exists` エラーで新規 spawn が失敗する)。
+      try {
+        const allWindows = await getAllWebviewWindows();
+        for (const w of allWindows) {
+          if (w.label === label) {
+            try {
+              await w.destroy();
+            } catch (destroyErr) {
+              logger.warn("[preview] destroy existing failed:", destroyErr);
+            }
+          }
         }
         unregisterWebviewWindow(activeProjectId, label);
+        // Tauri 内部の label 解放を待つ (race 回避)
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      } catch (enumErr) {
+        logger.warn("[preview] enumerate windows failed:", enumErr);
       }
 
       // 新規 spawn (必ず)
