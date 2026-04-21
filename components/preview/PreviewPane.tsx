@@ -323,7 +323,7 @@ export function PreviewPane() {
           </div>
         </div>
 
-        <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+        <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
           <Info
             className="mt-0.5 h-3.5 w-3.5 shrink-0"
             aria-hidden
@@ -353,7 +353,7 @@ export function PreviewPane() {
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
-        </p>
+        </div>
       </form>
     </div>
   );
