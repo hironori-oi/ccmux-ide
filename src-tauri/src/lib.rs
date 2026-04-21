@@ -45,6 +45,11 @@ use commands::{
     // PRJ-012 v1.0 / PM-920 / DEC-045 (2026-04-21): 組込ターミナル (xterm.js + Rust PTY)。
     // portable-pty で cmd.exe / bash / vim / python REPL 等の interactive command を起動。
     pty::{list_active_ptys, pty_kill, pty_resize, pty_spawn, pty_write, PtyState},
+    // PRJ-012 v1.1 / PM-944 (2026-04-20): Preview window の Rust spawn。
+    // PM-943 の JS API 経路は Windows WebView2 user data dir 競合で spawn 直後に
+    // process が死ぬ問題が解消せず、`WebviewWindowBuilder::data_directory` を
+    // 明示指定する Rust command に切替。
+    preview::spawn_preview_window,
 };
 use events::monitor::{self, MonitorHandle};
 
@@ -176,6 +181,10 @@ pub fn run() {
             pty_resize,
             pty_kill,
             list_active_ptys,
+            // PRJ-012 v1.1 / PM-944 (2026-04-20): Preview window を Rust 側で
+            // `WebviewWindowBuilder::data_directory` 付きで spawn する command。
+            // frontend は `invoke("spawn_preview_window", { label, url, title })`。
+            spawn_preview_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

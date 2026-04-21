@@ -18,6 +18,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { logger } from "@/lib/logger";
+import { callTauri } from "@/lib/tauri-api";
 import { useProjectStore } from "@/lib/stores/project";
 import {
   DEFAULT_PREVIEW_URL,
@@ -28,6 +29,8 @@ import {
  * PRJ-012 v1.0 / PM-936 (2026-04-20): ブラウザプレビュー pane (iframe 撤退版)。
  * PRJ-012 v1.1 / PM-943 (2026-04-20): Tauri 2 secondary WebviewWindow 追加
  * (Preview Phase 4.1)。
+ * PRJ-012 v1.1 / PM-944 (2026-04-20): spawn を Rust 側 `WebviewWindowBuilder` に
+ * 切替 (Windows WebView2 user data dir 競合を解消)。
  *
  * ## 戦略転換の経緯
  *
@@ -40,51 +43,58 @@ import {
  *
  * v1.0 の現実解として **iframe を撤退し、「外部ブラウザで開く」一本化** に方針転換。
  *
- * ## v1.1 PM-943 (Phase 4.1)
+ * ## v1.1 PM-943 (Phase 4.1) - JS API spawn
  *
  * PM-942 feasibility 調査で Tauri 2 の **secondary `WebviewWindow`** は iframe と
- * 違い X-Frame-Options / WebView2 site-isolation の影響を受けないことを確認
- * (独立 OS window = 独立 process / origin)。
+ * 違い X-Frame-Options / WebView2 site-isolation の影響を受けないことを確認。
+ * `@tauri-apps/api/webviewWindow` の `new WebviewWindow()` で spawn したが、
+ * Windows で以下症状が 7 hotfix (a927d7f → b675b7c) 経ても解消せず:
  *
- * → 「アプリ内で開く」ボタンを追加し、`@tauri-apps/api/webviewWindow` の
- *   `new WebviewWindow()` で別 window を spawn する経路を復活させた。
- *   「外部ブラウザで開く」は残置 (fallback & 明示選択肢として)。
+ * - `tauri://created` は受信する
+ * - 直後の `isVisible()` が `runtime error: failed to receive message from webview`
+ *   で reject される
+ * - OS 上に window が現れない（Alt+Tab にも出ない）
+ *
+ * Root cause: PM-942 §8 R3「Windows は multi-webview で user data dir 個別指定が
+ * 必須」。JS API では `dataDirectory` option が公開されておらず、親 main window と
+ * user data dir を共有しようとして WebView2 排他 lock で spawn 直後に死亡。
+ *
+ * ## v1.1 PM-944 (Phase 4.1 再実装) - Rust builder spawn
+ *
+ * Rust 側に `spawn_preview_window` command を新設し、`WebviewWindowBuilder` の
+ * `data_directory(app_local_data_dir/preview-webview/{label})` を指定して build。
+ *
+ * - 同 label の既存 window destroy も Rust 側で sync 処理（`already exists` race 解消）
+ * - build() が Ok を返した時点で OS window は表示済み（`visible(true)` で spawn）
+ * - frontend は `invoke("spawn_preview_window", { label, url, title })` 1 呼出のみ
+ * - `tauri://created` / `tauri://error` / `tauri://destroyed` の listener は不要
+ *   （Promise の resolve / reject で成否判定）
  *
  * ### UX
- * - project 1 つにつき **同時 1 つ** の preview window（label: `preview:${projectId}`）
- * - 既に open 済みの場合は `setFocus()` にフォールバック (重複 spawn 回避)
- * - URL を変えて「アプリ内で開く」を押した場合は **既存 window を close → 新規 spawn**
- *   (WebviewWindow には stable な navigate API がないため close/create 方式)
- * - window が閉じられたら `tauri://destroyed` を listen して store から unregister
+ * - project 1 つにつき **同時 1 つ** の preview window（label: `preview-${projectId}`）
+ * - 固定 label に回帰 (PM-943 hotfix3 の timestamp nonce は Rust 側 sync destroy で
+ *   不要になった)
+ * - URL 変更・同 URL 問わず「アプリ内で開く」ボタンで既存 destroy → 新規 create
  *
- * ### 既存設定の流用
- * - PM-933 で追加した capability 3 件 + PM-943 で追加した window close / destroy /
- *   set-focus permission で secondary WebviewWindow の create / close / focus を
- *   cover。
- * - `tauri.conf.json` の CSP / additionalBrowserArgs は維持 (secondary webview に
- *   伝播するかは実機検証事項、MVP では現状設定を流用)。
+ * ### spawn 後の store 管理
+ * - 成功時 `registerWebviewWindow(projectId, label)` で store に登録
+ * - OS close 等による消滅は **polling なし**。次回「アプリ内で開く」時に Rust 側で
+ *   destroy を試みる (既に消えていても OK) ので、store の stale な entry は無害。
+ *   将来的に Rust event (`tauri://destroyed` を Rust 経由 emit) で unregister する
+ *   拡張は Phase 4.2 で検討。
  *
  * ## Phase 4.2 申し送り
  * - 同一 window 内 multi-webview (`@tauri-apps/api/webview` + `unstable` feature) で
- *   Cursor 同等の in-IDE preview UX を実現する計画。本 component は window 管理層を
- *   明確に分離してあるため、spawn 先を差し替えるだけで移行可能な設計。
- * - URL 変更時の navigate API (`webview.navigate()` 相当) が stable 化したら
- *   close/create を navigate に置き換えて reload コストを削減する。
+ *   Cursor 同等の in-IDE preview UX を実現する計画。
+ * - URL 変更時の navigate API が stable 化したら close/create を navigate に置換。
  */
 
-// PM-943: WebviewWindow label の prefix は `preview-${projectId}-`。
-// PM-943 hotfix3: 固定 label だと `already exists` race (destroy 未完了 / OS 残存 /
-// enumerate 漏れ) を完全には回避できなかったため、timestamp nonce を付与して毎回
-// unique label で spawn する方式に変更。古い window は label prefix 一致で destroy。
-//
-// Tauri 2 の label 仕様は alphanumeric / `-` / `_` を推奨。`:` は実装上許容だが
-// 安全側に `-` に統一。
-function buildPreviewWindowLabelPrefix(projectId: string): string {
-  const sanitized = projectId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return `preview-${sanitized}-`;
-}
+// PM-944: 固定 label に回帰。Rust 側で `get_webview_window().destroy()` → `build()`
+// が同期的に完結するため、PM-943 hotfix3 の timestamp nonce は不要。
+// Tauri 2 の label 仕様は alphanumeric / `-` / `_` を推奨。
 function buildPreviewWindowLabel(projectId: string): string {
-  return `${buildPreviewWindowLabelPrefix(projectId)}${Date.now()}`;
+  const sanitized = projectId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `preview-${sanitized}`;
 }
 
 export function PreviewPane() {
@@ -145,18 +155,19 @@ export function PreviewPane() {
   }, [inputValue, committedUrl, handleCommitUrl]);
 
   /**
-   * PM-943: Tauri 2 `WebviewWindow` で secondary window を spawn する。
+   * PM-944: Rust 側 `spawn_preview_window` command で secondary window を spawn する。
    *
    * 1. URL を commit（履歴保存）
-   * 2. `WebviewWindow.getByLabel(label)` で同 project の既存 window 有無を確認
-   *    - あれば `setFocus()` にフォールバック (同 URL / 別 URL 問わず、単純に focus
-   *      を戻す)。URL 変更を反映したい場合は先に close してから再 spawn する分岐も
-   *      考えられるが、「連打時のチラつき防止」を優先して focus 優先とする。
-   * 3. なければ `new WebviewWindow(label, { url, title, ... })` で spawn
-   *    - `tauri://created` で store register + toast
-   *    - `tauri://error` で toast.error + store は登録しない
-   *    - `tauri://destroyed` で store unregister（外部 close 操作への追従）
-   * 4. spawn 失敗時は「外部ブラウザで開く」をユーザーに促すメッセージを表示
+   * 2. `invoke("spawn_preview_window", { label, url, title })`
+   *    - Rust 側で同 label の既存 window を destroy（sync）
+   *    - user data dir を `app_local_data_dir()/preview-webview/{label}` に分離
+   *    - `WebviewWindowBuilder::build()` で visible=true で OS window を生成
+   *    - build 成功 = OS window 表示済み
+   * 3. 成功時 store register + toast.success
+   * 4. 失敗時 store unregister + toast.error（外部ブラウザ fallback を案内）
+   *
+   * 以前 (PM-943) は `tauri://created` / `tauri://error` / `tauri://destroyed` の
+   * event listener を張っていたが、Rust 側 sync spawn では Promise 1 本で完結。
    */
   const handleOpenInApp = useCallback(async () => {
     if (!activeProjectId) return;
@@ -169,98 +180,20 @@ export function PreviewPane() {
     handleCommitUrl(target);
 
     const label = buildPreviewWindowLabel(activeProjectId);
+    const title = `Preview - ${target}`;
 
     try {
-      // dynamic import: SSR / Next.js dev server 配下で @tauri-apps/api を評価しても
-      // runtime は Tauri webview 内でのみ動くので、lazy load で初回 bundle を軽くする。
-      const { WebviewWindow, getAllWebviewWindows } = await import(
-        "@tauri-apps/api/webviewWindow"
-      );
-
-      // PM-943 hotfix3: 古い preview window は label prefix 一致で全 destroy。
-      // 新 label は Date.now() 付与で unique のため、destroy 失敗しても
-      // `already exists` は発生しない (衝突しない新 label で spawn)。
-      const labelPrefix = buildPreviewWindowLabelPrefix(activeProjectId);
-      try {
-        const allWindows = await getAllWebviewWindows();
-        for (const w of allWindows) {
-          if (w.label.startsWith(labelPrefix)) {
-            try {
-              await w.destroy();
-            } catch (destroyErr) {
-              logger.warn("[preview] destroy existing failed:", destroyErr);
-            }
-          }
-        }
-        unregisterWebviewWindow(activeProjectId, label);
-      } catch (enumErr) {
-        logger.warn("[preview] enumerate windows failed:", enumErr);
-      }
-
-      // PM-943 hotfix5: spawn config をシンプル化 + show を明示。
-      // hotfix4 で center+alwaysOnTop を付与したが OS 上に window が現れず
-      // 「一瞬緑に光る」症状発生。spawn 時は最小 config のみ、created で show+focus。
-      const title = `Preview - ${target}`;
-      const preview = new WebviewWindow(label, {
+      await callTauri<void>("spawn_preview_window", {
+        label,
         url: target,
         title,
-        width: 1280,
-        height: 800,
       });
-
-      // Promise を race させず、それぞれ once で listen する。
-      preview.once("tauri://created", async () => {
-        registerWebviewWindow(activeProjectId, label);
-        // debug: window state を log で確認 (visible / size / position)
-        try {
-          const isVisible = await preview.isVisible();
-          const isMinimized = await preview.isMinimized();
-          logger.info("[preview] window state after create:", {
-            label,
-            isVisible,
-            isMinimized,
-          });
-        } catch (stateErr) {
-          logger.warn("[preview] state probe failed:", stateErr);
-        }
-        try {
-          await preview.show();
-        } catch (e) {
-          logger.warn("[preview] show failed:", e);
-        }
-        try {
-          await preview.unminimize();
-        } catch (e) {
-          logger.warn("[preview] unminimize failed:", e);
-        }
-        try {
-          await preview.setFocus();
-        } catch (e) {
-          logger.warn("[preview] setFocus after create failed:", e);
-        }
-        toast.success("アプリ内プレビューを開きました");
-        logger.info("[preview] webview window created:", label, target);
-      });
-
-      preview.once<string>("tauri://error", (e) => {
-        logger.error("[preview] webview window error:", e.payload);
-        toast.error(
-          `アプリ内プレビューを開けませんでした。「ブラウザで開く」をお試しください: ${
-            e.payload ?? "unknown"
-          }`
-        );
-        unregisterWebviewWindow(activeProjectId, label);
-      });
-
-      // 外部操作 (OS の close ボタン等) で window が消えたら store を掃除する。
-      // `tauri://destroyed` は Tauri 2 の共通イベント (Window 側)。
-      preview.once("tauri://destroyed", () => {
-        unregisterWebviewWindow(activeProjectId, label);
-        logger.info("[preview] webview window destroyed:", label);
-      });
+      registerWebviewWindow(activeProjectId, label);
+      toast.success("アプリ内プレビューを開きました");
+      logger.info("[preview] rust-spawned window created:", label, target);
     } catch (err) {
-      // dynamic import / constructor sync 例外（capability 不足等）
-      logger.error("[preview] open in-app failed:", err);
+      logger.error("[preview] rust spawn failed:", err);
+      unregisterWebviewWindow(activeProjectId, label);
       toast.error(
         `アプリ内プレビューを開けませんでした: ${String(err)} / 「ブラウザで開く」をご利用ください`
       );
@@ -356,7 +289,7 @@ export function PreviewPane() {
           />
           <span>
             「アプリ内で開く」は ccmux-ide 内の別 window で表示します
-            （PM-943 / v1.1 Phase 4.1）。表示されないサイトは「ブラウザで開く」をご利用ください。
+            （PM-944 / v1.1 Phase 4.1 Rust spawn）。表示されないサイトは「ブラウザで開く」をご利用ください。
           </span>
           <TooltipProvider delayDuration={200}>
             <Tooltip>
@@ -372,9 +305,9 @@ export function PreviewPane() {
               <TooltipContent side="bottom" className="max-w-[340px] text-[11px]">
                 v1.0 (PM-925〜933) は iframe 方式を試みましたが、WebView2 の
                 security layer で外部 URL の接続拒否が解消せず撤退。
-                v1.1 (PM-943 / Phase 4.1) からは Tauri 2 の secondary
-                WebviewWindow で別 window を開く方式に切替え、iframe の
-                X-Frame-Options / site-isolation 制約を回避しています。
+                v1.1 (PM-943) で Tauri 2 secondary WebviewWindow に切替、
+                PM-944 で JS API → Rust `WebviewWindowBuilder` に再切替
+                (Windows WebView2 user data dir 競合を `data_directory` 明示で解消)。
                 同一 window 内 preview (Cursor 同等 UX) は Phase 4.2 で対応予定。
               </TooltipContent>
             </Tooltip>
