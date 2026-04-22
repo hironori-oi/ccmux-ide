@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { X, Save, FileText, SplitSquareHorizontal } from "lucide-react";
+import { X, FileText, SplitSquareHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,13 +14,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { FileEditor } from "@/components/editor/FileEditor";
 import { useEditorStore } from "@/lib/stores/editor";
 import { cn } from "@/lib/utils";
@@ -55,7 +48,6 @@ export function EditorPaneItem({
   const removeEditorPane = useEditorStore((s) => s.removeEditorPane);
   const setActiveFile = useEditorStore((s) => s.setActiveFile);
   const closeFile = useEditorStore((s) => s.closeFile);
-  const closeOtherFiles = useEditorStore((s) => s.closeOtherFiles);
   const saveFile = useEditorStore((s) => s.saveFile);
 
   const [confirmCloseId, setConfirmCloseId] = useState<string | null>(null);
@@ -143,89 +135,64 @@ export function EditorPaneItem({
             {paneFiles.map((f) => {
               const isActive = f.id === pane.activeFileId;
               return (
-                <DropdownMenu key={f.id}>
-                  <DropdownMenuTrigger asChild>
-                    <div
-                      role="tab"
-                      aria-selected={isActive}
-                      tabIndex={0}
-                      className={cn(
-                        "group flex h-full min-w-0 max-w-[220px] shrink-0 cursor-pointer items-center gap-1.5 border-r pl-3 pr-1 text-[12px] transition-colors",
-                        isActive
-                          ? "bg-background text-foreground"
-                          : "bg-transparent text-muted-foreground hover:bg-accent/50"
-                      )}
-                      onClick={() => setActiveFile(f.id, paneId)}
-                      onMouseDown={(e) => {
-                        if (e.button === 1) {
-                          e.preventDefault();
-                          handleCloseRequest(f.id);
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          setActiveFile(f.id, paneId);
-                        }
-                      }}
-                      title={f.path}
-                    >
-                      <FileText
-                        className="h-3.5 w-3.5 shrink-0"
-                        aria-hidden
-                      />
-                      <span className="truncate">
-                        {f.dirty && (
-                          <span
-                            className="mr-1 text-amber-500"
-                            aria-label="未保存"
-                            title="未保存の変更あり"
-                          >
-                            ●
-                          </span>
-                        )}
-                        {f.title}
-                      </span>
-                      <button
-                        type="button"
-                        aria-label={`${f.title} を閉じる`}
-                        className={cn(
-                          "ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded opacity-60 transition-opacity hover:bg-accent hover:opacity-100",
-                          isActive && "opacity-80"
-                        )}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleCloseRequest(f.id);
-                        }}
+                <div
+                  key={f.id}
+                  role="tab"
+                  aria-selected={isActive}
+                  tabIndex={0}
+                  className={cn(
+                    "group flex h-full min-w-0 max-w-[220px] shrink-0 cursor-pointer items-center gap-1.5 border-r pl-3 pr-1 text-[12px] transition-colors",
+                    isActive
+                      ? "bg-background text-foreground"
+                      : "bg-transparent text-muted-foreground hover:bg-accent/50"
+                  )}
+                  // 左クリック: タブ切替。
+                  // PM-964 hotfix: 旧版は DropdownMenuTrigger asChild で包んだため
+                  // 全クリックがメニュー起動を奪い、タブ切替不能だった。Dropdown
+                  // は削除し、閉じる導線は X ボタンと middle-click に統一する。
+                  onClick={() => setActiveFile(f.id, paneId)}
+                  onAuxClick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      handleCloseRequest(f.id);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setActiveFile(f.id, paneId);
+                    }
+                  }}
+                  title={f.path}
+                >
+                  <FileText className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  <span className="truncate">
+                    {f.dirty && (
+                      <span
+                        className="mr-1 text-amber-500"
+                        aria-label="未保存"
+                        title="未保存の変更あり"
                       >
-                        <X className="h-3 w-3" aria-hidden />
-                      </button>
-                    </div>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="min-w-[180px]">
-                    <DropdownMenuItem
-                      onClick={() => void saveFile(f.id)}
-                      disabled={!f.dirty || f.loading}
-                    >
-                      <Save className="mr-2 h-3.5 w-3.5" aria-hidden />
-                      保存
-                      <span className="ml-auto text-[10px] text-muted-foreground">
-                        Ctrl+S
+                        ●
                       </span>
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => handleCloseRequest(f.id)}>
-                      <X className="mr-2 h-3.5 w-3.5" aria-hidden />
-                      閉じる
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onClick={() => closeOtherFiles(f.id, paneId)}
-                      disabled={paneFiles.length <= 1}
-                    >
-                      他のタブを閉じる
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                    )}
+                    {f.title}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`${f.title} を閉じる`}
+                    className={cn(
+                      "ml-auto flex h-5 w-5 shrink-0 items-center justify-center rounded opacity-60 transition-opacity hover:bg-accent hover:opacity-100",
+                      isActive && "opacity-80"
+                    )}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleCloseRequest(f.id);
+                    }}
+                  >
+                    <X className="h-3 w-3" aria-hidden />
+                  </button>
+                </div>
               );
             })}
           </div>

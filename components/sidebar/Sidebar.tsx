@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Activity,
   BookText,
@@ -142,21 +142,8 @@ export function Sidebar() {
         )}
         transition={{ duration: 0.18, ease: "easeOut" }}
       >
-        {/* TitleBar */}
-        <div className="flex h-10 shrink-0 items-center justify-between border-b px-2">
-          <AnimatePresence initial={false}>
-            {!collapsed && (
-              <motion.span
-                key="brand"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="text-xs font-semibold tracking-tight"
-              >
-                Sumi
-              </motion.span>
-            )}
-          </AnimatePresence>
+        {/* TitleBar — トップレベルの TitleBar 側で "Sumi" 表示するためここは collapse toggle のみ */}
+        <div className="flex h-10 shrink-0 items-center justify-end border-b px-2">
           <Button
             size="icon"
             variant="ghost"
