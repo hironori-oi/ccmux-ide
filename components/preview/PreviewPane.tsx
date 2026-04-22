@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type FormEvent,
 } from "react";
@@ -23,7 +24,9 @@ import { useProjectStore } from "@/lib/stores/project";
 import {
   DEFAULT_PREVIEW_URL,
   usePreviewStore,
+  type PreviewWindowGeometry,
 } from "@/lib/stores/preview";
+import type { UnlistenFn } from "@tauri-apps/api/event";
 
 /**
  * PRJ-012 v1.0 / PM-936 (2026-04-20): ブラウザプレビュー pane (iframe 撤退版)。
@@ -31,6 +34,8 @@ import {
  * (Preview Phase 4.1)。
  * PRJ-012 v1.1 / PM-944 (2026-04-20): spawn を Rust 側 `WebviewWindowBuilder` に
  * 切替 (Windows WebView2 user data dir 競合を解消)。
+ * PRJ-012 v1.2 / PM-945 (2026-04-20): Preview window の位置 / サイズを project ごとに
+ * 記憶。次回「アプリ内で開く」時に同じ geometry で spawn する (Cursor / VSCode 同等)。
  *
  * ## 戦略転換の経緯
  *
@@ -83,6 +88,16 @@ import {
  *   将来的に Rust event (`tauri://destroyed` を Rust 経由 emit) で unregister する
  *   拡張は Phase 4.2 で検討。
  *
+ * ### PM-945: Window geometry 記憶
+ * - spawn 成功後、`WebviewWindow.getByLabel(label)` で preview window handle を取得し
+ *   `onMoved` / `onResized` / `onCloseRequested` を listen。
+ * - 各 event で最新 geometry を ref に貯め、**ユーザー操作終了後の最終値**を
+ *   `setWindowGeometry(projectId, geometry)` で store に persist する。
+ * - polling はしない（event-driven）。connect 確立の 1 回 `outerPosition()` +
+ *   `innerSize()` で初期値を取得し、以後は event delta で更新する。
+ * - unlisten fn は ref に保持。次回 spawn で上書き、component unmount で cleanup。
+ * - 次回 spawn 時に `getWindowGeometry(projectId)` から取り出して Rust command に渡す。
+ *
  * ## Phase 4.2 申し送り
  * - 同一 window 内 multi-webview (`@tauri-apps/api/webview` + `unstable` feature) で
  *   Cursor 同等の in-IDE preview UX を実現する計画。
@@ -113,6 +128,10 @@ export function PreviewPane() {
   const unregisterWebviewWindow = usePreviewStore(
     (s) => s.unregisterWebviewWindow
   );
+  // PM-945: geometry store action を関数参照で取得（selector の再生成で rerender
+  // しないよう reference を安定させる。zustand の action は unstable ref OK）。
+  const getWindowGeometry = usePreviewStore((s) => s.getWindowGeometry);
+  const setWindowGeometry = usePreviewStore((s) => s.setWindowGeometry);
 
   const committedUrl = urlEntry?.current ?? DEFAULT_PREVIEW_URL;
 
@@ -121,6 +140,18 @@ export function PreviewPane() {
 
   // PM-943: 「アプリ内で開く」中の spawn ガード (連打防止)。
   const [isOpeningInApp, setIsOpeningInApp] = useState(false);
+
+  // PM-945: 現在 tracking 中の preview window に張った unlisten 関数群。
+  // - spawn 成功 → 各 event listen で unlisten を push
+  // - 次回 spawn or component unmount → まとめて解除
+  // - ref で保持し rerender に影響させない
+  const geometryUnlistensRef = useRef<UnlistenFn[]>([]);
+  // PM-945: 現在 tracking 対象の projectId / label。close event で正しい key に
+  // 対して setWindowGeometry するため保持する（event 時点で activeProjectId が
+  // 別 project に切り替わっていても correct key に書き込めるように）。
+  const trackingRef = useRef<{ projectId: string; label: string } | null>(null);
+  // PM-945: 最新 geometry。onMoved / onResized が部分的に更新するので merge 用。
+  const latestGeometryRef = useRef<PreviewWindowGeometry | null>(null);
 
   // project 切替 / store 側からの commit で局所 state を同期
   useEffect(() => {
@@ -137,6 +168,156 @@ export function PreviewPane() {
     },
     [activeProjectId, committedUrl, setCurrentUrl]
   );
+
+  /**
+   * PM-945: 現在の preview window に張った `onMoved` / `onResized` /
+   * `onCloseRequested` listener を全解除する。
+   *
+   * - 次回 spawn 直前 / component unmount 時に呼ぶ。
+   * - flush=true の場合、unlisten 前に `latestGeometryRef` を store に書き込む
+   *   （unmount 時 / 新 spawn 時に未保存の差分を捨てないため）。
+   * - 解除失敗は log のみ（既に window が destroy 済み等で失敗し得るが無害）。
+   */
+  const clearGeometryListeners = useCallback(
+    (flush: boolean) => {
+      const tracking = trackingRef.current;
+      const latest = latestGeometryRef.current;
+      if (flush && tracking && latest) {
+        setWindowGeometry(tracking.projectId, latest);
+      }
+      const unlistens = geometryUnlistensRef.current;
+      geometryUnlistensRef.current = [];
+      trackingRef.current = null;
+      latestGeometryRef.current = null;
+      for (const fn of unlistens) {
+        try {
+          fn();
+        } catch (e) {
+          logger.warn("[preview] geometry listener unlisten failed:", e);
+        }
+      }
+    },
+    [setWindowGeometry]
+  );
+
+  /**
+   * PM-945: spawn 済み preview window に geometry tracking listener を attach する。
+   *
+   * 手順:
+   * 1. `WebviewWindow.getByLabel(label)` で handle 取得（null なら抜ける）
+   * 2. 初期 geometry を `outerPosition()` + `innerSize()` で取得し
+   *    `latestGeometryRef` に格納 + store に 1 回 commit
+   * 3. `onMoved` / `onResized` で ref を update（毎フレーム store 書込みは重いので
+   *    ref のみ更新 → close 時に flush）
+   * 4. `onCloseRequested` で最終値を store に書き込み、listener を全解除
+   *
+   * エラーは警告 log のみ（geometry 記憶が失敗しても preview 機能自体は継続可）。
+   */
+  const attachGeometryListeners = useCallback(
+    async (projectId: string, label: string): Promise<void> => {
+      try {
+        // dynamic import: SSR 時の webviewWindow 読込回避（ApiKeyStep / spawn 呼出と同じ）
+        const { WebviewWindow } = await import(
+          "@tauri-apps/api/webviewWindow"
+        );
+        const win = await WebviewWindow.getByLabel(label);
+        if (!win) {
+          logger.warn(
+            "[preview] attachGeometryListeners: window not found:",
+            label
+          );
+          return;
+        }
+
+        // 1. 初期 geometry snapshot（次回 spawn の復元値として有用 / event が来ない
+        //    前に window が閉じられても min 復元できる）
+        try {
+          const [pos, size] = await Promise.all([
+            win.outerPosition(),
+            win.innerSize(),
+          ]);
+          const init: PreviewWindowGeometry = {
+            x: pos.x,
+            y: pos.y,
+            width: size.width,
+            height: size.height,
+          };
+          latestGeometryRef.current = init;
+          setWindowGeometry(projectId, init);
+        } catch (e) {
+          // 初期取得に失敗しても tracking 自体は継続。event で値が埋まる。
+          logger.warn("[preview] initial geometry snapshot failed:", e);
+        }
+
+        trackingRef.current = { projectId, label };
+
+        // 2. onMoved: outer position 更新のみ（size は未知なので前回値を保持）
+        const unMoved = await win.onMoved(({ payload }) => {
+          // payload は PhysicalPosition: { type: "Physical", x, y }
+          const prev = latestGeometryRef.current;
+          latestGeometryRef.current = {
+            x: payload.x,
+            y: payload.y,
+            width: prev?.width ?? 0,
+            height: prev?.height ?? 0,
+          };
+        });
+        geometryUnlistensRef.current.push(unMoved);
+
+        // 3. onResized: inner size 更新のみ
+        const unResized = await win.onResized(({ payload }) => {
+          // payload は PhysicalSize: { type: "Physical", width, height }
+          const prev = latestGeometryRef.current;
+          latestGeometryRef.current = {
+            x: prev?.x ?? 0,
+            y: prev?.y ?? 0,
+            width: payload.width,
+            height: payload.height,
+          };
+        });
+        geometryUnlistensRef.current.push(unResized);
+
+        // 4. onCloseRequested: 最終値を flush → listener 解除
+        //    preventDefault しないので close は通常通り実行される。
+        const unClose = await win.onCloseRequested(() => {
+          const tracking = trackingRef.current;
+          const latest = latestGeometryRef.current;
+          if (tracking && latest) {
+            setWindowGeometry(tracking.projectId, latest);
+            logger.info(
+              "[preview] saved geometry on close:",
+              tracking.projectId,
+              latest
+            );
+          }
+          // listener 自体の解除は setTimeout 0 で次 tick に遅延（close event の
+          // 内部処理と unlisten IPC が同時発火すると Tauri 内部で race する回避策）
+          setTimeout(() => clearGeometryListeners(false), 0);
+        });
+        geometryUnlistensRef.current.push(unClose);
+
+        logger.info(
+          "[preview] geometry listeners attached:",
+          label,
+          "projectId=",
+          projectId
+        );
+      } catch (e) {
+        logger.warn("[preview] attachGeometryListeners failed:", e);
+      }
+    },
+    [setWindowGeometry, clearGeometryListeners]
+  );
+
+  // PM-945: component unmount 時に listener を cleanup（flush あり）。
+  // effect の dep は空で、mount/unmount 時のみ実行される。
+  // clearGeometryListeners は useCallback なので ref 同等、stale を気にしない。
+  useEffect(() => {
+    return () => {
+      clearGeometryListeners(true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleOpenExternal = useCallback(async () => {
     const target = inputValue.trim() || committedUrl;
@@ -182,15 +363,37 @@ export function PreviewPane() {
     const label = buildPreviewWindowLabel(activeProjectId);
     const title = `Preview - ${target}`;
 
+    // PM-945: 新規 spawn 前に既存 preview の listener を cleanup し、未 flush の
+    // 最新 geometry を store に書き出す（旧 window は Rust 側 destroy で消える）。
+    clearGeometryListeners(true);
+
+    // PM-945: 前回 close 時の geometry があれば Rust に渡す。未登録なら undefined。
+    // undefined は JSON serialize で削除され、Rust 側 `Option<f64>` が None になる。
+    const savedGeometry = getWindowGeometry(activeProjectId);
+
     try {
       await callTauri<void>("spawn_preview_window", {
         label,
         url: target,
         title,
+        // PM-945: optional geometry。全部 undefined なら Rust 側 default
+        // (center + 1280x800) で spawn される（初回起動 / 未登録 project）。
+        x: savedGeometry?.x,
+        y: savedGeometry?.y,
+        width: savedGeometry?.width,
+        height: savedGeometry?.height,
       });
       registerWebviewWindow(activeProjectId, label);
       toast.success("アプリ内プレビューを開きました");
-      logger.info("[preview] rust-spawned window created:", label, target);
+      logger.info(
+        "[preview] rust-spawned window created:",
+        label,
+        target,
+        savedGeometry ? "(restored geometry)" : "(default geometry)"
+      );
+      // PM-945: spawn 成功後に geometry listener を attach。fire-and-forget だが
+      // エラー時は内部で log のみで、UI への影響はない。
+      void attachGeometryListeners(activeProjectId, label);
     } catch (err) {
       logger.error("[preview] rust spawn failed:", err);
       unregisterWebviewWindow(activeProjectId, label);
@@ -208,6 +411,9 @@ export function PreviewPane() {
     handleCommitUrl,
     registerWebviewWindow,
     unregisterWebviewWindow,
+    getWindowGeometry,
+    attachGeometryListeners,
+    clearGeometryListeners,
   ]);
 
   const handleSubmit = useCallback(
@@ -290,6 +496,7 @@ export function PreviewPane() {
           <span>
             「アプリ内で開く」は ccmux-ide 内の別 window で表示します
             （PM-944 / v1.1 Phase 4.1 Rust spawn）。表示されないサイトは「ブラウザで開く」をご利用ください。
+            （PM-945 / v1.2: ウィンドウ位置とサイズはプロジェクトごとに記憶されます）
           </span>
           <TooltipProvider delayDuration={200}>
             <Tooltip>
