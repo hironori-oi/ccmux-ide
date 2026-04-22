@@ -11,6 +11,17 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.3.1] - 2026-04-23
+
+### Added
+- **Claude Code MCP (Model Context Protocol) 対応** (PM-955)。5 scope (global / user / user-project / plugin / project-local) の `.mcp.json` / `settings.json` の `mcpServers` を統合走査、SlashPalette に MCP section (emerald accent + Plug icon) で表示。disable 機構 3 系統 (`disabledMcpServers` / `disabledMcpjsonServers` / `enabledPlugins`) も反映、secret (env) 漏洩防止。オーナー環境の stitch / aidesigner / vercel (plugin bundled) / supabase / github / playwright 等を実機認識
+
+### Fixed
+- Monaco Editor の背景が透過しすぎて text が壁紙に埋もれる bug を修正 (PM-956)。PM-870 の body `bg-transparent` 化の副作用で editor 背景が継承透過、可読性を失っていた。`bg-background/95` の div で wrap、壁紙は薄く透ける程度に抑制
+
+### Claude Code ecosystem 3 層完成
+v1.3.x で Cursor 上の Claude Code と同等の **Slash Command / Skill / Plugin / MCP** 4 層エコシステムに完全対応。
+
 ## [v1.3.0] - 2026-04-23
 
 ### Added
