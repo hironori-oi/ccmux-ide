@@ -80,14 +80,14 @@ jobs:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-chromium-${{ hashFiles('package.json') }}
 
+      # Hotfix (v1.2.x / PM-952): Azure Ubuntu mirror 障害で apt-get update が stuck し
+      # 20 分 timeout で workflow が cancel される問題に対応するため --with-deps を削除。
+      # ubuntu-24.04 runner は chromium 実行に必要な OS deps (libnss3, libasound2t64,
+      # libxkbcommon0, libdrm2 等) を pre-install 済のため、browser binary のみ入れれば
+      # 動作する。失敗が再発した場合は Option C (apt で明示 install) に昇格する。
       - name: Install Playwright Chromium
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-
-      # deps だけ再インストール（cache hit 時も dep packages 必要）
-      - name: Ensure Playwright deps
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
+        run: npx playwright install chromium
 
       - name: Run Playwright tests
         run: npm run test:e2e
