@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { motion } from "framer-motion";
-import { Plus, Sparkles } from "lucide-react";
+import { Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -170,16 +170,8 @@ export function ProjectRail() {
         aria-label="プロジェクトレール"
         className="flex w-12 shrink-0 flex-col items-center gap-1 border-r bg-muted/50 py-2"
       >
-        {/* ブランド小アイコン */}
-        <div
-          className="flex h-8 w-8 items-center justify-center rounded-md"
-          aria-hidden
-        >
-          <Sparkles className="h-4 w-4 text-primary" />
-        </div>
-
-        <div className="my-1 h-px w-6 bg-border" aria-hidden />
-
+        {/* PM-965: 旧ブランド小アイコン（Sparkles）+ 区切り線を削除。
+            TitleBar 側にブランド名があり、rail はプロジェクトアイコンだけで成立する。 */}
         {/* プロジェクト一覧 */}
         <nav
           aria-label="プロジェクト一覧"

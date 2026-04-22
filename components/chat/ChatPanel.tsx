@@ -71,6 +71,12 @@ export function ChatPanel({
 
   // v5 Chunk C: activeProjectId の変化を購読し、chat / session のスワップを行う。
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
+  // PM-965: 1 pane モードの header に activeProject の title を表示する
+  // （旧 "Sumi" 固定からプロジェクト名に変更）。
+  const activeProjectTitle = useProjectStore((s) => {
+    if (!s.activeProjectId) return null;
+    return s.projects.find((p) => p.id === s.activeProjectId)?.title ?? null;
+  });
   const sidecarStatusForActive = useProjectStore((s) =>
     s.activeProjectId ? s.sidecarStatus[s.activeProjectId] ?? "stopped" : "stopped"
   );
@@ -210,11 +216,14 @@ export function ChatPanel({
           canClose={canClose}
         />
       )}
-      {/* 1 pane 時のみ表示する従来ヘッダ（Sumi + status 表示）。
-          複数 pane 時は status bar が冗長になるため省略。 */}
+      {/* 1 pane 時のみ表示する従来ヘッダ（プロジェクト名 + status 表示）。
+          複数 pane 時は status bar が冗長になるため省略。
+          PM-965: 旧「Sumi」固定 → activeProject.title（未選択時は「プロジェクト未選択」）。 */}
       {!showHeader && (
         <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
-          <h1 className="text-sm font-medium">Sumi</h1>
+          <h1 className="truncate text-sm font-medium">
+            {activeProjectTitle ?? "プロジェクト未選択"}
+          </h1>
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             {!ready && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
             {status}
