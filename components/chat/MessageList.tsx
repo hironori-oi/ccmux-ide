@@ -78,6 +78,12 @@ export function MessageList({ paneId = DEFAULT_PANE_ID }: { paneId?: string }) {
       <div
         ref={scrollRef}
         className="flex flex-1 items-center justify-center overflow-y-auto p-6"
+        // PM-951: 設定画面「フォントサイズ」を chat root に適用。
+        // 子要素の Tailwind `text-sm` 等は rem ベースだが inline font-size が
+        // 優先されないため、UserMessage / AssistantMessage 側で `text-[length:inherit]`
+        // ないし em 基準を使う必要がある。ここでは chat root のデフォルト
+        // fontSize として設定しておき、empty state のテキストも合わせる。
+        style={{ fontSize: "var(--app-font-size)" }}
       >
         <div className="flex flex-col items-center gap-3 text-center">
           <Sparkles className="h-10 w-10 text-muted-foreground" aria-hidden />
@@ -91,7 +97,15 @@ export function MessageList({ paneId = DEFAULT_PANE_ID }: { paneId?: string }) {
   }
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-6">
+    <div
+      ref={scrollRef}
+      className="flex-1 overflow-y-auto px-4 py-6"
+      // PM-951: 設定画面「フォントサイズ」を chat scroll container に適用。
+      // UserMessage / AssistantMessage の本文は `text-[length:inherit]` を
+      // 後続で導入し、このコンテナの font-size を継承する。Tailwind の
+      // text-sm 指定（= 0.875rem）が効いている既存子孫は変更しない。
+      style={{ fontSize: "var(--app-font-size)" }}
+    >
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
         <AnimatePresence initial={false}>
           {messages.map((m) => {

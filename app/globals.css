@@ -108,6 +108,16 @@
      * 排除したため、0.55 で text 可読性 + 壁紙透過のバランスが取れる。
      */
     --terminal-bg: rgba(0, 0, 0, 0.55);
+
+    /*
+     * PM-951: 設定画面「フォントサイズ」(12〜16px, 既定 14px) の参照先。
+     * `lib/apply-accent.ts::applyFontSize` が localStorage の値をもとに
+     * document.documentElement へ書き込み、Chat / Editor / Terminal 等の
+     * 各 pane が参照する。Tailwind の rem レイアウトに影響させないため
+     * html 自体の font-size は変更しない方針（UI 全体スケールではなく
+     * VSCode の "Editor Font Size" 相当のスコープ限定スケール）。
+     */
+    --app-font-size: 14px;
   }
 
   /* 画像レイヤー + オーバーレイ層を効かせるため、body 自身の bg を透明化。

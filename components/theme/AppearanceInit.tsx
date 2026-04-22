@@ -6,10 +6,12 @@ import { useTheme } from "next-themes";
 import {
   applyAccent,
   applyBackground,
+  applyFontSize,
   applyThemePreset,
   readPersistedAppearance,
   type ResolvedMode,
 } from "@/lib/apply-accent";
+import { useSettingsStore } from "@/lib/stores/settings";
 import { DEFAULT_BACKGROUND_IMAGE } from "@/lib/types";
 
 /**
@@ -34,6 +36,10 @@ import { DEFAULT_BACKGROUND_IMAGE } from "@/lib/types";
 export function AppearanceInit() {
   const { resolvedTheme } = useTheme();
   const initializedRef = useRef(false);
+  // PM-951: 設定画面のスライダー onChange で store が更新されたら、その場で
+  // CSS variable --app-font-size に反映する。persist 復元は下の useEffect で
+  // readPersistedAppearance から読むので二重初期化にはならない。
+  const fontSize = useSettingsStore((s) => s.settings.appearance.fontSize);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -43,13 +49,15 @@ export function AppearanceInit() {
     const mode: ResolvedMode = resolvedTheme === "dark" ? "dark" : "light";
     const persisted = readPersistedAppearance();
 
-    // 初回は theme / accent / background すべてを一括反映
+    // 初回は theme / accent / background / fontSize すべてを一括反映
     if (!initializedRef.current) {
       initializedRef.current = true;
       if (persisted) {
         applyThemePreset(persisted.themePreset, mode);
         applyAccent(persisted.accentColor, mode);
         applyBackground(persisted.backgroundImage);
+        // PM-951: localStorage の fontSize を初期反映（persist 復元）。
+        applyFontSize(persisted.fontSize);
       } else {
         // persisted が無い初回起動: 背景画像だけはデフォルト（path=null）で
         // CSS variable を明示的に初期化しておく（他は globals.css の :root で
@@ -66,6 +74,14 @@ export function AppearanceInit() {
       applyAccent(persisted.accentColor, mode);
     }
   }, [resolvedTheme]);
+
+  // PM-951: fontSize の変更（Settings スライダー操作）を即時 DOM に反映。
+  // 初回 mount 時は上の useEffect でも applyFontSize を呼ぶが、冪等なので
+  // 重複実行しても問題ない（CSS variable を同値で上書きするだけ）。
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    applyFontSize(fontSize);
+  }, [fontSize]);
 
   return null;
 }

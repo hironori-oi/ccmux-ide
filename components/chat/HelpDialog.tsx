@@ -121,6 +121,51 @@ export function HelpDialog() {
               </li>
             </ul>
           </section>
+
+          {/* PM-947 (v1.2): ターミナル内専用ショートカット。xterm.js canvas に
+              focus がある時だけ有効（chat / editor には影響しない）。 */}
+          <section className="mt-6 space-y-3">
+            <h3 className="text-sm font-semibold text-foreground">ターミナル内ショートカット</h3>
+            <p className="text-[11px] text-muted-foreground">
+              xterm.js canvas にフォーカスがある時のみ有効です。他の画面では通常のショートカット（
+              <kbd className="rounded border bg-muted px-1 py-0.5 font-mono text-[10px]">Ctrl/Cmd + Shift + F</kbd>
+              は会話検索など）が優先されます。
+            </p>
+            <ul className="space-y-1 text-xs text-muted-foreground">
+              <li>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + Shift + F</kbd>{" "}
+                ターミナル内検索（scrollback 全体を横断、Enter で次 / Shift+Enter で前）
+              </li>
+              <li>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + Shift + C</kbd>{" "}
+                選択範囲をクリップボードにコピー
+              </li>
+              <li>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + Shift + V</kbd>{" "}
+                クリップボードの文字列をペースト
+              </li>
+              <li>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + Shift + K</kbd>{" "}
+                ターミナルをクリア（scrollback は残す）
+              </li>
+              <li>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + Shift + L</kbd>{" "}
+                ターミナル表示リセット（alt screen 残留の復旧）
+              </li>
+              <li>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + Shift + N</kbd>{" "}
+                同じペインに新しいターミナルを追加
+              </li>
+              <li>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + Shift + W</kbd>{" "}
+                現在のターミナルを閉じる
+              </li>
+              <li>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl + Tab</kbd>{" "}
+                ペイン内の次のターミナルに切替（Shift で逆方向）
+              </li>
+            </ul>
+          </section>
         </ScrollArea>
       </DialogContent>
     </Dialog>

@@ -16,6 +16,11 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { SafeMonacoEditor } from "@/components/common/SafeMonacoEditor";
 import { detectLang } from "@/lib/detect-lang";
+import {
+  registerMonacoThemes,
+  resolveMonacoTheme,
+} from "@/lib/monaco-theme";
+import { useSettingsStore } from "@/lib/stores/settings";
 import { cn } from "@/lib/utils";
 
 /**
@@ -120,7 +125,27 @@ export function FilePreviewDialog({
   // v3.4.4: 画像用 Blob URL の ref。unmount / 再読込時に revoke する。
   const imageUrlRef = useRef<string | null>(null);
   const { resolvedTheme } = useTheme();
-  const monacoTheme = resolvedTheme === "dark" ? "vs-dark" : "vs-light";
+  // PM-949: app preset + light/dark を Monaco theme 名に解決する。
+  // 旧実装は `"vs-light"` を渡していたが、これは Monaco に存在しない theme 名
+  // （正しくは `"vs"`）で、実質無効化されていた。
+  const themePreset = useSettingsStore(
+    (s) => s.settings.appearance.themePreset
+  );
+  const mode = resolvedTheme === "dark" ? "dark" : "light";
+  const monacoTheme = resolveMonacoTheme(themePreset, mode);
+
+  // preset / mode 切替で Monaco editor instance にも反映（custom theme 登録込み）。
+  useEffect(() => {
+    let cancelled = false;
+    void import("monaco-editor").then((monaco) => {
+      if (cancelled) return;
+      registerMonacoThemes(monaco);
+      monaco.editor.setTheme(monacoTheme);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [monacoTheme]);
 
   useEffect(() => {
     if (!filePath) {

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Search as SearchIcon, X as CloseIcon } from "lucide-react";
 
 import { logger } from "@/lib/logger";
 import { callTauri } from "@/lib/tauri-api";
@@ -12,6 +13,14 @@ import {
   registerActiveTerminal,
   unregisterActiveTerminal,
 } from "@/hooks/useTerminalListener";
+import {
+  TERMINAL_DEFAULT_PANE_ID,
+  useTerminalStore,
+} from "@/lib/stores/terminal";
+// PM-947: Ctrl+Shift+N で新規 terminal 起動時、active project の cwd が必要。
+import { useProjectStore } from "@/lib/stores/project";
+// PM-951: 設定画面「フォントサイズ」を xterm.js に反映するため購読する。
+import { useSettingsStore } from "@/lib/stores/settings";
 import "@xterm/xterm/css/xterm.css";
 
 /**
@@ -70,6 +79,19 @@ import "@xterm/xterm/css/xterm.css";
  * - pendingWrites の pane-local 先取り buffer は本変更で不要化 (singleton
  *   listener が pane mount 前の出力も buffer に貯めているため)。
  *
+ * ## PM-947 (v1.2): Terminal keyboard shortcut 拡充
+ * - xterm-addon-search で scrollback 全文検索 (Ctrl+Shift+F)
+ * - clipboard copy/paste (Ctrl+Shift+C / Ctrl+Shift+V)
+ * - terminal clear (Ctrl+Shift+K)
+ * - 新規 / close (Ctrl+Shift+N / Ctrl+Shift+W)
+ * - sub-tab 内 terminal 切替 (Ctrl+Tab)
+ * - hotkey は xterm の `attachCustomKeyEventHandler` で `false` を返して
+ *   xterm への文字入力を抑止しつつ、React 側で動作を実行する。これにより
+ *   Terminal focus 時だけ有効化され、他の場面 (chat / editor) では発火しない。
+ * - Ctrl+Shift+F は SearchPalette (PM-231) と衝突するが、TerminalPane 内の
+ *   custom handler が先に preventDefault + stopPropagation するため
+ *   useHotkeys (document level) には到達しない。
+ *
  * ## PM-934 (2026-04-20): 0x0 defer 無限ループの hotfix
  * - PM-932 で wrapper + inner の 2 層化を行った結果、以下の症状が発生:
  *     `[TerminalPane] container still 0x0, defer open` が連続出力され term.open が
@@ -92,6 +114,132 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
 
+  // PM-947: 検索 UI の表示状態 + 現在の query 文字列。
+  // xterm-addon-search の `findNext(query)` / `findPrevious(query)` に渡す。
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // useEffect 内で生成した addon / term instance を参照するため ref に保持。
+  // React state にすると再レンダリングの都度 useEffect が走って xterm が破棄
+  // されてしまうので、これは必ず ref で持つ。
+  const termRef = useRef<import("@xterm/xterm").Terminal | null>(null);
+  const searchAddonRef = useRef<
+    import("@xterm/addon-search").SearchAddon | null
+  >(null);
+  // PM-951: fontSize 変更後に fit.fit() を呼んで rows/cols を再計測するため
+  // FitAddon も ref で保持する（既存ロジックは useEffect scope の局所変数で
+  // 持っていたが、font size hook からは参照できないため追加）。
+  const fitAddonRef = useRef<
+    import("@xterm/addon-fit").FitAddon | null
+  >(null);
+
+  // PM-947: Ctrl+Tab で同 pane の次 terminal に切替えるため、最新の
+  // terminals / panes を store から取る必要がある。useEffect 再起動を
+  // 避けるため callback 内で getState() を使う。
+  const cycleTerminal = useCallback(
+    (direction: 1 | -1) => {
+      const state = useTerminalStore.getState();
+      const current = state.terminals[ptyId];
+      if (!current) return;
+      const paneId = current.paneId ?? TERMINAL_DEFAULT_PANE_ID;
+      const siblings = Object.values(state.terminals)
+        .filter(
+          (t) =>
+            t.projectId === current.projectId &&
+            (t.paneId ?? TERMINAL_DEFAULT_PANE_ID) === paneId
+        )
+        .sort((a, b) => a.startedAt - b.startedAt);
+      if (siblings.length <= 1) return;
+      const idx = siblings.findIndex((t) => t.ptyId === ptyId);
+      if (idx < 0) return;
+      const nextIdx = (idx + direction + siblings.length) % siblings.length;
+      state.setActiveTerminal(siblings[nextIdx].ptyId, paneId);
+    },
+    [ptyId]
+  );
+
+  // PM-947: 検索 overlay の close handler。
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery("");
+    // 検索ハイライトを解除して terminal に focus を戻す。
+    try {
+      searchAddonRef.current?.clearDecorations();
+    } catch {
+      // addon 未 mount or 旧 version: noop
+    }
+    try {
+      termRef.current?.focus();
+    } catch {
+      // noop
+    }
+  }, []);
+
+  // PM-947: findNext / findPrevious は searchQuery を参照する最新の handler
+  // を return する。input の onKeyDown から呼ぶ。
+  const findNext = useCallback(() => {
+    const q = searchQuery;
+    if (!q) return;
+    try {
+      searchAddonRef.current?.findNext(q);
+    } catch (e) {
+      logger.debug("[TerminalPane] findNext failed:", e);
+    }
+  }, [searchQuery]);
+
+  const findPrevious = useCallback(() => {
+    const q = searchQuery;
+    if (!q) return;
+    try {
+      searchAddonRef.current?.findPrevious(q);
+    } catch (e) {
+      logger.debug("[TerminalPane] findPrevious failed:", e);
+    }
+  }, [searchQuery]);
+
+  // PM-947: searchOpen が true になったら input に focus。
+  useEffect(() => {
+    if (searchOpen) {
+      // next frame で focus (dialog の mount が先に終わるのを待つ)
+      const id = requestAnimationFrame(() => {
+        try {
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        } catch {
+          // noop
+        }
+      });
+      return () => cancelAnimationFrame(id);
+    }
+  }, [searchOpen]);
+
+  // PM-951: 設定画面「フォントサイズ」を xterm.js にも反映する。
+  // - 初期 mount 時: メイン useEffect 内で fontSizeRef.current を読み、new Terminal({ fontSize }) に渡す。
+  // - 以降の変更: この useEffect が term.options.fontSize を書き換え、fit.fit() で再計測する。
+  // メイン useEffect の依存に fontSize を入れると term が毎回 dispose+再生成されて
+  // scrollback が消えるので、ref + 独立 effect の 2 段構成にしている。
+  const fontSize = useSettingsStore((s) => s.settings.appearance.fontSize);
+  const fontSizeRef = useRef(fontSize);
+  useEffect(() => {
+    fontSizeRef.current = fontSize;
+    const term = termRef.current;
+    if (!term) return;
+    try {
+      // xterm.js 5.x の ITerminalOptions は runtime 書き換え可 (options は setter)。
+      term.options.fontSize = fontSize;
+    } catch (e) {
+      logger.debug("[TerminalPane] options.fontSize 更新に失敗:", e);
+    }
+    // fontSize 変更で文字幅/行高が変わるため、cols/rows を再計測する。
+    // backend pty の resize は既存 ResizeObserver 経路に任せたいので、
+    // fit.fit() 側が自身の listener を通じて resize 通知を発火するのに任せる。
+    try {
+      fitAddonRef.current?.fit();
+    } catch (e) {
+      logger.debug("[TerminalPane] fit after fontSize change failed:", e);
+    }
+  }, [fontSize]);
+
   useEffect(() => {
     const container = innerRef.current;
     const wrapper = wrapperRef.current;
@@ -113,6 +261,9 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
       try {
         const { Terminal } = await import("@xterm/xterm");
         const { FitAddon } = await import("@xterm/addon-fit");
+        // PM-947: scrollback 検索のための addon。xterm に load すると
+        // Terminal.findNext(q) / findPrevious(q) が使えるようになる。
+        const { SearchAddon } = await import("@xterm/addon-search");
 
         if (disposed) return;
 
@@ -136,7 +287,10 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
           cursorBlink: true,
           fontFamily:
             "'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace",
-          fontSize: 13,
+          // PM-951: 設定画面「フォントサイズ」を初期値として使用。
+          // mount 後の変更は上記 useEffect (fontSize dep) が term.options.fontSize を
+          // 書き換えるので、ここは ref 経由で初期値のみ注入する。
+          fontSize: fontSizeRef.current,
           lineHeight: 1.2,
           scrollback: 5000,
           // PM-922: 背景画像 (PM-870) を terminal pane でも透過させるため、
@@ -181,6 +335,144 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
 
         const fit = new FitAddon();
         term.loadAddon(fit);
+
+        // PM-947: search addon を load。`findNext(query)` / `findPrevious(query)`
+        // で scrollback 全体を検索し、match 行にハイライト + scroll する。
+        const searchAddon = new SearchAddon();
+        term.loadAddon(searchAddon);
+        searchAddonRef.current = searchAddon;
+        cleanups.push(() => {
+          try {
+            searchAddon.dispose();
+          } catch {
+            // noop
+          }
+          if (searchAddonRef.current === searchAddon) {
+            searchAddonRef.current = null;
+          }
+        });
+
+        // PM-947: Terminal focus 中のみ有効な custom keyboard shortcut。
+        // `attachCustomKeyEventHandler` は xterm が keystroke を
+        // 文字入力として受け取る前に呼ばれる hook で、false を返すと xterm は
+        // その入力を無視する (文字送信しない)。
+        //
+        // Ctrl+Shift+F (既存 SearchPalette と衝突) / Ctrl+Tab (ブラウザ tab 切替)
+        // は preventDefault + stopPropagation を併用して document / window の
+        // listener (react-hotkeys-hook の mod+shift+f や Tauri webview の
+        // ブラウザ既定動作) に到達させない。
+        //
+        // Ctrl+Shift+C / V は xterm デフォルトでは無効 (xterm.js は OS 標準
+        // copy/paste を honor する設計) だが、Windows の cmd / bash は
+        // Ctrl+C を SIGINT として受け取る関係で選択 copy 用の専用キーが
+        // 必要になる。ここで明示 handle する。
+        term.attachCustomKeyEventHandler((ev) => {
+          // keydown のみ処理 (keyup を処理すると二重発火になる)
+          if (ev.type !== "keydown") return true;
+          const ctrl = ev.ctrlKey || ev.metaKey;
+          const shift = ev.shiftKey;
+          const key = ev.key;
+
+          // Ctrl+Tab: 同 pane 内の次 / 前 terminal に切替
+          if (ctrl && !shift && key === "Tab") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            cycleTerminal(1);
+            return false;
+          }
+          if (ctrl && shift && key === "Tab") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            cycleTerminal(-1);
+            return false;
+          }
+
+          // 以降は Ctrl+Shift+X 系。Shift なしは xterm にそのまま流す。
+          if (!ctrl || !shift) return true;
+
+          // Ctrl+Shift+F: Terminal 内 find を開く (SearchPalette より優先)
+          if (key === "F" || key === "f") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            setSearchOpen((prev) => !prev);
+            return false;
+          }
+          // Ctrl+Shift+K: term.clear() (scrollback を残しつつ viewport クリア)
+          if (key === "K" || key === "k") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            try {
+              term.clear();
+            } catch (e) {
+              logger.debug("[TerminalPane] term.clear failed:", e);
+            }
+            return false;
+          }
+          // Ctrl+Shift+N: 同 pane に新規 terminal を起動
+          if (key === "N" || key === "n") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const state = useTerminalStore.getState();
+            const current = state.terminals[ptyId];
+            const proj = useProjectStore.getState().getActiveProject();
+            if (current && proj) {
+              void state.createTerminal(
+                proj.id,
+                proj.path,
+                undefined,
+                current.paneId ?? TERMINAL_DEFAULT_PANE_ID
+              );
+            }
+            return false;
+          }
+          // Ctrl+Shift+W: 現在 terminal を close
+          if (key === "W" || key === "w") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            void useTerminalStore.getState().closeTerminal(ptyId);
+            return false;
+          }
+          // Ctrl+Shift+C: 選択範囲を clipboard にコピー
+          if (key === "C" || key === "c") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const selection = term.getSelection();
+            if (selection && typeof navigator !== "undefined" && navigator.clipboard) {
+              void navigator.clipboard.writeText(selection).catch((e) => {
+                logger.warn("[TerminalPane] clipboard write failed:", e);
+              });
+            }
+            return false;
+          }
+          // Ctrl+Shift+V: clipboard の text を pty に paste
+          if (key === "V" || key === "v") {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (typeof navigator !== "undefined" && navigator.clipboard) {
+              void navigator.clipboard
+                .readText()
+                .then((text) => {
+                  if (!text) return;
+                  void callTauri<void>("pty_write", {
+                    ptyId,
+                    data: text,
+                  }).catch((e) => {
+                    logger.warn("[TerminalPane] paste pty_write failed:", e);
+                  });
+                })
+                .catch((e) => {
+                  logger.warn("[TerminalPane] clipboard read failed:", e);
+                });
+            }
+            return false;
+          }
+          // Ctrl+Shift+L は従来 container keydown listener (PM-921) 側で
+          // 処理。ここでは xterm にそのまま渡してしまうと文字が入るため false。
+          if (key === "L" || key === "l") {
+            return false;
+          }
+          return true;
+        });
 
         // PM-930 hotfix (root cause of PM-928 regression):
         // term.open() を display:none 親配下 (container rect = 0x0) で呼ぶと、
@@ -294,6 +586,19 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
 
         termInstance = term;
         fitAddonInstance = fit;
+        // PM-947: JSX 側 (search overlay の onChange handler) から term に
+        // アクセスするために ref に保持。unmount の cleanup で null に戻す。
+        termRef.current = term;
+        // PM-951: fontSize 変更時の fit.fit() 呼出のため FitAddon も ref に保持。
+        fitAddonRef.current = fit;
+        cleanups.push(() => {
+          if (termRef.current === term) {
+            termRef.current = null;
+          }
+          if (fitAddonRef.current === fit) {
+            fitAddonRef.current = null;
+          }
+        });
 
         // PM-921 Bug 1: viewport reset 関数を registry へ登録。
         // reset + fit を合わせて呼ぶことで alt screen 残留の scroll region /
@@ -439,6 +744,11 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
         // noop
       }
     };
+    // PM-947: cycleTerminal は ptyId のみに依存する useCallback であり、
+    // ptyId が変われば本 useEffect が丸ごと再起動して新しい closure で
+    // customKeyEventHandler が張り直されるため exhaustive-deps の警告は
+    // 無視してよい (ptyId のみを deps にして多重 mount を避ける意図)。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ptyId]);
 
   return (
@@ -458,6 +768,81 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
       role="application"
     >
       <div ref={innerRef} className="absolute inset-0" />
+      {/* PM-947: 検索 overlay。Ctrl+Shift+F で開く。
+          Enter / Shift+Enter で次 / 前を検索、Esc で閉じる。
+          xterm canvas の上に絶対配置、pointer-events で操作可能に。 */}
+      {searchOpen && (
+        <div
+          className="pointer-events-auto absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border/50 bg-background/90 px-2 py-1 shadow-md backdrop-blur-sm"
+          role="search"
+          aria-label="ターミナル内検索"
+        >
+          <SearchIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+          <input
+            ref={searchInputRef}
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              // input 内で xterm の customKeyEventHandler が動かないため、
+              // ここで独立に handling する。
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                closeSearch();
+                return;
+              }
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                if (e.shiftKey) {
+                  findPrevious();
+                } else {
+                  findNext();
+                }
+                return;
+              }
+              // Ctrl+Shift+F を再度押したら close。入力中の input でも効くように。
+              if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "F" || e.key === "f")) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeSearch();
+                return;
+              }
+            }}
+            placeholder="検索..."
+            className="w-48 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+            aria-label="検索語"
+          />
+          <button
+            type="button"
+            onClick={findPrevious}
+            className="rounded px-1 text-[10px] text-muted-foreground hover:bg-accent/30 hover:text-foreground"
+            aria-label="前を検索"
+            title="前を検索 (Shift+Enter)"
+          >
+            &#x2191;
+          </button>
+          <button
+            type="button"
+            onClick={findNext}
+            className="rounded px-1 text-[10px] text-muted-foreground hover:bg-accent/30 hover:text-foreground"
+            aria-label="次を検索"
+            title="次を検索 (Enter)"
+          >
+            &#x2193;
+          </button>
+          <button
+            type="button"
+            onClick={closeSearch}
+            className="rounded p-0.5 text-muted-foreground hover:bg-accent/30 hover:text-foreground"
+            aria-label="検索を閉じる"
+            title="閉じる (Esc)"
+          >
+            <CloseIcon className="h-3 w-3" aria-hidden />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

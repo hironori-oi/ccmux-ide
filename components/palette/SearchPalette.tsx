@@ -3,7 +3,20 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
-import { MessageSquare, Bot, User, Wrench } from "lucide-react";
+import {
+  MessageSquare,
+  Bot,
+  User,
+  Wrench,
+  FileText,
+  FileEdit,
+  FilePlus,
+  Terminal,
+  FolderSearch,
+  Search,
+  Globe,
+  Sparkles,
+} from "lucide-react";
 
 import {
   Command,
@@ -20,9 +33,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { callTauri } from "@/lib/tauri-api";
 import { useChatStore } from "@/lib/stores/chat";
 import { useSessionStore } from "@/lib/stores/session";
+import {
+  extractToolSnippetInfo,
+  parseToolMessageContent,
+  type ToolSnippetInfo,
+} from "@/lib/tool-content-parser";
 
 /**
  * PM-231 / PM-232: 会話検索パレット（Ctrl+Shift+F / Cmd+Shift+F）。
@@ -74,6 +93,35 @@ const ROLE_LABEL_JA: Record<string, string> = {
   assistant: "Claude",
   tool: "ツール",
   system: "システム",
+};
+
+/**
+ * PM-900: tool_use message の構造化プレビュー用アイコン / ラベル。
+ * ToolUseCard の定義と一致させる（将来 tool 追加時の単一変更点にはしないが、
+ * 表示揺れは最小化する）。
+ */
+const TOOL_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  Read: FileText,
+  Edit: FileEdit,
+  MultiEdit: FileEdit,
+  Write: FilePlus,
+  Bash: Terminal,
+  Glob: FolderSearch,
+  Grep: Search,
+  WebFetch: Globe,
+  WebSearch: Search,
+  Task: Sparkles,
+};
+
+/** 主要 field key を UI 向けの短いラベルに変換（未知 key は key そのまま） */
+const PREVIEW_KEY_LABELS_JA: Record<string, string> = {
+  file_path: "file",
+  path: "path",
+  command: "command",
+  pattern: "pattern",
+  query: "query",
+  url: "url",
+  description: "description",
 };
 
 export function SearchPalette({ open, onOpenChange }: SearchPaletteProps) {
@@ -235,14 +283,35 @@ function SearchResultItem({
   result: SearchResult;
   onSelect: () => void;
 }) {
-  const Icon = ROLE_ICON[result.role] ?? MessageSquare;
-  const roleLabel = ROLE_LABEL_JA[result.role] ?? result.role;
   const title =
     result.sessionTitle?.trim() || "（無題のセッション）";
   const relative = useMemo(
     () => formatRelativeTime(result.createdAt),
     [result.createdAt]
   );
+
+  // PM-900: tool role は構造化プレビューを優先的に試みる。
+  // 完全 JSON (persisted content がそのまま snippet に収まる短い tool message)
+  // なら `parseToolMessageContent` で精確に復元できる。snippet が truncate されて
+  // いる場合は `extractToolSnippetInfo` で正規表現ベースの best-effort 抽出へ。
+  // どちらも失敗したら既存の汎用 snippet 表示に frame を寄せる。
+  const toolInfo = useMemo<ToolSnippetInfo | null>(() => {
+    if (result.role !== "tool") return null;
+    try {
+      const parsed = parseToolMessageContent(result.snippetHtml);
+      if (parsed) {
+        const preview = summarizeToolInput(parsed.input);
+        return {
+          name: parsed.name,
+          preview: preview.text,
+          previewKey: preview.key,
+        };
+      }
+    } catch {
+      // parse 失敗は fallback に進む
+    }
+    return extractToolSnippetInfo(result.snippetHtml);
+  }, [result.role, result.snippetHtml]);
 
   // cmdk 内部 filter は shouldFilter=false で止めているため value は任意。
   // 空文字だと Item が非表示になる仕様があるので、一意な文字列を入れておく。
@@ -252,20 +321,138 @@ function SearchResultItem({
       onSelect={onSelect}
       className="flex-col items-stretch gap-1 py-2"
     >
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span className="font-medium text-foreground">{roleLabel}</span>
-        <span aria-hidden>·</span>
-        <span className="line-clamp-1">{title}</span>
-        <span aria-hidden className="ml-auto shrink-0">
-          {relative}
-        </span>
-      </div>
-      <p className="line-clamp-2 whitespace-normal break-words text-sm text-foreground">
-        <HighlightedSnippet snippet={result.snippetHtml} />
-      </p>
+      <SearchResultHeader
+        role={result.role}
+        toolName={toolInfo?.name}
+        title={title}
+        relative={relative}
+      />
+      {toolInfo && toolInfo.name ? (
+        <ToolStructuredPreview
+          info={toolInfo}
+          snippet={result.snippetHtml}
+        />
+      ) : (
+        <p className="line-clamp-2 whitespace-normal break-words text-sm text-foreground">
+          <HighlightedSnippet snippet={result.snippetHtml} />
+        </p>
+      )}
     </CommandItem>
   );
+}
+
+/**
+ * PM-900: 1 行目（role / tool badge + title + 相対時刻）。
+ * tool_use が構造化抽出できた場合は role ラベルの隣に tool badge を追加表示する。
+ */
+function SearchResultHeader({
+  role,
+  toolName,
+  title,
+  relative,
+}: {
+  role: string;
+  toolName?: string;
+  title: string;
+  relative: string;
+}) {
+  const Icon = ROLE_ICON[role] ?? MessageSquare;
+  const roleLabel = ROLE_LABEL_JA[role] ?? role;
+  const ToolIcon = toolName ? TOOL_ICONS[toolName] ?? Wrench : null;
+
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden />
+      <span className="font-medium text-foreground">{roleLabel}</span>
+      {toolName && ToolIcon && (
+        <Badge
+          variant="outline"
+          className="gap-1 border-muted-foreground/30 px-1.5 py-0 text-[10px] font-medium"
+        >
+          <ToolIcon className="h-3 w-3" aria-hidden />
+          {toolName}
+        </Badge>
+      )}
+      <span aria-hidden>·</span>
+      <span className="line-clamp-1">{title}</span>
+      <span aria-hidden className="ml-auto shrink-0">
+        {relative}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * PM-900: tool_use の構造化プレビュー本体。
+ *
+ * 主要 field (file_path / command / pattern 等) が抽出できた場合は 1 行 preview
+ * として先頭に出す。そのあと raw snippet を 1 行で補助表示して検索ヒット位置の
+ * コンテキストを残す（highlight は維持）。
+ *
+ * preview が無い場合は snippet だけを 2 行まで表示（既存挙動へのフォールバック）。
+ */
+function ToolStructuredPreview({
+  info,
+  snippet,
+}: {
+  info: ToolSnippetInfo;
+  snippet: string;
+}) {
+  const keyLabel = info.previewKey
+    ? PREVIEW_KEY_LABELS_JA[info.previewKey] ?? info.previewKey
+    : undefined;
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      {info.preview && (
+        <p className="line-clamp-1 whitespace-normal break-all text-sm text-foreground">
+          {keyLabel && (
+            <span className="mr-1.5 font-mono text-[10px] uppercase text-muted-foreground">
+              {keyLabel}
+            </span>
+          )}
+          <HighlightedSnippet snippet={info.preview} />
+        </p>
+      )}
+      <p
+        className={
+          info.preview
+            ? "line-clamp-1 whitespace-normal break-words text-xs text-muted-foreground"
+            : "line-clamp-2 whitespace-normal break-words text-sm text-foreground"
+        }
+      >
+        <HighlightedSnippet snippet={snippet} />
+      </p>
+    </div>
+  );
+}
+
+/**
+ * PM-900: `ToolUseEvent.input` から代表 field を 1 つ選んで 1 行 preview 化する。
+ * 優先度は ToolUseCard.summarizeInput と揃える。
+ */
+function summarizeToolInput(input: Record<string, unknown>): {
+  text: string;
+  key?: string;
+} {
+  const ordered: Array<[string, string]> = [];
+  for (const key of [
+    "file_path",
+    "path",
+    "command",
+    "pattern",
+    "query",
+    "url",
+    "description",
+  ]) {
+    const v = input[key];
+    if (typeof v === "string" && v.length > 0) {
+      ordered.push([key, v]);
+    }
+  }
+  if (ordered.length === 0) return { text: "" };
+  const [key, text] = ordered[0];
+  return { text, key };
 }
 
 // ---------------------------------------------------------------------------

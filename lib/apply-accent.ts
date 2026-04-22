@@ -106,11 +106,12 @@ export function applyThemePreset(
  *
  * Round E2: 背景画像（backgroundImage）も返す。旧バージョン（v2 以前）で
  * 未設定の場合は `DEFAULT_BACKGROUND_IMAGE` を返す。
+ * PM-951: UI 共通フォントサイズ（fontSize, 12〜16 の整数 px）も返す。
  */
 export function readPersistedAppearance():
   | Pick<
       AppSettings["appearance"],
-      "accentColor" | "themePreset" | "backgroundImage"
+      "accentColor" | "themePreset" | "backgroundImage" | "fontSize"
     >
   | null {
   if (typeof window === "undefined") return null;
@@ -126,10 +127,34 @@ export function readPersistedAppearance():
       accentColor: ap.accentColor ?? "orange",
       themePreset: ap.themePreset ?? "orange",
       backgroundImage: ap.backgroundImage ?? DEFAULT_BACKGROUND_IMAGE,
+      fontSize: typeof ap.fontSize === "number" ? ap.fontSize : 14,
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * PM-951: UI 共通フォントサイズを CSS variable `--app-font-size` に反映する。
+ *
+ * - 値は 12〜16 の整数 px にクランプ（settings store と同じ制約）。
+ * - `document.documentElement.style.setProperty("--app-font-size", "14px")`
+ *   を設定し、Chat / Editor / Terminal など各 pane が CSS variable 経由で
+ *   参照する。直接 `html { font-size }` を変えると Tailwind の rem 計算
+ *   （text-sm / p-3 等）がすべてスケールして他の UI レイアウトにも影響する
+ *   ため、スコープ限定の CSS variable 方式を採用する（VSCode の
+ *   "Editor Font Size" / "Terminal Font Size" と同等の UX）。
+ * - Monaco Editor / xterm.js は px 単位の options を直接受け取るため、
+ *   参照側で `useSettingsStore` から数値を subscribe して options に渡す
+ *   （本関数は Chat 等の DOM / CSS 系コンポーネント向け）。
+ */
+export function applyFontSize(px: number): void {
+  if (typeof document === "undefined") return;
+  const clamped = Math.max(12, Math.min(16, Math.round(px)));
+  document.documentElement.style.setProperty(
+    "--app-font-size",
+    `${clamped}px`
+  );
 }
 
 /**

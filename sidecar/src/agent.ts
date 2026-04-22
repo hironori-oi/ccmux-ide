@@ -218,6 +218,36 @@ export async function* runAgentQuery(
     }
   }
 
+  // PM-850 (v1.2): resume 指定時のみ、session 継続性を明示する system hint を
+  // systemPrompt に append する。Claude 側応答の揺らぎで「新規会話です」的な
+  // 返答が出るケースを抑止する目的で、既存 user systemPrompt (CLAUDE.md 等) を
+  // 壊さない additive な方針 (既存があれば末尾に append、無ければ hint のみ)。
+  //
+  // SDK の systemPrompt 型は `string | { type: "preset"; preset: "claude_code"; append?: string }` を
+  // 取りうるため、preset object / string / undefined の 3 ケースを安全に扱う。
+  if (typeof opts.resume === "string" && opts.resume.length > 0) {
+    const continuationHint =
+      "Note: This is an ongoing session with prior messages. Refer to earlier context when relevant.";
+    const existing = opts.systemPrompt;
+    if (existing === undefined) {
+      opts.systemPrompt = continuationHint;
+    } else if (typeof existing === "string") {
+      opts.systemPrompt = `${existing}\n\n${continuationHint}`;
+    } else if (typeof existing === "object" && existing !== null) {
+      // preset object: `append` フィールドに追記 (存在すれば結合、無ければ新設)
+      const presetObj = existing as { type: "preset"; preset: "claude_code"; append?: string };
+      const nextAppend = presetObj.append
+        ? `${presetObj.append}\n\n${continuationHint}`
+        : continuationHint;
+      opts.systemPrompt = { ...presetObj, append: nextAppend };
+    }
+    try {
+      process.stderr.write(
+        `[agent.ts] PM-850: appended continuation hint to systemPrompt (resume=${opts.resume})\n`,
+      );
+    } catch {}
+  }
+
   const stream = query({ prompt, options: opts });
   for await (const ev of stream) {
     yield ev;

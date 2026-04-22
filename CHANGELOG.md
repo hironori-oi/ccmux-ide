@@ -11,6 +11,30 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.2.0] - 2026-04-23
+
+### Added
+- **Ctrl+P で File Palette** (VSCode/Cursor Quick Open 相当)。project 内の file を fuzzy 検索して Editor で開く。既存 Rust `list_project_files` + LRU/TTL cache 流用、warm で ~1ms 応答 (PM-948)
+- **Terminal keyboard shortcut 7 種** 追加。`Ctrl+Shift+F` 検索 / `C` コピー / `V` paste / `K` clear / `N` 新規 / `W` 閉じる / `Ctrl+Tab` sub-tab 切替。`@xterm/addon-search` で scrollback 検索 (PM-947)
+- **SearchPalette tool_use 構造化表示**。tool Badge + field preview + raw snippet の 2 段、`parseToolMessageContent` → regex → raw の 3 段 fallback (PM-900)
+- **Preview window 位置・サイズ記憶**。project ごとに persist、次回 open で前回 geometry を復元。onMoved/onResized/onCloseRequested 経由で polling なし (PM-945)
+- **session 継続性 system hint**。sidecar resume 時のみ「これは継続中の会話」hint を systemPrompt に additive append、Claude の応答変動を抑制 (PM-850)
+- **起動時の project auto-restore**。前回 active だった project を自動選択、stale/null なら先頭 project、空なら未選択 (PM-950)
+- **Monaco Editor theme sync**。app の dark/light と preset (Tokyo Night / Catppuccin / Dracula / Nord) に theme 追従、Ctrl+S keybinding (PM-949)
+- **File icon 拡張**。docker-compose / bun.lockb / .eslintrc / .nvmrc / Makefile / CMakeLists 等を追加 (PM-949)
+
+### Fixed
+- **設定画面のフォントサイズ変更が反映されない bug を修正**。store は persist していたが DOM/Monaco/xterm に apply する処理が未実装だった。Chat / Editor / Terminal 3 pane に live 反映、persist で reload 後も維持 (PM-951)
+- `FileEditor.tsx` / `FilePreviewDialog.tsx` で Monaco 存在しない theme 名 `"vs-light"` を渡していた bug を `"vs"` に修正 (silent fallback で気づかれていなかった) (PM-949)
+
+### Known Issues
+- In-window Preview (Cursor 同等 UX、案 D2) は Tauri 2 multi-webview `unstable` feature 必要のため **v1.2 でも見送り** (v1.3+ で Tauri stable 化を待って再検討)
+- Preview window 新規 spawn 時に一瞬 default サイズが見える可能性 (geometry 適用前) → v1.3 で event pre-apply を検討
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed
+- 組織運営統合は [claude-code-company](https://github.com/hironori-oi/claude-code-company) のメタ設計に基づく
+
 ## [v1.1.0] - 2026-04-22
 
 ### Added

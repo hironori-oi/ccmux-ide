@@ -1,4 +1,13 @@
 //! PRJ-012 v1.1 / PM-944 (2026-04-20): Preview window の Rust spawn 実装。
+//! PRJ-012 v1.2 / PM-945 (2026-04-20): Preview window の position / size 記憶対応。
+//!   - `spawn_preview_window` signature に optional `x` / `y` / `width` / `height` を追加。
+//!   - 指定がなければ従来どおり `center()` + `1280x800` で spawn（後方互換）。
+//!   - 指定があれば `.position(x, y)` / `.inner_size(width, height)` を適用し、
+//!     前回 close 時の geometry で再表示する。
+//!   - frontend 側 (`components/preview/PreviewPane.tsx` + `lib/stores/preview.ts`) が
+//!     `onMoved` / `onResized` / `onCloseRequested` でユーザー操作を捕捉し、
+//!     `windowGeometries[projectId]` に persist する。次回 spawn 時に store から
+//!     取り出して invoke 引数に載せる。
 //!
 //! ## 背景（PM-943 の 7 hotfix で解消しなかった症状）
 //!
@@ -44,11 +53,19 @@
 //!   label: "preview-<projectId>",
 //!   url: "https://example.com",
 //!   title: "Preview - example.com", // optional
+//!   // PM-945 optional geometry (前回 close 時の値を渡す)
+//!   x: 120.0,      // outer position x (physical px)
+//!   y: 80.0,       // outer position y (physical px)
+//!   width: 1440.0, // inner width  (physical px)
+//!   height: 900.0, // inner height (physical px)
 //! });
 //! ```
 //!
 //! Promise resolve = OS window 作成成功。reject = URL parse / builder / WebView2
 //! エラー（詳細は error message）。
+//!
+//! 4 パラメータ (x/y/width/height) は独立 optional。全部 `None` なら従来通り
+//! center + 1280x800 で spawn する。部分指定（例: width/height のみ）も許容。
 
 use std::path::PathBuf;
 
@@ -66,6 +83,12 @@ pub async fn spawn_preview_window(
     label: String,
     url: String,
     title: Option<String>,
+    // PM-945: 前回 close 時の outer position / inner size。None なら default
+    // (center + 1280x800) で spawn する。frontend 側 persist store から取り出して渡す。
+    x: Option<f64>,
+    y: Option<f64>,
+    width: Option<f64>,
+    height: Option<f64>,
 ) -> Result<(), String> {
     // 1. 既存 window を destroy（label 一致）
     //
@@ -115,23 +138,59 @@ pub async fn spawn_preview_window(
     // - `visible(true)`: hotfix5 で `show()` を別呼出にしたが解消せず。
     //   builder 側で visible=true にして build 時に OS window が即出る経路に統一。
     // - `focused(true)`: 前面表示
-    // - `center()`: 画面中央
     // - `resizable(true)`: ユーザーが自由にリサイズ可能
-    // - `inner_size(1280, 800)`: hotfix5 と同サイズ
-    // - `data_directory(preview_data_dir)`: ★ 本 hotfix の本質
+    // - `data_directory(preview_data_dir)`: PM-944 の本質（Windows WebView2 分離）
+    //
+    // PM-945: size / position は以下ロジックで決定。
+    //   - width/height 両方が Some → `.inner_size(w, h)` を適用
+    //   - それ以外 → 従来どおり `.inner_size(1280, 800)`（default）
+    //   - x/y 両方が Some → `.position(x, y)` を適用
+    //   - それ以外 → 従来どおり `.center()`（default）
+    //
+    // 順序注意: `.position()` は後から呼ぶと `.center()` を上書きし、逆もまた然り
+    // (Tauri 内部は最後に set された側が勝つ)。よって排他で分岐させる。
     let title_final = title.unwrap_or_else(|| format!("Preview - {url}"));
-    let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed_url))
+    let mut builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed_url))
         .title(title_final)
-        .inner_size(1280.0, 800.0)
         .resizable(true)
         .focused(true)
         .visible(true)
-        .center()
         .data_directory(preview_data_dir);
+
+    // inner size: 保存値があれば優先、なければ default
+    builder = match (width, height) {
+        (Some(w), Some(h)) if w > 0.0 && h > 0.0 => builder.inner_size(w, h),
+        _ => builder.inner_size(1280.0, 800.0),
+    };
+
+    // outer position: 保存値があれば優先、なければ center
+    builder = match (x, y) {
+        (Some(px), Some(py)) => builder.position(px, py),
+        _ => builder.center(),
+    };
 
     builder
         .build()
         .map_err(|e| format!("build preview webview window '{label}' failed: {e}"))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    // PM-945: module が compile できることを担保する smoke test。
+    //
+    // `#[tauri::command]` マクロは内部的に wrapper 関数を生成するため、
+    // async fn 本体を直接 fn pointer として参照するのは難しい。
+    // ここでは module 自体の存在のみ静的に検査する（`cargo test --lib` で
+    // preview.rs の parse / type check が通ることを保証）。
+    //
+    // 実 window 生成は Tauri runtime context (AppHandle) が必須で、
+    // MockRuntime は `WebviewWindowBuilder::build()` まで対応していないため
+    // unit test では実行しない。実機検証は report の手順を参照。
+    #[test]
+    fn module_compiles() {
+        // 型レベル check のみ。関数 body は呼ばない。
+        assert!(true, "preview module is reachable");
+    }
 }

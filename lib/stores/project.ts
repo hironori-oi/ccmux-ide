@@ -915,6 +915,42 @@ export const useProjectStore = create<ProjectState>()(
           } catch {
             // pruneStaleProjects 内部で error は state.error にセット済。継続。
           }
+
+          // -----------------------------------------------------------------
+          // PM-950 (v1.2) — 前回 active project の auto-restore。
+          //
+          // Cursor / VSCode 同等 UX: アプリ起動時に「前回開いていた project」を
+          // 自動選択する。実装方針:
+          //
+          //   1. persist で `activeProjectId` は既に復元済。
+          //   2. `pruneStaleProjects` が「削除されたパス」を除外し、該当 project
+          //      が stale なら activeProjectId も null に戻している。
+          //   3. ここで **activeProjectId が null で、かつ projects が 1 件以上
+          //      ある場合、最初の project を自動選択** して未選択状態を避ける。
+          //   4. projects が空ならそのまま null（初回 user / 全 project 削除後）。
+          //
+          // 既存 sidecar lifecycle への影響:
+          //   - `setActiveProject` の内部 lazy-start は v3.5.8 で削除済（L465）。
+          //     従って auto-select しても sidecar は起動せず、UX 期待どおり
+          //     「前回 project が見える + 停止中のまま」となる。
+          //   - 下の `list_active_sidecars` により、sidecar が実際に生きていた
+          //     ら `sidecarStatus: running` が復元され、整合は保たれる。
+          //
+          // 直接 setState で書き換えているのは、pruneStaleProjects 後の最新
+          // state を live store から読みたいため（draft では projects[] が古い）。
+          // -----------------------------------------------------------------
+          const liveForAutoSelect = useProjectStore.getState();
+          const savedActive = liveForAutoSelect.activeProjectId;
+          const projectsAfterPrune = liveForAutoSelect.projects;
+          const savedIsValid =
+            savedActive !== null &&
+            projectsAfterPrune.some((p) => p.id === savedActive);
+          if (!savedIsValid && projectsAfterPrune.length > 0) {
+            useProjectStore.setState({
+              activeProjectId: projectsAfterPrune[0].id,
+            });
+          }
+
           // hydrated は stale check 完了後にセット（subscribe 側の guard 用）。
           // 直接 set すると persist middleware の draft 外で書き換えとなり
           // 反映されないため、live store の setState を経由する。
