@@ -489,6 +489,31 @@ export interface SlashCmd {
   filePath: string;
 }
 
+/**
+ * PRJ-012 v1.3 / PM-953: Claude Code skill 1 件（`list_skills` 戻り値の要素、
+ * Rust `commands::skills::SkillDef` と 1:1）。
+ *
+ * 公式 Claude Code の skill 機能（`skills-2025-10-02` beta）に対応し、
+ * `~/.claude/skills/<name>/SKILL.md` + `<project>/.claude/skills/<name>/SKILL.md`
+ * を走査して得た skill metadata。
+ *
+ * - `name` はディレクトリ名 or SKILL.md frontmatter の `name`
+ * - `description` は SKILL.md frontmatter の `description`（無ければ本文抽出）
+ * - 実行機構は Phase 2 以降（v1.4+）で検討。本 MVP では Palette 上の一覧表示のみ。
+ */
+export interface SkillDef {
+  /** skill 識別名（`/` プレフィックス無し。例: `pdf-form-filler`） */
+  name: string;
+  /** 1 行要約（SKILL.md frontmatter の description か、本文から抽出） */
+  description: string;
+  /** どのスコープから発見したか */
+  source: "global" | "project" | "cwd";
+  /** SKILL.md の絶対パス（Monaco preview 用） */
+  filePath: string;
+  /** skill ディレクトリの絶対パス */
+  dirPath: string;
+}
+
 // v3.5.3 (2026-04-20): Status pane / StatusFile interface は UI 層撤去と同時に削除（PM-770）。
 // Rust side の `StatusFile` struct / `list_status_candidates` / `read_status_file`
 // command は src-tauri に残置（frontend からは未呼出、将来再導入時の参照用）。

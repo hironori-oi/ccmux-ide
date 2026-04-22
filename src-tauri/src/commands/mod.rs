@@ -48,3 +48,10 @@ pub mod pty;
 // 起因の WebView2 即死が解消せず、`WebviewWindowBuilder::data_directory` を
 // 明示指定する Rust 側 command に切替。末尾 append で他 module と排他。
 pub mod preview;
+
+// PRJ-012 v1.3 / PM-953 (2026-04-20): Claude Code skill 機能の discovery。
+// `~/.claude/skills/<name>/SKILL.md` + project `.claude/skills/` を走査し、
+// SlashPalette に skill section を描画するための metadata を返す（Phase 1 = list
+// 表示のみ、skill 実行は Phase 2 送り）。Agent SDK には skill 機能が native 存在
+// するため、本 module は UI 可視化の並行実装に徹する。
+pub mod skills;

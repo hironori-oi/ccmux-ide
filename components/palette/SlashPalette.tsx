@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Command as CommandIcon, Wrench } from "lucide-react";
+import { Command as CommandIcon, Sparkles, Wrench } from "lucide-react";
 
 import {
   Command,
@@ -19,12 +19,13 @@ import {
 } from "@/components/ui/popover";
 import { callTauri } from "@/lib/tauri-api";
 import { useProjectStore, findProjectById } from "@/lib/stores/project";
+import { useEditorStore } from "@/lib/stores/editor";
 import {
   handleBuiltinSlash,
   type BuiltinSlash,
 } from "@/lib/builtin-slash";
 import { cn } from "@/lib/utils";
-import type { SlashCmd } from "@/lib/types";
+import type { SkillDef, SlashCmd } from "@/lib/types";
 
 /**
  * PM-201 / PM-202: Slash command palette（`/` 検出時に InputArea の上に出す popup）。
@@ -77,8 +78,9 @@ export interface SlashPaletteProps {
  * source 表示メタ（badge ラベル + 色クラス + グループ見出し）。
  *
  * v3.4.9: `"builtin"` を追加（組込 slash、`BuiltinSlash` を custom と統一表示するため）。
+ * v1.3 PM-953: `"skill"` を追加（Claude Code skill の section、選択で SKILL.md preview）。
  */
-type SlashSource = SlashCmd["source"] | "builtin";
+type SlashSource = SlashCmd["source"] | "builtin" | "skill";
 
 const SOURCE_META: Record<
   SlashSource,
@@ -89,6 +91,12 @@ const SOURCE_META: Record<
     heading: "組込コマンド",
     className:
       "border-orange-400/40 bg-orange-500/10 text-orange-600 dark:text-orange-300",
+  },
+  skill: {
+    badge: "skill",
+    heading: "スキル (Claude Code skills)",
+    className:
+      "border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-300",
   },
   cwd: {
     badge: "cwd",
@@ -110,8 +118,14 @@ const SOURCE_META: Record<
   },
 };
 
-/** スコープ表示順（builtin → cwd → project → global）。 */
-const SCOPE_ORDER: SlashSource[] = ["builtin", "cwd", "project", "global"];
+/** スコープ表示順（builtin → skill → cwd → project → global）。 */
+const SCOPE_ORDER: SlashSource[] = [
+  "builtin",
+  "skill",
+  "cwd",
+  "project",
+  "global",
+];
 
 /**
  * パレット表示上限（builtin / custom 合算）。
@@ -129,14 +143,34 @@ interface BuiltinSlashItem {
 }
 
 /**
- * 表示用の union item（builtin or custom）。内部で filter / group に使う。
+ * PM-953: skill アイテム（SkillDef を Palette 内部表現に包む）。
+ *
+ * name は `/` プレフィックスを付けず skill 名そのまま（`/slash` と区別するため）。
+ * Phase 1 では選択時に SKILL.md を Monaco で preview するだけで、textarea への
+ * 挿入や sidecar への命令は行わない。
+ */
+interface SkillItem {
+  /** skill 識別名（`/` プレフィックス無し） */
+  name: string;
+  description: string;
+  filePath: string;
+  dirPath: string;
+  /** skill の出自スコープ（badge には使わないが、検索やログ出力用に保持） */
+  originalSource: SkillDef["source"];
+  source: "skill";
+}
+
+/**
+ * 表示用の union item（builtin / skill / custom slash）。内部で filter / group に使う。
  */
 type PaletteItem =
   | (SlashCmd & { kind: "custom" })
-  | (BuiltinSlashItem & { kind: "builtin" });
+  | (BuiltinSlashItem & { kind: "builtin" })
+  | (SkillItem & { kind: "skill" });
 
 interface GroupedItems {
   builtin: PaletteItem[];
+  skill: PaletteItem[];
   cwd: PaletteItem[];
   project: PaletteItem[];
   global: PaletteItem[];
@@ -152,12 +186,19 @@ function groupAndLimit(
   items: PaletteItem[],
   limit = PALETTE_LIMIT
 ): { grouped: GroupedItems; overflow: number } {
-  const out: GroupedItems = { builtin: [], cwd: [], project: [], global: [] };
+  const out: GroupedItems = {
+    builtin: [],
+    skill: [],
+    cwd: [],
+    project: [],
+    global: [],
+  };
   let remaining = limit;
   for (const scope of SCOPE_ORDER) {
     if (remaining <= 0) break;
     const bucket = items.filter((c) => {
       if (c.kind === "builtin") return scope === "builtin";
+      if (c.kind === "skill") return scope === "skill";
       return c.source === scope;
     });
     const taken = bucket.slice(0, remaining);
@@ -171,7 +212,7 @@ function groupAndLimit(
 
 /**
  * query にマッチするかの軽量判定（case-insensitive substring）。
- * builtin / custom どちらも name / description で hit 判定。
+ * builtin / skill / custom すべて name / description で hit 判定。
  */
 function matchesQuery(item: PaletteItem, q: string): boolean {
   if (!q) return true;
@@ -193,6 +234,8 @@ export function SlashPalette({
 }: SlashPaletteProps) {
   const [customCmds, setCustomCmds] = useState<SlashCmd[]>([]);
   const [builtinCmds, setBuiltinCmds] = useState<BuiltinSlashItem[]>([]);
+  // PM-953: Claude Code skills（~/.claude/skills/ + project .claude/skills/）
+  const [skills, setSkills] = useState<SkillItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -207,10 +250,15 @@ export function SlashPalette({
   // builtin dispatcher が要求する context
   const router = useRouter();
 
+  // PM-953: skill 選択時は Monaco で SKILL.md を preview する（Phase 1）
+  const openFileInEditor = useEditorStore((s) => s.openFile);
+
   // キャッシュ invalidation キー: activeProjectPath が変わったら再取得。
   const lastFetchKeyRef = useRef<string | null>(null);
   // builtin は project 非依存なので 1 回だけ取得
   const builtinLoadedRef = useRef(false);
+  // skill も slash と同じく activeProjectPath に依存するので cache key を持つ
+  const lastSkillFetchKeyRef = useRef<string | null>(null);
 
   // builtin は open 初回のみ取得（project に依存しない固定 7 件 + frontend 追加分）
   useEffect(() => {
@@ -299,18 +347,61 @@ export function SlashPalette({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeProjectPath]);
 
-  // builtin + custom を PaletteItem に正規化し、query filter → group → limit
+  // PM-953: Claude Code skills を取得。slash と同じく activeProjectPath が
+  // 変わるたびに再取得する。失敗時は silent（UI 側で空として扱う）。
+  useEffect(() => {
+    if (!open) return;
+
+    const key = activeProjectPath ?? "__no_project__";
+    if (skills.length > 0 && lastSkillFetchKeyRef.current === key) {
+      return;
+    }
+
+    let cancelled = false;
+    callTauri<SkillDef[]>("list_skills", {
+      projectPath: activeProjectPath,
+    })
+      .then((list) => {
+        if (cancelled) return;
+        const normalized: SkillItem[] = list.map((s) => ({
+          name: s.name,
+          description: s.description,
+          filePath: s.filePath,
+          dirPath: s.dirPath,
+          originalSource: s.source,
+          source: "skill" as const,
+        }));
+        setSkills(normalized);
+        lastSkillFetchKeyRef.current = key;
+      })
+      .catch(() => {
+        // skill 取得失敗は silent。builtin / custom slash の機能は継続する。
+        if (cancelled) return;
+        setSkills([]);
+        lastSkillFetchKeyRef.current = key;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // skills を deps に含めると無限ループ、意図的に除外
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, activeProjectPath]);
+
+  // builtin + skill + custom を PaletteItem に正規化し、query filter → group → limit
   const { grouped, overflow } = useMemo(() => {
     const merged: PaletteItem[] = [
       ...builtinCmds.map((b) => ({ ...b, kind: "builtin" as const })),
+      ...skills.map((s) => ({ ...s, kind: "skill" as const })),
       ...customCmds.map((c) => ({ ...c, kind: "custom" as const })),
     ];
     const filtered = merged.filter((c) => matchesQuery(c, query));
     return groupAndLimit(filtered, PALETTE_LIMIT);
-  }, [builtinCmds, customCmds, query]);
+  }, [builtinCmds, skills, customCmds, query]);
 
   const totalShown =
     grouped.builtin.length +
+    grouped.skill.length +
     grouped.cwd.length +
     grouped.project.length +
     grouped.global.length;
@@ -341,6 +432,34 @@ export function SlashPalette({
     } catch (e) {
       toast.error(
         `組込コマンドの実行に失敗しました: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+    } finally {
+      onClose();
+    }
+  }
+
+  /**
+   * PM-953 (Phase 1): skill 選択時のハンドラ。
+   *
+   * MVP では **実行しない**。Claude Agent SDK native の skill 機能は sidecar が
+   * session 起動時に自動検知するため、ccmux-ide-gui 側では:
+   *  - SKILL.md を Monaco で開いて内容を確認できるようにする
+   *  - toast で「sidecar が自動で利用します」と案内
+   *
+   * Phase 2（v1.4+）では sidecar 経由で skill を session に preload する経路を
+   * 実装する（SDK `AgentDefinition.skills` / `supportedCommands()` を参照）。
+   */
+  function handleSkillClick(item: SkillItem) {
+    try {
+      void openFileInEditor(item.filePath);
+      toast.message(
+        `スキル「${item.name}」の SKILL.md を開きました。Claude のセッションでは自動で利用されます。`
+      );
+    } catch (e) {
+      toast.error(
+        `スキル定義ファイルを開けませんでした: ${
           e instanceof Error ? e.message : String(e)
         }`
       );
@@ -390,7 +509,9 @@ export function SlashPalette({
             {isEmpty &&
               !loading &&
               !error &&
-              (customCmds.length > 0 || builtinCmds.length > 0) && (
+              (customCmds.length > 0 ||
+                builtinCmds.length > 0 ||
+                skills.length > 0) && (
                 <div className="px-3 py-6 text-center text-xs text-muted-foreground">
                   一致するコマンドはありません
                 </div>
@@ -399,9 +520,10 @@ export function SlashPalette({
               !loading &&
               !error &&
               customCmds.length === 0 &&
-              builtinCmds.length === 0 && (
+              builtinCmds.length === 0 &&
+              skills.length === 0 && (
                 <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-                  コマンドが見つかりません（~/.claude/commands/ に .md を配置してください）
+                  コマンド / スキルが見つかりません（~/.claude/commands/ に .md、または ~/.claude/skills/&lt;name&gt;/SKILL.md を配置してください）
                 </div>
               )}
 
@@ -425,6 +547,8 @@ export function SlashPalette({
                         onSelect={() => {
                           if (item.kind === "builtin") {
                             handleBuiltinClick(item);
+                          } else if (item.kind === "skill") {
+                            handleSkillClick(item);
                           } else {
                             onSelect(item);
                             onClose();
@@ -463,18 +587,37 @@ function PaletteRow({
 }) {
   const simple = item.name.replace(/^\//, "");
   const isBuiltin = item.kind === "builtin";
-  const source: SlashSource = isBuiltin ? "builtin" : item.source;
+  const isSkill = item.kind === "skill";
+  // source badge: skill kind は scope 非表示で固定 "skill" を使う
+  const source: SlashSource = isBuiltin
+    ? "builtin"
+    : isSkill
+    ? "skill"
+    : item.source;
   const meta = SOURCE_META[source];
 
   // cmdk の内部 fuzzy filter では `value` を対象にする。name と description の
   // 両方を結合して詰めることで description 含むキーワードでも hit する。
   const cmdkValue = `${item.name} ${simple} ${item.description}`;
 
-  // argument-hint は custom のみ（builtin は引数なし）
+  // argument-hint は custom のみ（builtin / skill は引数なし）
   const argumentHint =
     item.kind === "custom" ? item.argumentHint ?? null : null;
 
-  const Icon = isBuiltin ? Wrench : CommandIcon;
+  // PM-953: skill は `/` プレフィックス無しで表示する（slash と区別するため）
+  const displayName = isSkill ? item.name : item.name;
+  // skill 用 Sparkles アイコン、builtin は Wrench、slash は Command
+  const Icon = isBuiltin ? Wrench : isSkill ? Sparkles : CommandIcon;
+
+  // skill は orange 系ではなく amber 系 accent にする（badge と統一感）
+  const iconColorClass = isBuiltin
+    ? "text-orange-600 dark:text-orange-400"
+    : isSkill
+    ? "text-amber-600 dark:text-amber-400"
+    : "text-orange-500";
+  const nameColorClass = isSkill
+    ? "text-amber-600 dark:text-amber-400"
+    : "text-orange-500";
 
   return (
     <CommandItem
@@ -483,16 +626,15 @@ function PaletteRow({
       className="items-start gap-2 py-2"
     >
       <Icon
-        className={cn(
-          "mt-0.5 h-4 w-4 shrink-0",
-          isBuiltin ? "text-orange-600 dark:text-orange-400" : "text-orange-500"
-        )}
+        className={cn("mt-0.5 h-4 w-4 shrink-0", iconColorClass)}
         aria-hidden
       />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-sm font-semibold text-orange-500">
-            {item.name}
+          <span
+            className={cn("font-mono text-sm font-semibold", nameColorClass)}
+          >
+            {displayName}
           </span>
           {argumentHint && (
             <span className="truncate text-xs text-muted-foreground">
