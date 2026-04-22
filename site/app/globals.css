@@ -1,0 +1,139 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light dark;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-zinc-50 text-zinc-900 antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  .dark body {
+    @apply bg-zinc-950 text-zinc-100;
+  }
+
+  /* Focus rings (keyboard only) */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-fg ring-offset-2 ring-offset-zinc-950;
+  }
+
+  ::selection {
+    background: hsl(18 80% 55% / 0.35);
+    color: white;
+  }
+}
+
+@layer components {
+  .inline-code {
+    @apply rounded bg-zinc-800/60 px-1.5 py-0.5 font-mono text-[0.85em] text-brand-fg;
+  }
+
+  .skip-nav {
+    @apply absolute left-2 top-2 -translate-y-16 rounded bg-brand px-3 py-2 text-sm text-white focus:translate-y-0;
+    transition: transform 0.2s;
+  }
+
+  .hero-glow {
+    background:
+      radial-gradient(
+        ellipse 80% 50% at 20% 0%,
+        hsl(18 80% 50% / 0.18),
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse 60% 40% at 80% 10%,
+        hsl(18 60% 40% / 0.08),
+        transparent 60%
+      );
+  }
+
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+}
+
+/* Docs article typography */
+.docs-article {
+  @apply text-zinc-300;
+}
+.docs-article h1 {
+  @apply mb-4 mt-0 text-4xl font-bold tracking-tight text-zinc-50;
+  scroll-margin-top: 6rem;
+}
+.docs-article h2 {
+  @apply mb-4 mt-14 border-b border-zinc-800 pb-2 text-2xl font-semibold text-zinc-100;
+  scroll-margin-top: 6rem;
+}
+.docs-article h3 {
+  @apply mb-3 mt-10 text-xl font-semibold text-zinc-100;
+  scroll-margin-top: 6rem;
+}
+.docs-article p {
+  @apply my-4 leading-relaxed text-zinc-300;
+}
+.docs-article a {
+  @apply text-brand-fg underline-offset-4 hover:underline;
+}
+.docs-article ul {
+  @apply my-4 list-disc space-y-1.5 pl-6 text-zinc-300;
+}
+.docs-article ol {
+  @apply my-4 list-decimal space-y-1.5 pl-6 text-zinc-300;
+}
+.docs-article li > p {
+  @apply my-1;
+}
+.docs-article code:not(pre code) {
+  @apply rounded bg-zinc-800/60 px-1.5 py-0.5 font-mono text-[0.85em] text-brand-fg;
+}
+.docs-article pre {
+  @apply my-4 overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-900 p-4 font-mono text-sm leading-relaxed text-zinc-200;
+}
+.docs-article strong {
+  @apply font-semibold text-zinc-100;
+}
+.docs-article hr {
+  @apply my-10 border-zinc-800;
+}
+.docs-article blockquote {
+  @apply my-4 border-l-2 border-brand/60 bg-zinc-900/40 py-2 pl-4 text-zinc-400;
+}
+.docs-article table {
+  @apply my-6 w-full overflow-hidden rounded-lg border border-zinc-800 text-sm;
+}
+.docs-article th {
+  @apply bg-zinc-900/60 px-4 py-2 text-left font-medium text-zinc-200;
+}
+.docs-article td {
+  @apply border-t border-zinc-800/60 px-4 py-2 text-zinc-300;
+}
+.docs-article kbd {
+  @apply rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 font-mono text-xs text-zinc-200 shadow-[inset_0_-1px_0_0_rgba(0,0,0,0.4)];
+}
+
+/* Smoother fade on first paint */
+.fade-in-initial {
+  animation: fade-up 0.6s ease-out both;
+}
+
+@keyframes fade-up {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
