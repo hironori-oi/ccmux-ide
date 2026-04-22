@@ -11,6 +11,24 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.3.0] - 2026-04-23
+
+### Added
+- **Claude Code skill 機能の可視化** (PM-953)。`~/.claude/skills/<name>/SKILL.md` を走査、SlashPalette に skill section (amber accent + Sparkles icon) で表示。global + project + cwd chain の走査、cwd > project > global override。Claude Agent SDK が session 起動時に first-class 機能として auto-discover するため、表示/preview のみで実機動作する
+- **Claude Code plugin 機能の可視化** (PM-954)。`~/.claude/plugins/installed_plugins.json` index から各 plugin の `.claude-plugin/plugin.json` manifest を読込、SlashPalette に plugin section (sky accent + Package icon) で表示。`~/.claude/settings.json` の `enabledPlugins` に従って disabled plugin は dimm 表示。Agent SDK の `SdkPluginConfig` + `reloadPlugins()` first-class support により実行は SDK 側で担保。Cursor 上の Claude Code と同等の plugin ecosystem を ccmux-ide-gui で利用可能に
+
+### Fixed
+- E2E CI workflow が `apt-get update` で 20 分 timeout する問題を修正 (PM-952)。`npx playwright install --with-deps chromium` の `--with-deps` 削除 + cache hit 経路の `install-deps` step 撤去。ubuntu-24.04 runner の pre-installed deps で chromium 動作
+
+### Known Issues
+- Plugin の install/uninstall/enable toggle UI は v1.4+ で対応 (現状は CLI `claude plugin install` を使用)
+- Skill / plugin の drill-down (内部 slash 一覧展開) は v1.4+ で検討
+- Phase 2 として per-plugin enable/disable UI + MCP server 起動管理を v1.5+ で計画
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed
+- Claude Code skill / plugin ecosystem integration は [Claude Code](https://docs.claude.com/en/docs/claude-code) 公式仕様に準拠
+
 ## [v1.2.0] - 2026-04-23
 
 ### Added
