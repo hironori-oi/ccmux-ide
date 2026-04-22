@@ -14,7 +14,7 @@
 /** CLAUDE.md ツリーの 1 ノード（Rust `TreeNode` と対応） */
 export interface TreeNode {
   path: string;
-  scope: "Global" | "Parent" | "Project" | "Cwd";
+  scope: "Global" | "Parent" | "Project";
   depth: number;
   label: string;
   isFile: boolean;
@@ -123,7 +123,7 @@ export interface AttachmentInput {
  * 後方互換のため `RegisteredProject` の alias として残す（ファイル末尾の
  * type export を参照）。新規コードは必ず `RegisteredProject` を使用すること。
  *
- * かつて: `claude-code-company` workspace 配下の 1 プロジェクトを表す軽量サマリ
+ * かつて: 固定 workspace ルート配下の 1 プロジェクトを表す軽量サマリ
  * 現在:   任意ディレクトリ project registry の 1 エントリ（`RegisteredProject`）
  */
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- alias は末尾で宣言
@@ -483,8 +483,8 @@ export interface SlashCmd {
   description: string;
   /** 引数 placeholder（例: `{指示}`）。frontmatter に無ければ null */
   argumentHint: string | null;
-  /** どのスコープから発見したか */
-  source: "global" | "project" | "cwd";
+  /** どのスコープから発見したか（DEC-051 で "cwd" は廃止） */
+  source: "global" | "project";
   /** 絶対パス（Monaco preview 用） */
   filePath: string;
 }
@@ -506,8 +506,8 @@ export interface SkillDef {
   name: string;
   /** 1 行要約（SKILL.md frontmatter の description か、本文から抽出） */
   description: string;
-  /** どのスコープから発見したか */
-  source: "global" | "project" | "cwd";
+  /** どのスコープから発見したか（DEC-051 で "cwd" は廃止） */
+  source: "global" | "project";
   /** SKILL.md の絶対パス（Monaco preview 用） */
   filePath: string;
   /** skill ディレクトリの絶対パス */

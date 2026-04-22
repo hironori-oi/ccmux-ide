@@ -22,8 +22,9 @@ import type { TreeNode } from "@/lib/types";
  * Week 6 Chunk 3 / PM-205 + v5 Chunk C (DEC-030): CLAUDE.md ツリービュー。
  *
  * ## 仕様
- * - Rust `scan_memory_tree(repo_root)` を呼び、Global / Parent / Project / Cwd
- *   の 4 スコープ（実体は 3 グループ、Parent は Project に折込表示）で折畳。
+ * - Rust `scan_memory_tree(repo_root)` を呼び、Global / Parent / Project
+ *   の 3 スコープ（Parent は Project に折込表示）で折畳。
+ *   DEC-051: 旧 Cwd scope は廃止（Rust 側で一度も emit されていなかった dead path）。
  * - 各スコープは手製の accordion（shadcn Accordion は未導入）で開閉制御。
  *   デフォルトで Project を開く。
  * - ノードは `FileText` + 相対パス（既に backend で `label` 化済）をクリックで
@@ -36,7 +37,7 @@ import type { TreeNode } from "@/lib/types";
  *  - props で `repoRoot` が指定されている場合はそれを Project scope の root と
  *    する（v5 Chunk C / DEC-030: Inspector が activeProject.path を渡す）。
  *  - 未指定時は homeDir() を fallback として使う（active project 未選択時も
- *    Global / Cwd scope は表示される）。
+ *    Global scope は表示される）。
  *
  * v5 では Inspector 側が `key={activeProjectId}` + `repoRoot={activeProject.path}`
  * で MemoryTreeView を再 mount するため、本コンポーネント内のフック状態
@@ -54,12 +55,11 @@ interface MemoryTreeViewProps {
   onEdit?: (path: string) => void;
 }
 
-type GroupKey = "Global" | "Project" | "Cwd";
+type GroupKey = "Global" | "Project";
 
 const GROUP_LABEL: Record<GroupKey, string> = {
   Global: "グローバル (~/.claude)",
   Project: "プロジェクト (含 Parent)",
-  Cwd: "カレント (cwd)",
 };
 
 export function MemoryTreeView({
@@ -74,7 +74,6 @@ export function MemoryTreeView({
   const [openGroups, setOpenGroups] = useState<Record<GroupKey, boolean>>({
     Global: false,
     Project: true,
-    Cwd: false,
   });
 
   // repo_root を resolve（優先度: props > ホーム）。
@@ -193,11 +192,9 @@ export function MemoryTreeView({
     const g: Record<GroupKey, TreeNode[]> = {
       Global: [],
       Project: [],
-      Cwd: [],
     };
     for (const n of nodes) {
       if (n.scope === "Global") g.Global.push(n);
-      else if (n.scope === "Cwd") g.Cwd.push(n);
       else g.Project.push(n); // Project + Parent
     }
     return g;

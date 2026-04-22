@@ -11,13 +11,15 @@ use serde::Serialize;
 use walkdir::WalkDir;
 
 /// スコープ種別（UI 側で色分けに使う）。
+///
+/// DEC-051: `Cwd` variant は旧版で定義されていたが scan 処理で一度も生成されず
+/// dead code だったため削除。`slash.rs` / `skills.rs` の cwd scope 撤去と整合。
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum Scope {
     Global,
     Parent,
     Project,
-    Cwd,
 }
 
 /// フラット化済みツリーの 1 ノード。

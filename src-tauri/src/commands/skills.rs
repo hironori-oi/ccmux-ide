@@ -16,7 +16,8 @@
 //! - 各 skill は **ディレクトリ** であり、その中の `SKILL.md` が metadata + 本文を持つ
 //! - `SKILL.md` の frontmatter から `name` / `description` が抽出される
 //!   (Anthropic SDK の `SkillVersion.name` / `.description` コメント参照)
-//! - 同名 skill は `cwd > project > global` の順で override する（slash 同様）
+//! - 同名 skill は `project > global` の順で override する（slash 同様）。
+//!   DEC-051 で cwd scope は廃止済。
 //!
 //! ## Phase 1 スコープ（本 module）
 //!
@@ -38,7 +39,7 @@
 //!   ではあるが、ディスク上の SKILL.md frontmatter には現仕様で現れない）
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -53,7 +54,7 @@ pub struct SkillDef {
     pub name: String,
     /// 1 行要約（frontmatter `description` か、本文 1 行目から抽出）。
     pub description: String,
-    /// "global" | "project" | "cwd"。
+    /// "global" | "project"。DEC-051 で "cwd" は廃止。
     pub source: String,
     /// SKILL.md の絶対パス（Monaco preview 用）。
     pub file_path: String,
@@ -61,29 +62,30 @@ pub struct SkillDef {
     pub dir_path: String,
 }
 
-/// Tauri command: `~/.claude/skills/` + active project `.claude/skills/` + cwd chain を走査する。
+/// Tauri command: `~/.claude/skills/` + active project `.claude/skills/` を走査する。
 ///
 /// slash.rs と同じく、走査失敗（ディレクトリが存在しない等）は致命的ではなく
-/// 空を返す。同名 skill は Cwd > Project > Global で override する。
+/// 空を返す。同名 skill は Project > Global で override する。
+///
+/// DEC-051: cwd chain スキャンは廃止。
 #[tauri::command]
 pub fn list_skills(project_path: Option<String>) -> Result<Vec<SkillDef>, String> {
     let project = project_path.as_deref().map(Path::new);
-    let cwd = std::env::current_dir().ok();
-    Ok(scan_all(project, cwd.as_deref()))
+    Ok(scan_all(project))
 }
 
 /// スコープ優先度（数値が小さいほど近い = 上に表示）。slash.rs と同じ rule。
+/// DEC-051: "cwd" を削除。
 fn source_rank(source: &str) -> u8 {
     match source {
-        "cwd" => 0,
-        "project" => 1,
-        "global" => 2,
+        "project" => 0,
+        "global" => 1,
         _ => 99,
     }
 }
 
 /// 全スコープを走査して重複を解決した `Vec<SkillDef>` を返す。
-fn scan_all(project_root: Option<&Path>, cwd: Option<&Path>) -> Vec<SkillDef> {
+fn scan_all(project_root: Option<&Path>) -> Vec<SkillDef> {
     let mut map: HashMap<String, SkillDef> = HashMap::new();
 
     // 1) Global: ~/.claude/skills/
@@ -99,24 +101,6 @@ fn scan_all(project_root: Option<&Path>, cwd: Option<&Path>) -> Vec<SkillDef> {
         let dir = proj.join(".claude").join("skills");
         for skill in scan_skills_dir(&dir, "project") {
             map.insert(skill.name.clone(), skill);
-        }
-    }
-
-    // 3) Cwd chain: 最大 5 階層上まで遡り、深い方を優先。
-    if let Some(start) = cwd {
-        let mut chain: Vec<PathBuf> = Vec::new();
-        let mut cur: Option<PathBuf> = Some(start.to_path_buf());
-        for _ in 0..=5 {
-            let Some(p) = cur.clone() else { break };
-            chain.push(p.clone());
-            cur = p.parent().map(Path::to_path_buf);
-        }
-        // 遠い親 → 近い親 → cwd の順に insert（後勝ち）
-        for dir in chain.into_iter().rev() {
-            let skills = scan_skills_dir(&dir.join(".claude").join("skills"), "cwd");
-            for skill in skills {
-                map.insert(skill.name.clone(), skill);
-            }
         }
     }
 
@@ -388,7 +372,7 @@ mod tests {
 
     #[test]
     fn source_rank_matches_slash_rule() {
-        assert!(source_rank("cwd") < source_rank("project"));
+        // DEC-051: "cwd" は廃止。project > global の 2 スコープのみ。
         assert!(source_rank("project") < source_rank("global"));
         assert!(source_rank("global") < source_rank("unknown"));
     }

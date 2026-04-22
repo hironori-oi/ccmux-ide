@@ -62,7 +62,7 @@ export interface TauriFixtureOptions {
     name: string;
     description: string;
     argumentHint: string | null;
-    source: "global" | "project" | "cwd";
+    source: "global" | "project";
     filePath: string;
   }>;
   /** 検索結果 */

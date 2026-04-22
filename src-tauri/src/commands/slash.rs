@@ -8,13 +8,9 @@
 //! スキャンスコープ:
 //!   - Global    : `~/.claude/commands/*.md`
 //!   - Project   : active project（引数で渡された場合） `.claude/commands/*.md`
-//!   - Cwd       : `std::env::current_dir()` を起点に親方向へ最大 5 階層、各階層の
-//!     `.claude/commands/*.md` を走査。同名はより深い（= 近い）ディレクトリ
-//!     を優先する。
 //!
-//! 重複処理: 同じ name のコマンドが複数スコープに存在する場合、優先順位は
-//!   Cwd（最も近い） > Project > Global。
-//! これは Cline / claude-code の実挙動（repo 直下で上書き）と整合する。
+//! 重複処理: 同じ name のコマンドが両スコープに存在する場合は Project を優先する。
+//! これは Claude Code CLI の実挙動（repo 直下で上書き）と整合する。
 //!
 //! frontmatter:
 //!   ファイル先頭が `---\n` で始まる場合のみ YAML-like な簡易解析を行い、
@@ -24,16 +20,30 @@
 //!
 //! ## DEC-027 汎用化（v4 Chunk B）
 //!
-//! 旧版で持っていた `ORGANIZATION_SLASHES` 定数（claude-code-company 8 役の
+//! 旧版で持っていた `ORGANIZATION_SLASHES` 定数（特定組織ロール 8 役の
 //! ハードコード）は **本リリースで完全に削除** した。slash 一覧は純粋な
 //! ファイル走査 + スコープ優先度のみで構築され、特定の組織スキーマに依存しない。
 //!
 //! - `SlashCmd.is_organization` は廃止
-//! - 並べ替えは「スコープ（cwd > project > global）→ alphabetical」のみ
+//! - 並べ替えは「スコープ（project > global）→ alphabetical」のみ
 //! - UI 側の組織グループ表示も削除（`SlashPalette.tsx` 参照）
+//!
+//! ## DEC-051（PM-960）: cwd scope の完全撤去
+//!
+//! 旧版は `std::env::current_dir()` を起点に親方向へ 5 階層 walk して
+//! `.claude/commands/` を追加スキャンする "cwd chain" を持っていたが、以下の
+//! 問題があり廃止した:
+//!
+//! - デスクトップ IDE ではアプリ process の cwd はユーザーの意図と無関係
+//!   （Tauri exe の起動元 or dev server 起動元）
+//! - cwd chain が `~/` に到達すると `~/.claude/commands/` を「cwd」として
+//!   再スキャンしてしまい、**global コマンドが cwd ラベルに上書きされる** 回帰
+//! - project scope が同等の役割を果たすため cwd は冗長
+//!
+//! 本 release 以降は **Global / Project の 2 スコープのみ**。
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -49,35 +59,36 @@ pub struct SlashCmd {
     pub description: String,
     /// 引数の placeholder（例: `{指示}`）。無ければ None。
     pub argument_hint: Option<String>,
-    /// "global" | "project" | "cwd"。
+    /// "global" | "project"。DEC-051 で "cwd" は廃止。
     pub source: String,
     /// 絶対パス（Monaco preview 用）。
     pub file_path: String,
 }
 
-/// Tauri command: `~/.claude/commands/` + active project + cwd chain を走査する。
+/// Tauri command: `~/.claude/commands/` + active project `.claude/commands/` を走査する。
 ///
 /// 引数 `project_path` が Some なら、そのディレクトリの `.claude/commands/` も
 /// Project scope として追加走査する（active project が未設定なら None でよい）。
 ///
 /// 走査失敗（ディレクトリが存在しない等）は致命的ではなく空を返すだけ。
 /// Result の Err は frontend 側 fatal なケースのみ（現状は返さない）。
+///
+/// DEC-051: cwd chain スキャンは廃止。Global / Project の 2 スコープのみ。
 #[tauri::command]
 pub fn list_slash_commands(project_path: Option<String>) -> Result<Vec<SlashCmd>, String> {
     let project = project_path.as_deref().map(Path::new);
-    let cwd = std::env::current_dir().ok();
-    Ok(scan_all(project, cwd.as_deref()))
+    Ok(scan_all(project))
 }
 
 /// スコープ優先度（数値が小さいほど近い = 上に表示）。
 ///
 /// DEC-027: 旧 `organization_rank` を置換。組織ロールハードコードは削除し、
 /// 純粋にスコープのみで決定する。
+/// DEC-051: "cwd" を削除。
 fn source_rank(source: &str) -> u8 {
     match source {
-        "cwd" => 0,
-        "project" => 1,
-        "global" => 2,
+        "project" => 0,
+        "global" => 1,
         _ => 99,
     }
 }
@@ -85,9 +96,9 @@ fn source_rank(source: &str) -> u8 {
 /// 全スコープを走査して重複を解決した `Vec<SlashCmd>` を返す。
 ///
 /// `project_root` は **active project のリポジトリルート**（Chunk 2 の ProjectSwitcher
-/// で選択されたディレクトリ）。`cwd` は **アプリの current working directory**。
-fn scan_all(project_root: Option<&Path>, cwd: Option<&Path>) -> Vec<SlashCmd> {
-    // name をキーに、後勝ち（Cwd > Project > Global）で上書き。
+/// で選択されたディレクトリ）。
+fn scan_all(project_root: Option<&Path>) -> Vec<SlashCmd> {
+    // name をキーに、後勝ち（Project > Global）で上書き。
     let mut map: HashMap<String, SlashCmd> = HashMap::new();
 
     // 1) Global
@@ -106,26 +117,7 @@ fn scan_all(project_root: Option<&Path>, cwd: Option<&Path>) -> Vec<SlashCmd> {
         }
     }
 
-    // 3) Cwd chain（最大 5 階層上まで、深い方 = 近い方が勝つように
-    //    「遠い親から順に walk → 最後に cwd」で insert する）。
-    if let Some(start) = cwd {
-        let mut chain: Vec<PathBuf> = Vec::new();
-        let mut cur: Option<PathBuf> = Some(start.to_path_buf());
-        for _ in 0..=5 {
-            let Some(p) = cur.clone() else { break };
-            chain.push(p.clone());
-            cur = p.parent().map(Path::to_path_buf);
-        }
-        // 遠い親 → 近い親 → cwd の順に insert（後勝ちで近い方が残る）
-        for dir in chain.into_iter().rev() {
-            let cmds = scan_dir(&dir.join(".claude").join("commands"), "cwd");
-            for cmd in cmds {
-                map.insert(cmd.name.clone(), cmd);
-            }
-        }
-    }
-
-    // 出力: スコープ（cwd → project → global）で安定化。
+    // 出力: スコープ（project → global）で安定化。
     // 同一スコープ内は name 昇順。
     let mut out: Vec<SlashCmd> = map.into_values().collect();
     out.sort_by(|a, b| {
@@ -354,41 +346,40 @@ mod tests {
     }
 
     #[test]
-    fn source_rank_orders_cwd_first_then_project_then_global() {
-        assert!(source_rank("cwd") < source_rank("project"));
+    fn source_rank_orders_project_first_then_global() {
+        // DEC-051: "cwd" は廃止。project > global の 2 スコープのみ。
         assert!(source_rank("project") < source_rank("global"));
         assert!(source_rank("global") < source_rank("unknown"));
     }
 
     #[test]
-    fn scan_all_cwd_overrides_global() {
-        // Global に ceo.md、Cwd chain にも ceo.md を置いて、Cwd が優先されることを確認。
+    fn scan_project_and_global_are_independent() {
+        // Global に ceo.md、Project にも ceo.md を置いたとき、それぞれが
+        // 独立に scan され source ラベルも正しく付くことを確認。
         let home_root = tempfile::tempdir().unwrap();
-        let cwd_root = tempfile::tempdir().unwrap();
+        let project_root = tempfile::tempdir().unwrap();
 
         write_file(
             &home_root.path().join(".claude").join("commands").join("ceo.md"),
             "# global CEO",
         );
         write_file(
-            &cwd_root.path().join(".claude").join("commands").join("ceo.md"),
-            "# cwd CEO",
+            &project_root.path().join(".claude").join("commands").join("ceo.md"),
+            "# project CEO",
         );
 
-        // `scan_all` は内部で `dirs::home_dir()` を呼ぶため、ここでは直接
-        // 関数を呼ばず scan_dir の単体で確認する。統合テストは起動時限定。
         let cmds_global = scan_dir(
             &home_root.path().join(".claude").join("commands"),
             "global",
         );
-        let cmds_cwd = scan_dir(
-            &cwd_root.path().join(".claude").join("commands"),
-            "cwd",
+        let cmds_project = scan_dir(
+            &project_root.path().join(".claude").join("commands"),
+            "project",
         );
         assert_eq!(cmds_global.len(), 1);
-        assert_eq!(cmds_cwd.len(), 1);
+        assert_eq!(cmds_project.len(), 1);
         assert_eq!(cmds_global[0].source, "global");
-        assert_eq!(cmds_cwd[0].source, "cwd");
+        assert_eq!(cmds_project[0].source, "project");
     }
 
     #[test]

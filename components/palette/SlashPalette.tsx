@@ -45,7 +45,7 @@ import type { McpServerDef, PluginDef, SkillDef, SlashCmd } from "@/lib/types";
  * 素人ユーザーには発見性が無かった問題の解消（PM-760 候補からの先行着手）。
  *
  * - 取得: `invoke("list_builtin_slashes")` を open 時に 1 回（cache）
- * - 分類: source="builtin" の専用 group、scope 3 種（cwd/project/global）より上
+ * - 分類: source="builtin" の専用 group、scope 2 種（project/global）より上
  * - 選択時の挙動:
  *   - builtin → `handleBuiltinSlash("/name", ctx)` を呼び、成功なら palette を
  *     close（textarea クリアは InputArea 側で既存経路が必要。今回は palette 側で
@@ -112,12 +112,6 @@ const SOURCE_META: Record<
     className:
       "border-emerald-400/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
   },
-  cwd: {
-    badge: "cwd",
-    heading: "カレント (cwd)",
-    className:
-      "border-purple-400/40 bg-purple-500/10 text-purple-600 dark:text-purple-300",
-  },
   project: {
     badge: "project",
     heading: "プロジェクト",
@@ -144,13 +138,13 @@ const MCP_SCOPE_LABEL: Record<McpServerDef["scope"], string> = {
   project: "プロジェクト",
 };
 
-/** スコープ表示順（builtin → skill → plugin → mcp → cwd → project → global）。 */
+/** スコープ表示順（builtin → skill → plugin → mcp → project → global）。
+ *  DEC-051: "cwd" scope は廃止。 */
 const SCOPE_ORDER: SlashSource[] = [
   "builtin",
   "skill",
   "plugin",
   "mcp",
-  "cwd",
   "project",
   "global",
 ];
@@ -256,7 +250,6 @@ interface GroupedItems {
   skill: PaletteItem[];
   plugin: PaletteItem[];
   mcp: PaletteItem[];
-  cwd: PaletteItem[];
   project: PaletteItem[];
   global: PaletteItem[];
 }
@@ -264,7 +257,7 @@ interface GroupedItems {
 /**
  * スコープ別にグルーピングし、合計件数を上限 `limit` に抑える。
  *
- * 上限を超える場合は builtin → cwd → project → global の優先度で詰める。
+ * 上限を超える場合は SCOPE_ORDER の優先度で詰める。
  * 戻り値には overflow（表示省略件数）も含める。
  */
 function groupAndLimit(
@@ -276,7 +269,6 @@ function groupAndLimit(
     skill: [],
     plugin: [],
     mcp: [],
-    cwd: [],
     project: [],
     global: [],
   };
@@ -616,7 +608,6 @@ export function SlashPalette({
     grouped.skill.length +
     grouped.plugin.length +
     grouped.mcp.length +
-    grouped.cwd.length +
     grouped.project.length +
     grouped.global.length;
   const isEmpty = totalShown === 0;

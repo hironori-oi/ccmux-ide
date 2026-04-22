@@ -62,7 +62,6 @@ v1.3.x で Cursor 上の Claude Code と同等の **Slash Command / Skill / Plug
 
 ### Credits
 - Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed
-- 組織運営統合は [claude-code-company](https://github.com/hironori-oi/claude-code-company) のメタ設計に基づく
 
 ## [v1.1.0] - 2026-04-22
 
@@ -94,7 +93,6 @@ v1.3.x で Cursor 上の Claude Code と同等の **Slash Command / Skill / Plug
 
 ### Credits
 - Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed
-- 組織運営統合は [claude-code-company](https://github.com/hironori-oi/claude-code-company) のメタ設計に基づく
 
 ### Acceptance
 - v1.1 実機検証: Preview / Terminal / Welcome 撤去 / セッション必須化 すべて合格
@@ -146,7 +144,6 @@ v1.3.x で Cursor 上の Claude Code と同等の **Slash Command / Skill / Plug
 
 ### Credits
 - Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed
-- 組織運営統合は [claude-code-company](https://github.com/hironori-oi/claude-code-company) のメタ設計に基づく
 
 ### Acceptance
 - v1.0 readiness audit: `pm-release-readiness-audit.md` (Tier 1 全完了、Tier 2-D/E 完了、Tier 2-G は v1.1 候補)
@@ -175,7 +172,6 @@ v1.3.x で Cursor 上の Claude Code と同等の **Slash Command / Skill / Plug
 
 ### Credits
 - Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed. Rust モジュール（`image_paste`, `memory_tree`, `worktree`, `config`, `search_fts`, `claude_monitor`, `slash_palette`）は ccmux から派生（DEC-008 / DEC-022）
-- 組織運営統合は [claude-code-company](https://github.com/hironori-oi/claude-code-company) のメタ設計に基づく
 
 ### Acceptance
 - M3 AC チェックリストは [docs/m3-acceptance-criteria.md](./docs/m3-acceptance-criteria.md) を参照（起動時間 / バイナリサイズ / RAM / 7 日 dogfood / 画像 D&D 20 連続 / E2E 10 シナリオ / 友人配布テスト）

@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { readTextFile, exists } from "@tauri-apps/plugin-fs";
-import { homeDir, join } from "@tauri-apps/api/path";
+import { join } from "@tauri-apps/api/path";
 
 import type {
   EffortLevel,
@@ -18,8 +18,7 @@ import { callTauri } from "@/lib/tauri-api";
  * PRJ-012 v3.2 Chunk A（DEC-031）: registry 型 project store。
  *
  * ## 方針（DEC-031 Workspace 概念の完全撤去）
- * - v3.1 の Workspace（`~/Desktop/claude-code-company` hardcode → 任意フォルダ
- *   配下 3 mode auto-detect）は **完全撤去**
+ * - 旧 Workspace（ルートディレクトリ hardcode → 配下 auto-detect）は **完全撤去**
  * - すべて「Project = 任意ディレクトリ」の単層モデルに統一
  * - persist key: `ccmux-project-registry` （旧 `ccmux-workspace` / `ccmux-ide.projects.extra-paths` は廃止）
  * - 起動時 stale check: 消えたパスは自動で除外
@@ -337,50 +336,6 @@ async function buildRegisteredProject(
     preferredModel: undefined,
     addedAt: Date.now(),
   };
-}
-
-/**
- * Welcome / setup 画面向けの suggestion path ヘルパ。
- *
- * `~/Desktop/claude-code-company` を返す（実在チェックは呼出側）。
- * 旧 `useWorkspaceStore` 撤去に伴い、project registry とは独立した
- * 「単発の suggestion 用」ユーティリティとして残置する。
- */
-export async function defaultWorkspaceRoot(): Promise<string> {
-  const home = await homeDir();
-  return await join(home, "Desktop", "claude-code-company");
-}
-
-/**
- * setup 画面向け: claude-code-company/projects/ 配下の `brief.md` を持つ
- * PRJ-XXX ディレクトリ候補一覧を返す（検出のみ、登録はしない）。
- *
- * - workspace 無選択時に「一括登録 / 単体登録 / スキップ」の候補提示に使う
- */
-export async function detectClaudeCodeCompanyProjects(
-  workspaceRoot: string
-): Promise<{ path: string; name: string }[]> {
-  try {
-    const { readDir } = await import("@tauri-apps/plugin-fs");
-    const projectsDir = await join(workspaceRoot, "projects");
-    if (!(await exists(projectsDir))) return [];
-
-    const entries = await readDir(projectsDir);
-    const out: { path: string; name: string }[] = [];
-
-    for (const entry of entries) {
-      if (!entry.isDirectory) continue;
-      if (entry.name.startsWith(".")) continue;
-      const p = await join(projectsDir, entry.name);
-      const briefPath = await join(p, "brief.md");
-      if (!(await exists(briefPath))) continue;
-      out.push({ path: p, name: entry.name });
-    }
-    out.sort((a, b) => a.name.localeCompare(b.name, "ja"));
-    return out;
-  } catch {
-    return [];
-  }
 }
 
 /** 旧 storage key を削除する（起動時 1 回）。 */

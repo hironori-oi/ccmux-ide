@@ -69,8 +69,8 @@
 
 **撮影内容**:
 - 左サイドバーにフォーカスしたスクリーンショット
-- ProjectSwitcher dropdown が開いている状態（PRJ-001 〜 PRJ-012 の一覧、claude-code-company 由来）
-- 選択中プロジェクトの ProjectTree（brief.md / decisions.md / progress.md / tasks.md / reports/ ツリー）
+- ProjectSwitcher dropdown が開いている状態（登録済みプロジェクトの一覧）
+- 選択中プロジェクトの ProjectTree（README / package.json / src/ など一般的なファイルツリー）
 - Session 一覧（3〜5 個）
 - 右側に ContextGauge + SubAgents + Todos（TodosList に 2〜3 項目）
 - 中央チャットは薄く blur（サイドバーを主役化）

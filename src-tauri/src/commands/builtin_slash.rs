@@ -130,8 +130,9 @@ pub fn builtin_init_claude_md(workspace_root: String) -> Result<String, String> 
 
 /// CLAUDE.md 雛形本文（プロジェクト名以外は固定）。
 ///
-/// 構成は claude-code-company の組織標準に準拠した最小 4 セクション + 関連
-/// ドキュメントで、素人でも追記しやすいように日本語コメントなしで簡潔に。
+/// プロジェクト概要 / 技術スタック / 開発ルール / 関連ドキュメントの
+/// 汎用 4 セクション構成。Claude Code の hierarchical memory ルールに従い、
+/// 素人でも追記しやすいように日本語コメントなしで簡潔に保つ。
 fn render_claude_md_template(project_name: &str) -> String {
     format!(
         "# {project_name}\n\n## プロジェクト概要\n\n## 技術スタック\n\n## 開発ルール\n\n## 関連ドキュメント\n"

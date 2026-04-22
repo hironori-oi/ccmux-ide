@@ -10,11 +10,11 @@
 
 ## コンセプト
 
-ccmux-ide は「Cursor でも公式 Claude Code Desktop でも満たせない、日本語話者・組織運営ワークフロー特化の Claude IDE」を目指したオープンソースのデスクトップクライアントです。以下 4 軸で差別化します。
+ccmux-ide は「Cursor でも公式 Claude Code Desktop でも満たせない、日本語話者向けのおしゃれな汎用 Claude IDE」を目指したオープンソースのデスクトップクライアントです。以下 4 軸で差別化します。
 
 - **日本語ファースト** — 全 UI 日本語、Windows ネイティブビルドでの IME（MS-IME / Google 日本語入力）透過、日本語ドキュメント優先
-- **おしゃれ** — shadcn/ui + framer-motion + Geist + lucide-react で Linear / Arc / Raycast 水準の洗練された UI、5 テーマプリセット（Tokyo Night / Catppuccin Mocha / Dracula / Nord / Claude Orange）
-- **組織運営統合** — `claude-code-company` の 8 組織ロール（`/ceo` `/dev` `/pm` `/research` `/review` `/secretary` `/marketing` `/web-ops`）をスラッシュコマンドでワンクリック実行。`projects/PRJ-XXX/` ツリー、`CLAUDE.md` 3 スコープ（Global / Project / Cwd）を直接閲覧・編集
+- **おしゃれ** — shadcn/ui + framer-motion + Geist + lucide-react で Linear / Arc / Raycast 水準の洗練された UI、5 テーマプリセット（Tokyo Night / Catppuccin Mocha / Dracula / Nord / Claude Orange）、自由な壁紙背景
+- **Claude Code エコシステム完全対応** — Slash コマンド（cwd / project / global 3 スコープ）、Skills、Plugins、MCP（5 スコープ）を自動検出。プロジェクトルート配下の `.claude/` 以下をそのまま尊重し、どんな組織体系・ワークフローでも差し込めば動く
 - **ローカル永続化 + プライバシー** — 会話履歴は SQLite + FTS5 で端末ローカルのみ保存、外部送信ゼロ、テレメトリゼロ、API Key は OS keyring（Windows Credential Manager / macOS Keychain / Linux Secret Service）経由
 
 ---
@@ -171,7 +171,6 @@ ccmux-ide/
   - `search_fts.rs`（rusqlite FTS5 snippet ハイライト）
   - `claude_monitor.rs`（Agent SDK stream イベントから tokens / tool_use / todos 抽出）
   - `slash_palette.rs`（`.claude/commands/` スキャン + fuzzy match）
-- 組織運営統合は [claude-code-company](https://github.com/hironori-oi/claude-code-company) のメタ設計に基づきます
 
 ## ライセンス
 
@@ -183,15 +182,15 @@ MIT License. 詳細は [LICENSE](./LICENSE) を参照。
 
 # ccmux-ide (English)
 
-> Japanese-first desktop client for Claude Code, with organization-oriented developer workflow integration.
+> Japanese-first, polished general-purpose desktop client for Claude Code.
 
 ## Concept
 
-ccmux-ide is an open-source desktop client for [Claude Code](https://github.com/anthropics/claude-code), targeting Japanese-speaking developers and teams that manage software projects with a structured organizational workflow. It differentiates on four axes the official Anthropic Claude Code Desktop and Cursor do not cover:
+ccmux-ide is an open-source desktop client for [Claude Code](https://github.com/anthropics/claude-code), targeting Japanese-speaking developers. It differentiates on four axes the official Anthropic Claude Code Desktop and Cursor do not cover:
 
 - **Japanese-first UI** — All strings in Japanese by default, Windows-native IME passthrough (MS-IME / Google IME), Japanese documentation priority
-- **Polished aesthetics** — shadcn/ui + framer-motion + Geist + lucide-react at Linear / Arc / Raycast quality, 5 theme presets
-- **Organization workflow integration** — One-click slash commands for 8 `claude-code-company` roles (`/ceo` `/dev` `/pm` `/research` `/review` `/secretary` `/marketing` `/web-ops`), `projects/PRJ-XXX/` tree navigation, `CLAUDE.md` 3-scope (Global / Project / Cwd) viewer and Monaco editor
+- **Polished aesthetics** — shadcn/ui + framer-motion + Geist + lucide-react at Linear / Arc / Raycast quality, 5 theme presets, free wallpaper background
+- **Full Claude Code ecosystem support** — Slash commands (cwd / project / global 3 scopes), Skills, Plugins, and MCP (5 scopes) are auto-discovered. The app respects whatever `.claude/` tree the opened project defines, so any organizational scheme or personal workflow drops in unchanged.
 - **Local persistence + privacy** — All conversations stored locally in SQLite + FTS5, zero telemetry, API keys via OS keyring
 
 ## Key Features
@@ -226,13 +225,12 @@ Download from [Releases](https://github.com/hironori-oi/ccmux-ide/releases):
 1. Launch ccmux-ide → click "Start" in the Welcome Wizard
 2. Step 2: if you use Claude Max / Pro, click "Skip" (auto-detected from `~/.claude/.credentials.json`); otherwise paste your API key
 3. Step 3 → 4: review permissions, optionally copy a sample project
-4. In the chat input, type `/` to instantly select slash commands like `/ceo` `/dev` `/pm`
+4. In the chat input, type `/` to open the slash palette (user-defined commands under `.claude/commands/` are auto-discovered across cwd / project / global scopes)
 5. Press `Ctrl+K` for the command palette, `Ctrl+Shift+F` for full-text search, `Ctrl+V` to paste an image
 
 ## Credits
 
 - Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed. Rust modules (`image_paste`, `memory_tree`, `worktree`, `config`, `search_fts`, `claude_monitor`, `slash_palette`) are derived from ccmux.
-- Organization workflow integration is based on [claude-code-company](https://github.com/hironori-oi/claude-code-company).
 
 ## License
 
