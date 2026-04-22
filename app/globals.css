@@ -151,23 +151,26 @@
   }
 
   /*
-   * PM-956 hotfix3 (v1.3.2): Monaco Editor の内部 DOM は多層で透過 layer を
-   * 持ち、PM-870 の html::before (position: fixed, z-index: -10) の背景画像が
-   * editor pane 内まで前景化する症状が isolate / bg-background/95 / bg-background
-   * のいずれでも解消しなかった (fixed は親 stacking context を無視)。
+   * PM-956 hotfix4 (v1.3.2): 壁紙を残しつつ editor text 可読性を確保する
+   * アプローチ。前回までの opaque 背景強制では CSS 反映遅延 (webview cache)
+   * の疑い + オーナー要件「壁紙必須、editor も壁紙表示」への転換。
    *
-   * 最終対策として editor 系 root に `data-ccmux-editor-root` 属性を付け、
-   * その配下の Monaco DOM を強制的に opaque 背景で塗る。Terminal / Chat と違い
-   * Editor は可読性 100% 優先のため、壁紙透過効果は完全に諦める。
+   * 方針:
+   *   1. Monaco 内部 DOM は transparent に強制 → 親の overlay を通す
+   *   2. FileEditor wrapper に半透明黒 overlay (rgba 0.65) を敷く
+   *      (React inline style で確実に DOM に反映、CSS cache 回避)
+   *   3. backdrop-filter: blur で壁紙をぼかし、text との contrast を確保
+   *
+   * Monaco の popup (IntelliSense / context menu) は pointer-events: none の
+   * overlay の上に z-index で配置されるため操作性に影響なし。
    */
-  [data-ccmux-editor-root] {
-    background-color: hsl(var(--background));
-  }
   [data-ccmux-editor-root] .monaco-editor,
   [data-ccmux-editor-root] .monaco-editor .overflow-guard,
   [data-ccmux-editor-root] .monaco-editor .monaco-scrollable-element,
   [data-ccmux-editor-root] .monaco-editor-background,
-  [data-ccmux-editor-root] .margin {
-    background-color: hsl(var(--background)) !important;
+  [data-ccmux-editor-root] .monaco-editor .margin,
+  [data-ccmux-editor-root] .monaco-editor .minimap,
+  [data-ccmux-editor-root] .monaco-editor .decorationsOverviewRuler {
+    background-color: transparent !important;
   }
 }

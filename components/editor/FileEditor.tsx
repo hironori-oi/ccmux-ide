@@ -138,15 +138,21 @@ export function FileEditor({ openFileId }: FileEditorProps) {
   return (
     <Suspense fallback={<EditorSkeleton />}>
       {/*
-       * PM-956 hotfix3 (v1.3.2): isolate / bg-background(/95) では
-       * html::before (fixed, z-index: -10) が Monaco pane 内まで
-       * 前景化する症状を解消できなかったため、`data-ccmux-editor-root`
-       * 属性を付けて globals.css で Monaco 系 DOM を強制 opaque 化する
-       * 方式に変更。editor は可読性 100% 優先、壁紙透過効果なし。
+       * PM-956 hotfix4 (v1.3.2): 壁紙必須 + text 可読の両立アプローチ。
+       * - 半透明黒 overlay (rgba 0.65) + backdrop-filter: blur(2px) で
+       *   壁紙を透過させつつぼかして text との contrast を確保
+       * - Monaco 内部 DOM は globals.css で transparent 強制、overlay を通す
+       * - React inline style で直接 DOM に backgroundColor を書き込み、
+       *   CSS cache 遅延問題を回避
        */}
       <div
         data-ccmux-editor-root
         className="relative h-full w-full"
+        style={{
+          backgroundColor: "rgba(0, 0, 0, 0.65)",
+          backdropFilter: "blur(2px)",
+          WebkitBackdropFilter: "blur(2px)",
+        }}
       >
       <SafeMonacoEditor
         height="100%"
