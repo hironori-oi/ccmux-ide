@@ -12,7 +12,9 @@ export function UserMessage({ message }: { message: ChatMessage }) {
   return (
     <div className="flex justify-end">
       <Card className="max-w-[75%] bg-primary p-3 text-primary-foreground shadow-sm">
-        <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+        {/* PM-951: text-sm ではなく親 MessageList の --app-font-size を継承する。
+            Tailwind の任意値記法 `text-[length:inherit]` で font-size を親から継ぐ。 */}
+        <p className="whitespace-pre-wrap break-words text-[length:inherit] leading-relaxed">
           {message.content}
         </p>
         {message.attachments && message.attachments.length > 0 && (

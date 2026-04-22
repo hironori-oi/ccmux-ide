@@ -19,6 +19,8 @@ import {
 } from "@/lib/stores/terminal";
 // PM-947: Ctrl+Shift+N で新規 terminal 起動時、active project の cwd が必要。
 import { useProjectStore } from "@/lib/stores/project";
+// PM-951: 設定画面「フォントサイズ」を xterm.js に反映するため購読する。
+import { useSettingsStore } from "@/lib/stores/settings";
 import "@xterm/xterm/css/xterm.css";
 
 /**
@@ -124,6 +126,12 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
   const searchAddonRef = useRef<
     import("@xterm/addon-search").SearchAddon | null
   >(null);
+  // PM-951: fontSize 変更後に fit.fit() を呼んで rows/cols を再計測するため
+  // FitAddon も ref で保持する（既存ロジックは useEffect scope の局所変数で
+  // 持っていたが、font size hook からは参照できないため追加）。
+  const fitAddonRef = useRef<
+    import("@xterm/addon-fit").FitAddon | null
+  >(null);
 
   // PM-947: Ctrl+Tab で同 pane の次 terminal に切替えるため、最新の
   // terminals / panes を store から取る必要がある。useEffect 再起動を
@@ -205,6 +213,33 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
     }
   }, [searchOpen]);
 
+  // PM-951: 設定画面「フォントサイズ」を xterm.js にも反映する。
+  // - 初期 mount 時: メイン useEffect 内で fontSizeRef.current を読み、new Terminal({ fontSize }) に渡す。
+  // - 以降の変更: この useEffect が term.options.fontSize を書き換え、fit.fit() で再計測する。
+  // メイン useEffect の依存に fontSize を入れると term が毎回 dispose+再生成されて
+  // scrollback が消えるので、ref + 独立 effect の 2 段構成にしている。
+  const fontSize = useSettingsStore((s) => s.settings.appearance.fontSize);
+  const fontSizeRef = useRef(fontSize);
+  useEffect(() => {
+    fontSizeRef.current = fontSize;
+    const term = termRef.current;
+    if (!term) return;
+    try {
+      // xterm.js 5.x の ITerminalOptions は runtime 書き換え可 (options は setter)。
+      term.options.fontSize = fontSize;
+    } catch (e) {
+      logger.debug("[TerminalPane] options.fontSize 更新に失敗:", e);
+    }
+    // fontSize 変更で文字幅/行高が変わるため、cols/rows を再計測する。
+    // backend pty の resize は既存 ResizeObserver 経路に任せたいので、
+    // fit.fit() 側が自身の listener を通じて resize 通知を発火するのに任せる。
+    try {
+      fitAddonRef.current?.fit();
+    } catch (e) {
+      logger.debug("[TerminalPane] fit after fontSize change failed:", e);
+    }
+  }, [fontSize]);
+
   useEffect(() => {
     const container = innerRef.current;
     const wrapper = wrapperRef.current;
@@ -252,7 +287,10 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
           cursorBlink: true,
           fontFamily:
             "'Cascadia Mono', Menlo, Consolas, 'Courier New', monospace",
-          fontSize: 13,
+          // PM-951: 設定画面「フォントサイズ」を初期値として使用。
+          // mount 後の変更は上記 useEffect (fontSize dep) が term.options.fontSize を
+          // 書き換えるので、ここは ref 経由で初期値のみ注入する。
+          fontSize: fontSizeRef.current,
           lineHeight: 1.2,
           scrollback: 5000,
           // PM-922: 背景画像 (PM-870) を terminal pane でも透過させるため、
@@ -551,9 +589,14 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
         // PM-947: JSX 側 (search overlay の onChange handler) から term に
         // アクセスするために ref に保持。unmount の cleanup で null に戻す。
         termRef.current = term;
+        // PM-951: fontSize 変更時の fit.fit() 呼出のため FitAddon も ref に保持。
+        fitAddonRef.current = fit;
         cleanups.push(() => {
           if (termRef.current === term) {
             termRef.current = null;
+          }
+          if (fitAddonRef.current === fit) {
+            fitAddonRef.current = null;
           }
         });
 

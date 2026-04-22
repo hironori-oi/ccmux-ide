@@ -111,7 +111,9 @@ export function AssistantMessage({ message }: { message: ChatMessage }) {
   return (
     <div className="flex justify-start">
       <Card className="mr-auto max-w-[85%] border-muted-foreground/10 bg-card p-4 text-card-foreground shadow-sm">
-        <div className="text-sm">
+        {/* PM-951: text-sm ではなく親 MessageList の --app-font-size を継承。
+            markdown body（p / li / blockquote 等）はこの div の font-size を継ぐ。 */}
+        <div className="text-[length:inherit]">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeHighlight]}

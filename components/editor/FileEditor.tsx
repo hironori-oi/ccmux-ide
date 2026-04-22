@@ -53,10 +53,25 @@ export function FileEditor({ openFileId }: FileEditorProps) {
   const themePreset = useSettingsStore(
     (s) => s.settings.appearance.themePreset
   );
+  // PM-951: 設定画面の UI フォントサイズを Monaco にも反映。
+  const fontSize = useSettingsStore((s) => s.settings.appearance.fontSize);
   const mode = resolvedTheme === "dark" ? "dark" : "light";
   const monacoTheme = resolveMonacoTheme(themePreset, mode);
 
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+
+  // PM-951: fontSize 変更時に Monaco の options.fontSize を即時更新。
+  // 初回 mount 直後は `onMount` で editorRef が埋まるので、effect の初回も
+  // guard 越しに適用される（editorRef.current が null の間は skip）。
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    try {
+      ed.updateOptions({ fontSize });
+    } catch {
+      // Monaco dispose race 回避: 既に dispose されていた場合は silent
+    }
+  }, [fontSize]);
 
   // Monaco `addCommand` は editor instance が必要なので onMount で登録する。
   // keybinding は Monaco の `KeyMod.CtrlCmd | KeyCode.KeyS` を利用（Ctrl+S / Cmd+S）。
@@ -157,7 +172,9 @@ export function FileEditor({ openFileId }: FileEditorProps) {
         options={{
           readOnly: false,
           minimap: { enabled: false },
-          fontSize: 13,
+          // PM-951: 設定画面「フォントサイズ」を初期 options に反映。
+          // mount 後の変更は上記 useEffect → ed.updateOptions で追従。
+          fontSize,
           wordWrap: "on",
           scrollBeyondLastLine: false,
           automaticLayout: true,
