@@ -3,7 +3,7 @@ import { DocsLayout } from "@/components/DocsLayout";
 export const metadata = {
   title: "アーキテクチャ",
   description:
-    "ccmux-ide の 3 層アーキテクチャ（Tauri 2 フロント + Rust バックエンド + Node.js sidecar）と Rust モジュールの出自。",
+    "Sumi の 3 層アーキテクチャ（Tauri 2 フロント + Rust バックエンド + Node.js sidecar）と Rust モジュールの出自。",
 };
 
 const toc = [
@@ -15,7 +15,7 @@ const toc = [
   { id: "data", label: "データ保存とプライバシー" },
 ];
 
-const modules: Array<{ name: string; origin: "ccmux" | "ccmux-ide"; desc: string }> = [
+const modules: Array<{ name: string; origin: "ccmux" | "sumi"; desc: string }> = [
   {
     name: "image_paste",
     origin: "ccmux",
@@ -53,22 +53,22 @@ const modules: Array<{ name: string; origin: "ccmux" | "ccmux-ide"; desc: string
   },
   {
     name: "keyring_auth",
-    origin: "ccmux-ide",
+    origin: "sumi",
     desc: "OS keyring（Credential Manager / Keychain / Secret Service）経由で API Key を保管。",
   },
   {
     name: "sidecar_supervisor",
-    origin: "ccmux-ide",
+    origin: "sumi",
     desc: "Claude Agent SDK の Node.js sidecar プロセスを起動・cwd 連動で再起動。",
   },
   {
     name: "pty_terminal",
-    origin: "ccmux-ide",
+    origin: "sumi",
     desc: "Rust PTY。xterm.js と双方向ブリッジし組込ターミナルを実現。",
   },
   {
     name: "updater_channel",
-    origin: "ccmux-ide",
+    origin: "sumi",
     desc: "tauri-plugin-updater のラッパー。GitHub Release `latest.json` ポーリング。",
   },
 ];
@@ -78,7 +78,7 @@ export default function ArchitecturePage() {
     <DocsLayout toc={toc}>
       <h1>アーキテクチャ</h1>
       <p>
-        ccmux-ide は 3 層構成のアプリケーションです。軽量なネイティブバイナリと
+        Sumi は 3 層構成のアプリケーションです。軽量なネイティブバイナリと
         Claude Code エコシステムとの互換性を両立させるため、Tauri 2 による WebView
         ベースの GUI、Rust によるバックエンド、そして Claude Agent SDK を内包した
         Node.js sidecar に役割を分割しています。
@@ -112,7 +112,7 @@ export default function ArchitecturePage() {
 
       <h2 id="backend">Rust バックエンド</h2>
       <p>
-        Tauri 2 を中核に、ccmux 由来のモジュールと ccmux-ide 独自モジュールを
+        Tauri 2 を中核に、ccmux 由来のモジュールと Sumi 独自モジュールを
         組み合わせています。OS ネイティブ機能（keyring、PTY、ファイル監視、
         クリップボード画像）は Rust 側で実装し、フロントエンドには Tauri の
         コマンド / イベントブリッジ経由で公開します。
@@ -121,14 +121,14 @@ export default function ArchitecturePage() {
       <h2 id="sidecar">Node.js sidecar</h2>
       <p>
         Anthropic 公式の <code>@anthropic-ai/claude-agent-sdk</code> は Node.js
-        ランタイムを前提としています。ccmux-ide では、この SDK を独立した Node
+        ランタイムを前提としています。Sumi では、この SDK を独立した Node
         プロセス（sidecar）として起動し、stdio JSON-RPC 経由で Rust 側と会話します。
         MCP サーバーは sidecar から生やす形で扱います。
       </p>
 
       <h2 id="rust-modules">Rust モジュール一覧</h2>
       <p>
-        下表は Rust 側の主要モジュールと、その出自（ccmux 由来か ccmux-ide 独自か）
+        下表は Rust 側の主要モジュールと、その出自（ccmux 由来か Sumi 独自か）
         の対応表です。
       </p>
       <table>
@@ -149,7 +149,7 @@ export default function ArchitecturePage() {
                 {m.origin === "ccmux" ? (
                   <span className="text-zinc-400">ccmux 由来</span>
                 ) : (
-                  <span className="text-brand-fg">ccmux-ide 独自</span>
+                  <span className="text-brand-fg">Sumi 独自</span>
                 )}
               </td>
               <td>{m.desc}</td>

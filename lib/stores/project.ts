@@ -20,7 +20,7 @@ import { callTauri } from "@/lib/tauri-api";
  * ## 方針（DEC-031 Workspace 概念の完全撤去）
  * - 旧 Workspace（ルートディレクトリ hardcode → 配下 auto-detect）は **完全撤去**
  * - すべて「Project = 任意ディレクトリ」の単層モデルに統一
- * - persist key: `ccmux-project-registry` （旧 `ccmux-workspace` / `ccmux-ide.projects.extra-paths` は廃止）
+ * - persist key: `sumi-project-registry` （旧 `ccmux-project-registry` からは DEC-054 の transparent migration で引継ぎ、旧々 `ccmux-workspace` / `ccmux-ide.projects.extra-paths` は廃止）
  * - 起動時 stale check: 消えたパスは自動で除外
  *
  * ## API 契約（Chunk B / C から参照）

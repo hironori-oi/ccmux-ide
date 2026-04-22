@@ -1,6 +1,6 @@
 # node-hello
 
-ccmux-ide 同梱の最小 Node.js サンプルです。
+Sumi 同梱の最小 Node.js サンプルです。
 
 ## 実行方法
 

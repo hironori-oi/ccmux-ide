@@ -1,6 +1,6 @@
 # python-hello
 
-ccmux-ide 同梱の最小 Python サンプルです。
+Sumi 同梱の最小 Python サンプルです。
 
 ## 実行方法
 

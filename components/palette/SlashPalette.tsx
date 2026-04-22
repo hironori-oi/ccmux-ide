@@ -649,7 +649,7 @@ export function SlashPalette({
    * PM-953 (Phase 1): skill 選択時のハンドラ。
    *
    * MVP では **実行しない**。Claude Agent SDK native の skill 機能は sidecar が
-   * session 起動時に自動検知するため、ccmux-ide-gui 側では:
+   * session 起動時に自動検知するため、Sumi 側では:
    *  - SKILL.md を Monaco で開いて内容を確認できるようにする
    *  - toast で「sidecar が自動で利用します」と案内
    *
@@ -690,7 +690,7 @@ export function SlashPalette({
    * PM-955 (Phase 1): MCP server 選択時のハンドラ。
    *
    * Phase 1 では **実行しない**。Claude Agent SDK が session 起動時に
-   * `mcpServers` option 経由で自動 load するため、ccmux-ide-gui 側の役割は:
+   * `mcpServers` option 経由で自動 load するため、Sumi 側の役割は:
    *  - 設定ファイル (configPath) を Monaco で開いて内容確認
    *  - toast で scope / transport / enabled 状態 / 接続先を案内
    *

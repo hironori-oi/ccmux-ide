@@ -210,11 +210,11 @@ export function ChatPanel({
           canClose={canClose}
         />
       )}
-      {/* 1 pane 時のみ表示する従来ヘッダ（ccmux-ide + status 表示）。
+      {/* 1 pane 時のみ表示する従来ヘッダ（Sumi + status 表示）。
           複数 pane 時は status bar が冗長になるため省略。 */}
       {!showHeader && (
         <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
-          <h1 className="text-sm font-medium">ccmux-ide</h1>
+          <h1 className="text-sm font-medium">Sumi</h1>
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             {!ready && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
             {status}

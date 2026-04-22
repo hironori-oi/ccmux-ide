@@ -2,7 +2,7 @@ import { DocsLayout } from "@/components/DocsLayout";
 
 export const metadata = {
   title: "機能カタログ",
-  description: "ccmux-ide の主な機能を、スクリーンショット付きで日本語解説します。",
+  description: "Sumi の主な機能を、スクリーンショット付きで日本語解説します。",
 };
 
 const toc = [
@@ -24,7 +24,7 @@ export default function FeaturesPage() {
     <DocsLayout toc={toc}>
       <h1>機能カタログ</h1>
       <p>
-        ランディングページで紹介した 6 つの主要機能を含む、ccmux-ide の全機能を
+        ランディングページで紹介した 6 つの主要機能を含む、Sumi の全機能を
         ひととおり解説します。スクリーンショットは順次追加予定です。
       </p>
 

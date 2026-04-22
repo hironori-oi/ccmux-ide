@@ -59,7 +59,7 @@ import type { RegisteredProject } from "@/lib/types";
  *  誘発しやすい。
  *
  * 左:
- *  - `Sparkles` アイコン + ブランド名 `ccmux-ide`
+ *  - `Sparkles` アイコン + ブランド名 `Sumi`
  *  - activeProject の `{title}: {path}` 短縮表示（read-only）
  *  - 未選択時は「プロジェクト未選択」placeholder
  *  - sidecarStatus が `starting`/`stopping` の間は `Loader2` スピナー表示
@@ -130,7 +130,7 @@ export function TitleBar() {
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Sparkles className="h-4 w-4 shrink-0 text-primary" aria-hidden />
           <span className="shrink-0 text-sm font-semibold tracking-tight">
-            ccmux-ide
+            Sumi
           </span>
           <CwdReadonlyIndicator
             project={activeProject}

@@ -5,7 +5,7 @@
 - 関連タスク: PM-301（5 枚配置）/ PM-302（30 秒デモ動画）
 - 保存先: `docs/screenshots/`
 - フォーマット: PNG、解像度 1920x1080（1 枚 500 KB〜2 MB 目安）
-- 撮影環境: Windows 11 ネイティブビルドの ccmux-ide、ダークテーマ（Tokyo Night Storm base）、システムフォント Geist
+- 撮影環境: Windows 11 ネイティブビルドの Sumi、ダークテーマ（Tokyo Night Storm base）、システムフォント Geist
 
 ---
 
@@ -24,7 +24,7 @@
 ## 1. `hero.png` — Welcome 画面 Step 1
 
 **撮影内容**:
-- ccmux-ide を起動 → Welcome Wizard Step 1（ブランド紹介）
+- Sumi を起動 → Welcome Wizard Step 1（ブランド紹介）
 - 3 カード（「Claude と対話」「マルチエージェント並列」「画像貼付 + diff」）が表示されている状態
 - 下部の「始める」ボタンが有効
 - framer-motion fade-in が完了した後の静止画
@@ -120,7 +120,7 @@
 - 解像度: 1920x1080、30 fps
 - 長さ: 25〜35 秒
 - 流れ:
-  1. 0〜3 秒: ccmux-ide 起動 → Welcome 画面
+  1. 0〜3 秒: Sumi 起動 → Welcome 画面
   2. 3〜8 秒: Welcome Wizard 通過（API Key は既入力でスキップ or ダミー）
   3. 8〜15 秒: Workspace でチャット送信 → Claude 応答 streaming
   4. 15〜22 秒: 画像を D&D → Vision で説明させる

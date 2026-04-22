@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability set for ccmux-ide. T2-E (release hardening): fs:scope の $HOME/** はユーザーが任意 dir を project cwd として追加できる要件により保持。v1.1 で Rust 側の dynamic scope (project cwd 登録時に append_scope で enforcement) 検討。shell:allow-spawn の args:true は sidecar node の可変引数要件により保持、v1.1 で whitelist 化検討。PM-943 (v1.1 Preview Phase 4.1): Tauri 2 secondary WebviewWindow で in-app preview を spawn するため core:window:allow-close / allow-destroy / allow-set-focus を追加 (lifecycle 管理 + 重複 spawn 時の focus 優先用)。",
+  "description": "Default capability set for Sumi. T2-E (release hardening): fs:scope の $HOME/** はユーザーが任意 dir を project cwd として追加できる要件により保持。v1.1 で Rust 側の dynamic scope (project cwd 登録時に append_scope で enforcement) 検討。shell:allow-spawn の args:true は sidecar node の可変引数要件により保持、v1.1 で whitelist 化検討。PM-943 (v1.1 Preview Phase 4.1): Tauri 2 secondary WebviewWindow で in-app preview を spawn するため core:window:allow-close / allow-destroy / allow-set-focus を追加 (lifecycle 管理 + 重複 spawn 時の focus 優先用)。",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -46,6 +46,9 @@
       "identifier": "fs:scope",
       "allow": [
         { "path": "$HOME/.claude/**" },
+        { "path": "$HOME/.sumi/**" },
+        { "path": "$APPDATA/Sumi/**" },
+        { "path": "$APPCONFIG/Sumi/**" },
         { "path": "$HOME/.ccmux-ide-gui/**" },
         { "path": "$APPDATA/ccmux-ide/**" },
         { "path": "$APPCONFIG/ccmux-ide/**" },

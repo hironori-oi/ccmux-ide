@@ -3,7 +3,7 @@ import { DocsLayout } from "@/components/DocsLayout";
 export const metadata = {
   title: "クイックスタート",
   description:
-    "ccmux-ide のダウンロード、インストール、初回起動、Claude Code 認証までの手順を日本語で解説。",
+    "Sumi のダウンロード、インストール、初回起動、Claude Code 認証までの手順を日本語で解説。",
 };
 
 const toc = [
@@ -19,7 +19,7 @@ export default function GettingStartedPage() {
     <DocsLayout toc={toc}>
       <h1>クイックスタート</h1>
       <p>
-        ccmux-ide をダウンロードして、初回起動から最初の Claude Code セッションを
+        Sumi をダウンロードして、初回起動から最初の Claude Code セッションを
         開くまでを 5 分で案内します。
       </p>
 
@@ -41,13 +41,13 @@ export default function GettingStartedPage() {
       </p>
       <h3>Windows</h3>
       <p>
-        <code>ccmux-ide_x.y.z_x64_en-US.msi</code> または <code>...setup.exe</code>{" "}
+        <code>Sumi_x.y.z_x64_en-US.msi</code> または <code>Sumi_x.y.z_x64-setup.exe</code>{" "}
         を実行します。SmartScreen が出たら「詳細情報 → 実行」で続行してください
         （現時点では未署名配布です）。
       </p>
       <h3>macOS</h3>
       <p>
-        <code>ccmux-ide_x.y.z_aarch64.dmg</code>（Apple Silicon）または{" "}
+        <code>Sumi_x.y.z_aarch64.dmg</code>（Apple Silicon）または{" "}
         <code>_x64.dmg</code>（Intel）をマウントし、アプリを Applications
         フォルダにドラッグします。Gatekeeper 警告は「システム設定 → プライバシーと
         セキュリティ」から許可してください。
@@ -102,12 +102,12 @@ export default function GettingStartedPage() {
 
       <h2 id="auth">Claude Code 認証</h2>
       <p>
-        ccmux-ide は次の 2 系統を自動で判別します。
+        Sumi は次の 2 系統を自動で判別します。
       </p>
       <ul>
         <li>
           <strong>Claude Max / Pro プラン</strong> — 既存の Claude Code CLI が発行した{" "}
-          <code>~/.claude/.credentials.json</code> をそのまま使用。ccmux-ide 側での
+          <code>~/.claude/.credentials.json</code> をそのまま使用。Sumi 側での
           追加設定は不要です。
         </li>
         <li>

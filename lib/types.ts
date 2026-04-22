@@ -1,5 +1,5 @@
 /**
- * ccmux-ide 共通型定義。
+ * Sumi 共通型定義。
  *
  * Rust backend の `Serialize` struct と 1:1 対応。将来は specta 等で自動生成
  * する想定（付録A.2 の optional feature）。現段階は手書きで整合性を取る。
@@ -155,7 +155,7 @@ export type ThemeMode = "light" | "dark" | "system";
 /**
  * テーマプリセット（Week 7 Chunk 2 / PM-251）。
  *
- * - `orange`: ccmux-ide ブランドデフォルト（light / dark 両対応）
+ * - `orange`: Sumi ブランドデフォルト（light / dark 両対応）
  * - `tokyo-night` / `catppuccin` / `dracula` / `nord`: dark-only プリセット、
  *   選択時は next-themes 側も `dark` に強制切替する。
  */
@@ -539,7 +539,7 @@ export interface SkillDef {
  * `query.mcpServerStatus()` / `toggleMcpServer()` / `setMcpServers()` で
  * dynamic に操作できる。
  *
- * ccmux-ide-gui (Phase 1) は disk 上の設定を **5 スコープ統合で走査**し、
+ * Sumi (Phase 1) は disk 上の設定を **5 スコープ統合で走査**し、
  * SlashPalette に一覧表示する。実接続・tool 取得は Agent SDK の自動 load に
  * 委譲する（Phase 2 で sidecar 経由 `mcpServerStatus()` の live 表示を予定）。
  */

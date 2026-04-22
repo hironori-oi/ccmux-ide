@@ -1,6 +1,6 @@
 # M3 Full MVP 受入判定チェックリスト
 
-本ドキュメントは PRJ-012 ccmux-ide の **M3 Full MVP（Week8 末）** 到達判定の受入基準（Acceptance Criteria）を定義する。各項目は計測方法と判定基準（PASS / FAIL / 保留）を持ち、週末の自己検収で実測値を埋める。
+本ドキュメントは PRJ-012 Sumi の **M3 Full MVP（Week8 末）** 到達判定の受入基準（Acceptance Criteria）を定義する。各項目は計測方法と判定基準（PASS / FAIL / 保留）を持ち、週末の自己検収で実測値を埋める。
 
 - 関連: `projects/PRJ-012/brief.md` § 新 M3 Full MVP / `tasks.md` PM-291 / `decisions.md` DEC-013 DEC-025
 - 判定者: オーナー本人（兼 CEO 兼 /dev）
@@ -47,7 +47,7 @@
 ## AC-02: バイナリサイズ 20〜50 MB（NSIS 本体）
 
 **計測方法**:
-- GitHub Actions の `build-windows.yml` artifact から `ccmux-ide_0.1.0_x64-setup.exe`（NSIS）のサイズを取得
+- GitHub Actions の `build-windows.yml` artifact から `Sumi_0.1.0_x64-setup.exe`（NSIS）のサイズを取得
 - `.msi` / `.dmg` / `.AppImage` / `.deb` も参考値として記録
 
 **基準**:
@@ -67,17 +67,17 @@
 ## AC-03: RAM 使用量 30〜80 MB（idle）
 
 **計測方法**:
-- ccmux-ide 起動 → Welcome 通過 → Workspace idle 状態で 30 秒待機
-- Windows: タスクマネージャー「詳細」タブの `ccmux-ide.exe` と `WebView2` 関連プロセスの合計を記録
-- Linux: `ps -o rss -p $(pgrep ccmux-ide)` で RSS を kB 単位取得
-- macOS: アクティビティモニタの `ccmux-ide` 実メモリ
+- Sumi 起動 → Welcome 通過 → Workspace idle 状態で 30 秒待機
+- Windows: タスクマネージャー「詳細」タブの `Sumi.exe` と `WebView2` 関連プロセスの合計を記録
+- Linux: `ps -o rss -p $(pgrep Sumi)` で RSS を kB 単位取得
+- macOS: アクティビティモニタの `Sumi` 実メモリ
 
 **基準**:
 - **PASS**: 30〜80 MB
 - **保留**: 80〜150 MB（DevTools 有効時許容）
 - **FAIL**: 150 MB 超
 
-**実測（Windows）**: ______ MB（ccmux-ide.exe + WebView2 合計）
+**実測（Windows）**: ______ MB（Sumi.exe + WebView2 合計）
 **実測（Linux）**: ______ MB
 
 ---
@@ -86,7 +86,7 @@
 
 **計測方法**:
 - PM-220 の dogfood 期間（Week 6 末〜Week 7 中）で実施済 / 継続
-- 日毎に `projects/PRJ-012/progress.md` の M2 dogfood セクションへ「Cursor 起動回数 / 公式 Desktop 起動回数 / ccmux-ide 起動時間」を記録
+- 日毎に `projects/PRJ-012/progress.md` の M2 dogfood セクションへ「Cursor 起動回数 / 公式 Desktop 起動回数 / Sumi 起動時間」を記録
 - 1 回でも Cursor / 公式 Desktop を起動したらカウンタリセット、7 日連続ゼロを目指す
 
 **基準**:
@@ -103,7 +103,7 @@
 ## AC-05: 画像 D&D 20 回連続成功
 
 **計測方法**:
-- ccmux-ide Workspace のチャット入力欄へ PNG 画像を 20 回連続 D&D（または Ctrl+V）
+- Sumi Workspace のチャット入力欄へ PNG 画像を 20 回連続 D&D（または Ctrl+V）
 - 各回で以下を確認:
   1. ImageThumb に画像サムネ表示
   2. sonner トースト「画像を貼り付けました」表示
@@ -175,7 +175,7 @@
 
 ### 配布先 verification チェックシート
 
-配布先が実施する項目（ccmux-ide 初見ユーザー視点）:
+配布先が実施する項目（Sumi 初見ユーザー視点）:
 
 - [ ] インストール成功（SmartScreen 警告回避込み、README 手順に従える）
 - [ ] 初回起動で Welcome Wizard が日本語で表示される

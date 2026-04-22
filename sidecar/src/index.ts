@@ -1,5 +1,5 @@
 /**
- * ccmux-ide Node sidecar entrypoint.
+ * Sumi Node sidecar entrypoint.
  *
  * DEC-023: Claude Agent SDK TypeScript を primary にするため、Tauri 本体（Rust）
  * とは別プロセスの Node.js sidecar として起動する。Tauri 側から stdin/stdout 経由で
@@ -551,7 +551,7 @@ function main(): void {
     payload: { version: "0.1.0", projectId: SIDECAR_PROJECT_ID },
   });
   process.stderr.write(
-    `ccmux-ide sidecar ready (projectId=${SIDECAR_PROJECT_ID ?? "<unset>"})\n`
+    `Sumi sidecar ready (projectId=${SIDECAR_PROJECT_ID ?? "<unset>"})\n`
   );
 }
 

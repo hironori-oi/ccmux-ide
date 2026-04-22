@@ -50,7 +50,7 @@ export interface ThemePresetDefinition {
 }
 
 // ---------------------------------------------------------------------------
-// Orange（ccmux-ide default、既存 app/globals.css と同値）
+// Orange（Sumi default、既存 app/globals.css と同値）
 // ---------------------------------------------------------------------------
 const ORANGE_LIGHT: ThemePresetVariables = {
   background: "0 0% 100%",

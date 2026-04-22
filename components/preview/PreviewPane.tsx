@@ -494,7 +494,7 @@ export function PreviewPane() {
             aria-hidden
           />
           <span>
-            「アプリ内で開く」は ccmux-ide 内の別 window で表示します
+            「アプリ内で開く」は Sumi 内の別 window で表示します
             （PM-944 / v1.1 Phase 4.1 Rust spawn）。表示されないサイトは「ブラウザで開く」をご利用ください。
             （PM-945 / v1.2: ウィンドウ位置とサイズはプロジェクトごとに記憶されます）
           </span>

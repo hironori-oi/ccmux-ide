@@ -42,7 +42,7 @@ export function CompareTable() {
             他の選択肢と、比べてみる。
           </h2>
           <p className="mt-4 text-zinc-400">
-            ccmux-ide は日本語話者のデイリードライバーを目指して設計されています。
+            Sumi は日本語話者のデイリードライバーを目指して設計されています。
           </p>
         </div>
 
@@ -52,7 +52,7 @@ export function CompareTable() {
               <tr className="border-b border-zinc-800 text-left text-zinc-400">
                 <th className="px-5 py-4 font-medium">機能</th>
                 <th className="px-5 py-4 text-center font-semibold text-brand-fg">
-                  ccmux-ide
+                  Sumi
                 </th>
                 <th className="px-5 py-4 text-center font-medium">
                   Claude Code Desktop

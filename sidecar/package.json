@@ -1,7 +1,7 @@
 {
-  "name": "ccmux-ide-sidecar",
+  "name": "sumi-sidecar",
   "version": "0.1.0",
-  "description": "Claude Agent SDK sidecar for ccmux-ide (Tauri)",
+  "description": "Claude Agent SDK sidecar for Sumi (Tauri)",
   "license": "MIT",
   "private": true,
   "type": "module",

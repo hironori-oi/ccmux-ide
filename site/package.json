@@ -1,7 +1,7 @@
 {
-  "name": "ccmux-ide-site",
+  "name": "sumi-site",
   "version": "0.1.0",
-  "description": "ccmux-ide project site (GitHub Pages)",
+  "description": "Sumi project site (GitHub Pages)",
   "license": "MIT",
   "private": true,
   "type": "module",

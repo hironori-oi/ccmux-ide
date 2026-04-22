@@ -7,8 +7,8 @@ import { AppearanceInit } from "@/components/theme/AppearanceInit";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ccmux-ide",
-  description: "日本語ファースト + 組織運営特化の Claude Code デスクトップクライアント",
+  title: "Sumi",
+  description: "Claude Code を、墨でしたためる。日本語ファーストの汎用 Claude Code デスクトップクライアント。",
 };
 
 export default function RootLayout({

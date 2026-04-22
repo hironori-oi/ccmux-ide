@@ -14,7 +14,7 @@ import { parseToolMessageContent } from "@/lib/tool-content-parser";
 /**
  * セッション一覧ドメインの Zustand store (PM-152)。
  *
- * Chunk B が管轄する `~/.ccmux-ide-gui/history.db` の内容を frontend と sync する
+ * Chunk B が管轄する `~/.sumi/history.db`（旧 `~/.ccmux-ide-gui/history.db`）の内容を frontend と sync する
  * 役割。チャット本体の state (messages / streaming / attachments) は
  * `useChatStore`（Chunk A）が持ち、こちらは **サイドバー側のセッション一覧 +
  * currentSessionId の発信源** に徹する。

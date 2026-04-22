@@ -153,7 +153,7 @@ export function Sidebar() {
                 exit={{ opacity: 0 }}
                 className="text-xs font-semibold tracking-tight"
               >
-                ccmux-ide
+                Sumi
               </motion.span>
             )}
           </AnimatePresence>

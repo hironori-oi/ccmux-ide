@@ -1,5 +1,5 @@
 // ============================================================================
-// ccmux-ide / sidecar bundler
+// Sumi / sidecar bundler
 // ----------------------------------------------------------------------------
 // 目的:
 //   `sidecar/src/index.ts` (Agent SDK を呼ぶ TypeScript entrypoint) を

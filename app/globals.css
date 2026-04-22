@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 /*
- * ccmux-ide global styles
+ * Sumi global styles
  *
  * shadcn/ui の neutral preset をベースに、Claude 風のアクセント（オレンジ系
  * #C15F3C 相当、oklch 58% 0.14 45）を primary に設定。

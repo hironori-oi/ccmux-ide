@@ -228,7 +228,7 @@ function OfficialErrorBlock({
   const isExpired = error.includes("期限切れ") || error.includes("UNAUTHORIZED");
 
   const guidance = isCredMissing
-    ? "ターミナルで `claude login` を実行し、ccmux-ide を再起動してください。"
+    ? "ターミナルで `claude login` を実行し、Sumi を再起動してください。"
     : isExpired
       ? "`claude login` で再認証してください（token の期限が切れている可能性あり）。"
       : "時間をおいて再試行するか、Anthropic Console から残量を確認してください。";

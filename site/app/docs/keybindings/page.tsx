@@ -2,7 +2,7 @@ import { DocsLayout } from "@/components/DocsLayout";
 
 export const metadata = {
   title: "キーバインド",
-  description: "ccmux-ide の主要なキーボードショートカット一覧。",
+  description: "Sumi の主要なキーボードショートカット一覧。",
 };
 
 const toc = [
@@ -78,7 +78,7 @@ export default function KeybindingsPage() {
     <DocsLayout toc={toc}>
       <h1>キーバインド</h1>
       <p>
-        ccmux-ide はキーボードだけで完結することを目指しています。以下は主要な
+        Sumi はキーボードだけで完結することを目指しています。以下は主要な
         ショートカットの一覧です。macOS では <code>Ctrl</code> を <code>Cmd</code>{" "}
         に読み替えてください。
       </p>

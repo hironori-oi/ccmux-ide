@@ -4,12 +4,12 @@ import { DocsLayout } from "@/components/DocsLayout";
 export const metadata = {
   title: "ドキュメント",
   description:
-    "ccmux-ide のセットアップ・機能・キーバインド・アーキテクチャを日本語で解説するドキュメント。",
+    "Sumi のセットアップ・機能・キーバインド・アーキテクチャを日本語で解説するドキュメント。",
 };
 
 const toc = [
-  { id: "overview", label: "ccmux-ide とは？" },
-  { id: "why", label: "なぜ ccmux-ide？" },
+  { id: "overview", label: "Sumi とは？" },
+  { id: "why", label: "なぜ Sumi？" },
   { id: "quickstart", label: "クイックスタート" },
   { id: "features", label: "主な機能" },
   { id: "learn-claude", label: "Claude Code を学ぶ" },
@@ -20,29 +20,29 @@ export default function DocsIndexPage() {
     <DocsLayout toc={toc}>
       <h1>ドキュメント</h1>
       <p>
-        ccmux-ide は、日本語話者のために設計された汎用 Claude Code デスクトップ
+        Sumi は、日本語話者のために設計された汎用 Claude Code デスクトップ
         クライアントです。このドキュメントでは、インストールから日常的な使い方、
         そしてアプリを支える設計思想までを日本語でまとめています。
       </p>
 
-      <h2 id="overview">ccmux-ide とは？</h2>
+      <h2 id="overview">Sumi とは？</h2>
       <p>
-        <strong>ccmux-ide</strong> は、Tauri 2 + Next.js 15 + React 19 + TypeScript で
+        <strong>Sumi</strong> は、Tauri 2 + Next.js 15 + React 19 + TypeScript で
         構築されたデスクトップクライアントです。Windows / macOS / Linux のいずれでも
         ネイティブバイナリとして動作し、Claude Code のエコシステム
         （Slash コマンド、Skills、Plugins、MCP）をそのまま扱えます。
       </p>
       <p>
-        ccmux-ide は OSS プロジェクト <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noreferrer">ccmux</a>
+        Sumi は OSS プロジェクト <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noreferrer">ccmux</a>
         （MIT, @Shin-sibainu）の Rust モジュール
         （<code>image_paste</code>, <code>memory_tree</code>, <code>worktree</code>,{" "}
         <code>config</code>, <code>search_fts</code>, <code>claude_monitor</code>,{" "}
         <code>slash_palette</code>）を再利用しています。ccmux が TUI のターミナル
-        マルチプレクサであるのに対し、ccmux-ide はフル機能の GUI IDE であり、カテゴリ
+        マルチプレクサであるのに対し、Sumi はフル機能の GUI IDE であり、カテゴリ
         としては別製品です。
       </p>
 
-      <h2 id="why">なぜ ccmux-ide？</h2>
+      <h2 id="why">なぜ Sumi？</h2>
       <ul>
         <li>
           <strong>日本語ファースト</strong> — 全 UI 日本語、IME 透過、ドキュメントも
@@ -95,7 +95,7 @@ export default function DocsIndexPage() {
         <a href="https://docs.claude.com/en/docs/claude-code/overview" target="_blank" rel="noreferrer">
           {" "}Anthropic 公式ドキュメント
         </a>
-        を参照してください。ccmux-ide はそれらの機能を GUI でアクセスしやすくする
+        を参照してください。Sumi はそれらの機能を GUI でアクセスしやすくする
         ラッパーです。
       </p>
     </DocsLayout>

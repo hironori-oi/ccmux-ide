@@ -1,7 +1,7 @@
 {
   "name": "node-hello",
   "version": "0.1.0",
-  "description": "Minimal Node.js hello world for ccmux-ide",
+  "description": "Minimal Node.js hello world for Sumi",
   "type": "module",
   "main": "index.js",
   "scripts": {

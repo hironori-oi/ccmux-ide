@@ -27,7 +27,7 @@ export function WhyPillars() {
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-bold tracking-tight text-zinc-50 sm:text-4xl">
-            なぜ ccmux-ide なのか。
+            なぜ Sumi なのか。
           </h2>
           <p className="mt-4 text-zinc-400">
             速さ、安全性、ゼロ設定。毎日使う道具だから、細部に妥協しない。
