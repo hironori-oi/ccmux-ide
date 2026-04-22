@@ -138,13 +138,22 @@ export function FileEditor({ openFileId }: FileEditorProps) {
   return (
     <Suspense fallback={<EditorSkeleton />}>
       {/*
-       * PM-956: PM-870 の body bg-transparent 化で Monaco 背景が透過し
-       * text が壁紙に埋もれて見えない症状への対応。editor 本体は可読性
-       * 最優先で半透明黒 overlay を敷き、壁紙は薄く透ける程度に抑える。
-       * Terminal PM-932 の DOM overlay 方式と同設計、ただし editor は
-       * 透過度を控えめ (0.92) にして text 視認性確保。
+       * PM-956 hotfix (v1.3.2): PM-870 の html::before (背景画像) が
+       * `z-index: -10` で body 全体を覆うが、Monaco Editor の内部 DOM は
+       * transparent 背景が多く、html::before の絵が editor pane の
+       * 中まで前景化してしまい text が読めない症状が継続。
+       *
+       * 対策:
+       *   - `isolate` (CSS `isolation: isolate`) で stacking context を
+       *     切断し、html::before が editor 内部に侵入するのを遮断
+       *   - `bg-background` で完全 opaque 背景 (editor は可読性最優先で
+       *     壁紙透過効果なし)
+       *   - `relative` で z-index 基準を明示
+       *
+       * Terminal / Chat は薄い半透明で壁紙が見える方が体感良いが、
+       * コード編集は text 視認性 100% 優先。
        */}
-      <div className="h-full w-full bg-background/95">
+      <div className="relative isolate h-full w-full bg-background">
       <SafeMonacoEditor
         height="100%"
         defaultLanguage={file.language}
