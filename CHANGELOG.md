@@ -11,6 +11,52 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.4.0] - 2026-04-23
+
+**The "Sumi" Rename Release** — `ccmux-ide` 改称 + ブランドアイデンティティ + 公式サイト公開。
+
+### 🎨 Rebrand: ccmux-ide → Sumi (墨)
+
+- **製品名を `ccmux-ide` から `Sumi (墨)` に改称** (PM-962 / DEC-053)。「墨の哲学 × モダンテック」をコンセプトに、侘寂 × 静謐 × 職人的 × 濃密の 4 軸で視覚言語を統一
+- ロゴ / アプリアイコン / OG image / favicon を新ブランドで刷新。一筆ブラシストローク + 橙の墨滴を採用
+- `productName`: `ccmux-ide` → `Sumi`、bundle identifier: `jp.improver.ccmux-ide` → `jp.improver.sumi`、crate name: `ccmux-ide` → `sumi`
+- Tauri アイコン 40+ ファイル（desktop / iOS / Android）を 1024px master から再生成 (PM-963)
+
+### 🌐 公式サイト公開
+
+- **https://hironori-oi.github.io/ccmux-ide/** で landing + docs 5 ページ構成の公式サイトを公開 (PM-961)
+- Next.js 15 + Tailwind + framer-motion で構築、GitHub Actions で自動デプロイ
+- 日本語ファースト、ダークモード default、Hero `Claude Code を、墨でしたためる。`
+
+### 🧹 汎用 Claude Code クライアント化
+
+- claude-code-company 固有要素を完全撤去 (PM-959 / DEC-050)。「日本語ファースト + おしゃれな汎用 Claude Code クライアント」として再定義
+- `cwd` scope を slash / skills / memory_tree から完全廃止し、Global / Project の 2 スコープに簡素化 (PM-960 / DEC-051)。デスクトップ IDE では process cwd はユーザー意図と無関係かつ、`~/` に walk して global コマンドが cwd ラベルに誤分類される regression を引き起こしていた
+
+### 🔄 Transparent Migration（v1.3.x からアップグレード時に自動引継ぎ）
+
+- **API Key**: OS keyring の service 名 `ccmux-ide` → `sumi`。旧 service に保存されていた鍵は起動時に自動で新 service へコピー + 旧削除 (PM-963 / DEC-054)
+- **Project 一覧**: localStorage `ccmux-project-registry` → `sumi-project-registry`。zustand persist の初回 rehydrate でも空 state にならないよう、safeStorage.getItem を override して transparent 移行
+- **UI 設定**（テーマ / アクセント / 壁紙 / フォントサイズ）: localStorage `ccmux-ide-gui:settings` → `sumi:settings`
+
+### ✨ UX 改善
+
+- 起動時に **ウィンドウを最大化** (PM-958)
+- エディタ overlay 強度を terminal と同じ `rgba(0, 0, 0, 0.55)` に揃え、壁紙の視認性向上。`backdrop-filter: blur` は除去して壁紙の質感を保つ (PM-956 hotfix5)
+- **1 pane エディタの高さが 0px に潰れる regression を修正** (PM-957)。Shell.tsx の viewMode container を `block` → `flex flex-col` に統一、SplitView 1 pane 分岐も `flex-1` → `h-full` で親 context 非依存化
+- ブランド表示の重複を解消 (PM-964): Sidebar の `Sumi` ラベルと TitleBar の Sparkles アイコン、ProjectRail の Sparkles 装飾を削除。`Sumi` 表記は OS ウィンドウタイトル + アプリ TitleBar の 2 箇所に正規化
+- **エディタタブ左クリックで切替できない regression を修正** (PM-964)。旧版は `DropdownMenuTrigger asChild` で tab div を包んでいたため全クリックが menu 起動を奪っていた。DropdownMenu を削除して純粋な `<div role="tab">` に戻す。閉じる導線は X ボタン + 中クリック（onAuxClick）で維持
+- 1 pane チャットヘッダを固定 `Sumi` → `activeProject.title` 動的表示に (PM-965)
+
+### ⚠️ Breaking changes
+
+- **Auto-update 切断**: bundle identifier 変更のため v1.3.x からの auto-update は機能しない。v1.3.x ユーザーは Releases から Sumi バイナリを **手動ダウンロード** してインストールする必要あり
+- **Windows install path 変更**: `%LOCALAPPDATA%\ccmux-ide\` → `\Sumi\`（旧版共存可能、手動アンインストールを推奨）
+- **`~/.ccmux-ide-gui/` config dir は引き継がれない** — 初回起動は clean state。ただし localStorage + keyring は transparent migration で引継ぎ
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed. Rust modules (`image_paste`, `memory_tree`, `worktree`, `config`, `search_fts`, `claude_monitor`, `slash_palette`) are derived from ccmux.
+
 ## [v1.3.1] - 2026-04-23
 
 ### Added
