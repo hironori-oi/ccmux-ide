@@ -138,22 +138,16 @@ export function FileEditor({ openFileId }: FileEditorProps) {
   return (
     <Suspense fallback={<EditorSkeleton />}>
       {/*
-       * PM-956 hotfix (v1.3.2): PM-870 の html::before (背景画像) が
-       * `z-index: -10` で body 全体を覆うが、Monaco Editor の内部 DOM は
-       * transparent 背景が多く、html::before の絵が editor pane の
-       * 中まで前景化してしまい text が読めない症状が継続。
-       *
-       * 対策:
-       *   - `isolate` (CSS `isolation: isolate`) で stacking context を
-       *     切断し、html::before が editor 内部に侵入するのを遮断
-       *   - `bg-background` で完全 opaque 背景 (editor は可読性最優先で
-       *     壁紙透過効果なし)
-       *   - `relative` で z-index 基準を明示
-       *
-       * Terminal / Chat は薄い半透明で壁紙が見える方が体感良いが、
-       * コード編集は text 視認性 100% 優先。
+       * PM-956 hotfix3 (v1.3.2): isolate / bg-background(/95) では
+       * html::before (fixed, z-index: -10) が Monaco pane 内まで
+       * 前景化する症状を解消できなかったため、`data-ccmux-editor-root`
+       * 属性を付けて globals.css で Monaco 系 DOM を強制 opaque 化する
+       * 方式に変更。editor は可読性 100% 優先、壁紙透過効果なし。
        */}
-      <div className="relative isolate h-full w-full bg-background">
+      <div
+        data-ccmux-editor-root
+        className="relative h-full w-full"
+      >
       <SafeMonacoEditor
         height="100%"
         defaultLanguage={file.language}

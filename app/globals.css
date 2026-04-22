@@ -149,4 +149,25 @@
     opacity: var(--ccmux-bg-overlay);
     pointer-events: none;
   }
+
+  /*
+   * PM-956 hotfix3 (v1.3.2): Monaco Editor の内部 DOM は多層で透過 layer を
+   * 持ち、PM-870 の html::before (position: fixed, z-index: -10) の背景画像が
+   * editor pane 内まで前景化する症状が isolate / bg-background/95 / bg-background
+   * のいずれでも解消しなかった (fixed は親 stacking context を無視)。
+   *
+   * 最終対策として editor 系 root に `data-ccmux-editor-root` 属性を付け、
+   * その配下の Monaco DOM を強制的に opaque 背景で塗る。Terminal / Chat と違い
+   * Editor は可読性 100% 優先のため、壁紙透過効果は完全に諦める。
+   */
+  [data-ccmux-editor-root] {
+    background-color: hsl(var(--background));
+  }
+  [data-ccmux-editor-root] .monaco-editor,
+  [data-ccmux-editor-root] .monaco-editor .overflow-guard,
+  [data-ccmux-editor-root] .monaco-editor .monaco-scrollable-element,
+  [data-ccmux-editor-root] .monaco-editor-background,
+  [data-ccmux-editor-root] .margin {
+    background-color: hsl(var(--background)) !important;
+  }
 }
