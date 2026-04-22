@@ -514,6 +514,58 @@ export interface SkillDef {
   dirPath: string;
 }
 
+/**
+ * PRJ-012 v1.3 / PM-954: Claude Code plugin 1 件（`list_plugins` 戻り値の要素、
+ * Rust `commands::plugins::PluginDef` と 1:1）。
+ *
+ * Claude Code の公式 plugin 機能（2026-01 公開）に対応。`~/.claude/plugins/`
+ * 配下にインストールされた plugin（`<name>@<marketplace>` 単位）を列挙する。
+ * Plugin は **slash / skill / agent / MCP / hooks をバンドルした上位概念** で、
+ * `.claude-plugin/plugin.json` に metadata を持つ。
+ *
+ * - Agent SDK は `SdkPluginConfig` + `reloadPlugins()` で plugin を first-class
+ *   support するため、実行経路は sidecar 側に委譲する（Phase 1 では UI 表示のみ）
+ * - `enabled` は `~/.claude/settings.json` の `enabledPlugins[id]` に由来
+ * - 内部 commands / skills / agents の件数を返すので、Palette では "N commands,
+ *   M skills" のような概況を表示できる
+ */
+export interface PluginDef {
+  /** plugin ID (`<name>@<marketplace>` 形式、例: `vercel@claude-plugins-official`) */
+  id: string;
+  /** plugin 名（`plugin.json` の name、例: `vercel`） */
+  name: string;
+  /** marketplace 名（ID の `@` 以降、local の場合は `"local"`） */
+  marketplace: string;
+  /** version 文字列（例: `0.40.0` / `unknown`） */
+  version: string;
+  /** 1 行要約（plugin.json の description、無ければ空文字） */
+  description: string;
+  /** author 名（plugin.json の author.name） */
+  author: string | null;
+  /** repository URL（plugin.json の repository） */
+  repository: string | null;
+  /** license（plugin.json の license、例: `Apache-2.0`） */
+  license: string | null;
+  /** keywords 配列（plugin.json の keywords、無ければ空配列） */
+  keywords: string[];
+  /** `~/.claude/settings.json` の `enabledPlugins[id]`。未指定は true */
+  enabled: boolean;
+  /** plugin 本体ディレクトリの絶対パス */
+  installPath: string;
+  /** `.claude-plugin/plugin.json` の絶対パス（Monaco preview 用） */
+  manifestPath: string;
+  /** plugin 内部の commands 配下 .md 件数 */
+  commandCount: number;
+  /** plugin 内部の skills サブディレクトリ内 SKILL.md 件数 */
+  skillCount: number;
+  /** plugin 内部の agents 配下 .md 件数 */
+  agentCount: number;
+  /** `.mcp.json` を持つか */
+  hasMcp: boolean;
+  /** `hooks/hooks.json` を持つか */
+  hasHooks: boolean;
+}
+
 // v3.5.3 (2026-04-20): Status pane / StatusFile interface は UI 層撤去と同時に削除（PM-770）。
 // Rust side の `StatusFile` struct / `list_status_candidates` / `read_status_file`
 // command は src-tauri に残置（frontend からは未呼出、将来再導入時の参照用）。

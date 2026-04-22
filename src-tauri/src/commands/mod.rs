@@ -55,3 +55,12 @@ pub mod preview;
 // 表示のみ、skill 実行は Phase 2 送り）。Agent SDK には skill 機能が native 存在
 // するため、本 module は UI 可視化の並行実装に徹する。
 pub mod skills;
+
+// PRJ-012 v1.3 / PM-954 (2026-04-20): Claude Code plugin 機能の discovery。
+// `~/.claude/plugins/installed_plugins.json` を index に user-level plugin を
+// 列挙し、各 plugin 内の commands / skills / agents / MCP / hooks 件数を count
+// して返す（Phase 1 = list 表示のみ）。Agent SDK は `SdkPluginConfig` +
+// `reloadPlugins()` で plugin を first-class support するため、本 module は
+// PM-953 skills.rs と同じく UI 可視化の並行実装に徹する。Phase 2 以降で
+// install / enable / disable toggle UI を追加。
+pub mod plugins;

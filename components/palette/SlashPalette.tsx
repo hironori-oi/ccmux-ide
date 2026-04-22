@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Command as CommandIcon, Sparkles, Wrench } from "lucide-react";
+import { Command as CommandIcon, Sparkles, Wrench, Package } from "lucide-react";
 
 import {
   Command,
@@ -25,7 +25,7 @@ import {
   type BuiltinSlash,
 } from "@/lib/builtin-slash";
 import { cn } from "@/lib/utils";
-import type { SkillDef, SlashCmd } from "@/lib/types";
+import type { PluginDef, SkillDef, SlashCmd } from "@/lib/types";
 
 /**
  * PM-201 / PM-202: Slash command palette（`/` 検出時に InputArea の上に出す popup）。
@@ -79,8 +79,9 @@ export interface SlashPaletteProps {
  *
  * v3.4.9: `"builtin"` を追加（組込 slash、`BuiltinSlash` を custom と統一表示するため）。
  * v1.3 PM-953: `"skill"` を追加（Claude Code skill の section、選択で SKILL.md preview）。
+ * v1.3 PM-954: `"plugin"` を追加（Claude Code plugin の section、選択で plugin.json preview）。
  */
-type SlashSource = SlashCmd["source"] | "builtin" | "skill";
+type SlashSource = SlashCmd["source"] | "builtin" | "skill" | "plugin";
 
 const SOURCE_META: Record<
   SlashSource,
@@ -97,6 +98,12 @@ const SOURCE_META: Record<
     heading: "スキル (Claude Code skills)",
     className:
       "border-amber-400/40 bg-amber-500/10 text-amber-600 dark:text-amber-300",
+  },
+  plugin: {
+    badge: "plugin",
+    heading: "プラグイン (Claude Code plugins)",
+    className:
+      "border-sky-400/40 bg-sky-500/10 text-sky-600 dark:text-sky-300",
   },
   cwd: {
     badge: "cwd",
@@ -118,10 +125,11 @@ const SOURCE_META: Record<
   },
 };
 
-/** スコープ表示順（builtin → skill → cwd → project → global）。 */
+/** スコープ表示順（builtin → skill → plugin → cwd → project → global）。 */
 const SCOPE_ORDER: SlashSource[] = [
   "builtin",
   "skill",
+  "plugin",
   "cwd",
   "project",
   "global",
@@ -161,16 +169,47 @@ interface SkillItem {
 }
 
 /**
- * 表示用の union item（builtin / skill / custom slash）。内部で filter / group に使う。
+ * PM-954: plugin アイテム（PluginDef を Palette 内部表現に包む）。
+ *
+ * plugin は `<name>@<marketplace>` の ID を持ち、内部に slash / skill / agent /
+ * MCP / hooks をバンドルする。Phase 1 では選択時に plugin.json を Monaco で
+ * preview し、toast で件数概況を表示するだけ。Phase 2 で enable/disable toggle
+ * や内部 commands のドリルダウン UI を予定。
+ */
+interface PluginItem {
+  /** plugin ID（`<name>@<marketplace>`、表示は `name`）*/
+  id: string;
+  /** plugin 名（description と区別して badge 脇に表示） */
+  name: string;
+  /** 1 行要約 */
+  description: string;
+  /** manifest の絶対パス（click で Monaco 表示） */
+  manifestPath: string;
+  /** 有効無効（disabled は行を dimm する） */
+  enabled: boolean;
+  /** 内部件数（commands / skills / agents / mcp / hooks） */
+  commandCount: number;
+  skillCount: number;
+  agentCount: number;
+  hasMcp: boolean;
+  hasHooks: boolean;
+  source: "plugin";
+}
+
+/**
+ * 表示用の union item（builtin / skill / plugin / custom slash）。
+ * 内部で filter / group に使う。
  */
 type PaletteItem =
   | (SlashCmd & { kind: "custom" })
   | (BuiltinSlashItem & { kind: "builtin" })
-  | (SkillItem & { kind: "skill" });
+  | (SkillItem & { kind: "skill" })
+  | (PluginItem & { kind: "plugin" });
 
 interface GroupedItems {
   builtin: PaletteItem[];
   skill: PaletteItem[];
+  plugin: PaletteItem[];
   cwd: PaletteItem[];
   project: PaletteItem[];
   global: PaletteItem[];
@@ -189,6 +228,7 @@ function groupAndLimit(
   const out: GroupedItems = {
     builtin: [],
     skill: [],
+    plugin: [],
     cwd: [],
     project: [],
     global: [],
@@ -199,6 +239,7 @@ function groupAndLimit(
     const bucket = items.filter((c) => {
       if (c.kind === "builtin") return scope === "builtin";
       if (c.kind === "skill") return scope === "skill";
+      if (c.kind === "plugin") return scope === "plugin";
       return c.source === scope;
     });
     const taken = bucket.slice(0, remaining);
@@ -212,16 +253,20 @@ function groupAndLimit(
 
 /**
  * query にマッチするかの軽量判定（case-insensitive substring）。
- * builtin / skill / custom すべて name / description で hit 判定。
+ * builtin / skill / plugin / custom すべて name / description で hit 判定。
+ * plugin は marketplace や keywords でも引っかかると便利なので id も拾う。
  */
 function matchesQuery(item: PaletteItem, q: string): boolean {
   if (!q) return true;
   const lower = q.toLowerCase();
   const name = item.name.replace(/^\//, "").toLowerCase();
+  const extra =
+    item.kind === "plugin" ? item.id.toLowerCase() : "";
   return (
     name.includes(lower) ||
     item.description.toLowerCase().includes(lower) ||
-    item.name.toLowerCase().includes(lower)
+    item.name.toLowerCase().includes(lower) ||
+    (extra.length > 0 && extra.includes(lower))
   );
 }
 
@@ -236,6 +281,8 @@ export function SlashPalette({
   const [builtinCmds, setBuiltinCmds] = useState<BuiltinSlashItem[]>([]);
   // PM-953: Claude Code skills（~/.claude/skills/ + project .claude/skills/）
   const [skills, setSkills] = useState<SkillItem[]>([]);
+  // PM-954: Claude Code plugins（~/.claude/plugins/installed_plugins.json 経由）
+  const [plugins, setPlugins] = useState<PluginItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -259,6 +306,9 @@ export function SlashPalette({
   const builtinLoadedRef = useRef(false);
   // skill も slash と同じく activeProjectPath に依存するので cache key を持つ
   const lastSkillFetchKeyRef = useRef<string | null>(null);
+  // PM-954: plugin cache key（project 非依存だが、将来 project-level plugin を
+  // 扱う余地を残すため skill と同型で管理する）
+  const lastPluginFetchKeyRef = useRef<string | null>(null);
 
   // builtin は open 初回のみ取得（project に依存しない固定 7 件 + frontend 追加分）
   useEffect(() => {
@@ -388,20 +438,69 @@ export function SlashPalette({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeProjectPath]);
 
-  // builtin + skill + custom を PaletteItem に正規化し、query filter → group → limit
+  // PM-954: Claude Code plugins を取得。`~/.claude/plugins/installed_plugins.json`
+  // は project 非依存だが、将来 project-level plugin をサポートする余地のため
+  // skill と同じパターンで invalidate する。失敗時は silent（UI 側で空扱い）。
+  useEffect(() => {
+    if (!open) return;
+
+    const key = activeProjectPath ?? "__no_project__";
+    if (plugins.length > 0 && lastPluginFetchKeyRef.current === key) {
+      return;
+    }
+
+    let cancelled = false;
+    callTauri<PluginDef[]>("list_plugins", {
+      projectPath: activeProjectPath,
+    })
+      .then((list) => {
+        if (cancelled) return;
+        const normalized: PluginItem[] = list.map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          manifestPath: p.manifestPath,
+          enabled: p.enabled,
+          commandCount: p.commandCount,
+          skillCount: p.skillCount,
+          agentCount: p.agentCount,
+          hasMcp: p.hasMcp,
+          hasHooks: p.hasHooks,
+          source: "plugin" as const,
+        }));
+        setPlugins(normalized);
+        lastPluginFetchKeyRef.current = key;
+      })
+      .catch(() => {
+        // plugin 取得失敗は silent（slash / skill / builtin は継続表示）
+        if (cancelled) return;
+        setPlugins([]);
+        lastPluginFetchKeyRef.current = key;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // plugins を deps に含めると無限ループ、意図的に除外
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, activeProjectPath]);
+
+  // builtin + skill + plugin + custom を PaletteItem に正規化し、query filter → group → limit
   const { grouped, overflow } = useMemo(() => {
     const merged: PaletteItem[] = [
       ...builtinCmds.map((b) => ({ ...b, kind: "builtin" as const })),
       ...skills.map((s) => ({ ...s, kind: "skill" as const })),
+      ...plugins.map((p) => ({ ...p, kind: "plugin" as const })),
       ...customCmds.map((c) => ({ ...c, kind: "custom" as const })),
     ];
     const filtered = merged.filter((c) => matchesQuery(c, query));
     return groupAndLimit(filtered, PALETTE_LIMIT);
-  }, [builtinCmds, skills, customCmds, query]);
+  }, [builtinCmds, skills, plugins, customCmds, query]);
 
   const totalShown =
     grouped.builtin.length +
     grouped.skill.length +
+    grouped.plugin.length +
     grouped.cwd.length +
     grouped.project.length +
     grouped.global.length;
@@ -468,6 +567,44 @@ export function SlashPalette({
     }
   }
 
+  /**
+   * PM-954 (Phase 1): plugin 選択時のハンドラ。
+   *
+   * MVP では **実行しない**。Claude Agent SDK は `SdkPluginConfig` と
+   * `reloadPlugins()` により plugin を first-class support するため、
+   * 実行経路は sidecar 起動時の自動 load に委譲する。UI は:
+   *  - plugin.json を Monaco で開いて内容を確認できるようにする
+   *  - toast で enabled 状態 + 内部件数（commands / skills / agents / MCP /
+   *    hooks の概況）を案内
+   *
+   * Phase 2（v1.4+）では enable/disable toggle、install/uninstall UI、plugin
+   * 内部 commands のドリルダウン表示を追加する。
+   */
+  function handlePluginClick(item: PluginItem) {
+    try {
+      void openFileInEditor(item.manifestPath);
+      const parts: string[] = [];
+      if (item.commandCount > 0) parts.push(`${item.commandCount} commands`);
+      if (item.skillCount > 0) parts.push(`${item.skillCount} skills`);
+      if (item.agentCount > 0) parts.push(`${item.agentCount} agents`);
+      if (item.hasMcp) parts.push("MCP");
+      if (item.hasHooks) parts.push("hooks");
+      const detail = parts.length > 0 ? parts.join(", ") : "metadata only";
+      const state = item.enabled ? "有効" : "無効";
+      toast.message(
+        `プラグイン「${item.name}」(${state}) の plugin.json を開きました [${detail}]`
+      );
+    } catch (e) {
+      toast.error(
+        `プラグイン manifest を開けませんでした: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+    } finally {
+      onClose();
+    }
+  }
+
   return (
     <Popover
       open={open}
@@ -511,7 +648,8 @@ export function SlashPalette({
               !error &&
               (customCmds.length > 0 ||
                 builtinCmds.length > 0 ||
-                skills.length > 0) && (
+                skills.length > 0 ||
+                plugins.length > 0) && (
                 <div className="px-3 py-6 text-center text-xs text-muted-foreground">
                   一致するコマンドはありません
                 </div>
@@ -521,9 +659,10 @@ export function SlashPalette({
               !error &&
               customCmds.length === 0 &&
               builtinCmds.length === 0 &&
-              skills.length === 0 && (
+              skills.length === 0 &&
+              plugins.length === 0 && (
                 <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-                  コマンド / スキルが見つかりません（~/.claude/commands/ に .md、または ~/.claude/skills/&lt;name&gt;/SKILL.md を配置してください）
+                  コマンド / スキル / プラグインが見つかりません（~/.claude/commands/ に .md、~/.claude/skills/&lt;name&gt;/SKILL.md、または ~/.claude/plugins/ に installed_plugins.json を配置してください）
                 </div>
               )}
 
@@ -549,6 +688,8 @@ export function SlashPalette({
                             handleBuiltinClick(item);
                           } else if (item.kind === "skill") {
                             handleSkillClick(item);
+                          } else if (item.kind === "plugin") {
+                            handlePluginClick(item);
                           } else {
                             onSelect(item);
                             onClose();
@@ -588,42 +729,78 @@ function PaletteRow({
   const simple = item.name.replace(/^\//, "");
   const isBuiltin = item.kind === "builtin";
   const isSkill = item.kind === "skill";
-  // source badge: skill kind は scope 非表示で固定 "skill" を使う
+  const isPlugin = item.kind === "plugin";
+  // source badge: skill / plugin は scope 非表示で固定 label を使う
   const source: SlashSource = isBuiltin
     ? "builtin"
     : isSkill
     ? "skill"
+    : isPlugin
+    ? "plugin"
     : item.source;
   const meta = SOURCE_META[source];
 
-  // cmdk の内部 fuzzy filter では `value` を対象にする。name と description の
-  // 両方を結合して詰めることで description 含むキーワードでも hit する。
-  const cmdkValue = `${item.name} ${simple} ${item.description}`;
+  // PM-954: plugin の場合は id（marketplace 含む）も cmdk value に入れて fuzzy
+  // search を効かせる。それ以外は従来通り name + description。
+  const cmdkValue = isPlugin
+    ? `${item.id} ${item.name} ${item.description}`
+    : `${item.name} ${simple} ${item.description}`;
 
-  // argument-hint は custom のみ（builtin / skill は引数なし）
+  // argument-hint は custom のみ（builtin / skill / plugin は引数なし）
   const argumentHint =
     item.kind === "custom" ? item.argumentHint ?? null : null;
 
   // PM-953: skill は `/` プレフィックス無しで表示する（slash と区別するため）
-  const displayName = isSkill ? item.name : item.name;
-  // skill 用 Sparkles アイコン、builtin は Wrench、slash は Command
-  const Icon = isBuiltin ? Wrench : isSkill ? Sparkles : CommandIcon;
+  // PM-954: plugin も `/` プレフィックス無し（marketplace 付き ID ではなく短い name を表示）
+  const displayName = item.name;
 
-  // skill は orange 系ではなく amber 系 accent にする（badge と統一感）
+  // PM-954: plugin の description が空の場合、内部件数や keywords で補助する
+  let descriptionLine = item.description;
+  if (isPlugin && !descriptionLine) {
+    const parts: string[] = [];
+    if (item.commandCount > 0) parts.push(`${item.commandCount} commands`);
+    if (item.skillCount > 0) parts.push(`${item.skillCount} skills`);
+    if (item.agentCount > 0) parts.push(`${item.agentCount} agents`);
+    if (item.hasMcp) parts.push("MCP");
+    if (item.hasHooks) parts.push("hooks");
+    descriptionLine = parts.length > 0 ? parts.join(" · ") : "";
+  }
+
+  // icon: builtin=Wrench / skill=Sparkles / plugin=Package / slash=Command
+  const Icon = isBuiltin
+    ? Wrench
+    : isSkill
+    ? Sparkles
+    : isPlugin
+    ? Package
+    : CommandIcon;
+
+  // accent color: plugin は sky 系（badge と統一）
   const iconColorClass = isBuiltin
     ? "text-orange-600 dark:text-orange-400"
     : isSkill
     ? "text-amber-600 dark:text-amber-400"
+    : isPlugin
+    ? "text-sky-600 dark:text-sky-400"
     : "text-orange-500";
   const nameColorClass = isSkill
     ? "text-amber-600 dark:text-amber-400"
+    : isPlugin
+    ? "text-sky-600 dark:text-sky-400"
     : "text-orange-500";
+
+  // PM-954: disabled plugin は UI 上で dimm する（settings.json で enabledPlugins:
+  // false に設定済。選択は可能、Agent SDK は session 起動時に load しない）。
+  const disabledDimm = isPlugin && !item.enabled;
 
   return (
     <CommandItem
       value={cmdkValue}
       onSelect={onSelect}
-      className="items-start gap-2 py-2"
+      className={cn(
+        "items-start gap-2 py-2",
+        disabledDimm && "opacity-60"
+      )}
     >
       <Icon
         className={cn("mt-0.5 h-4 w-4 shrink-0", iconColorClass)}
@@ -641,9 +818,14 @@ function PaletteRow({
               {argumentHint}
             </span>
           )}
+          {isPlugin && !item.enabled && (
+            <span className="shrink-0 rounded border border-muted-foreground/30 px-1 py-0 text-[9px] uppercase text-muted-foreground">
+              disabled
+            </span>
+          )}
         </div>
         <span className="line-clamp-1 text-xs text-muted-foreground">
-          {item.description || "（説明なし）"}
+          {descriptionLine || "（説明なし）"}
         </span>
       </div>
       <span
