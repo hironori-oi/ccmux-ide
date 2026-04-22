@@ -1,7 +1,7 @@
 [package]
-name = "ccmux-ide"
+name = "sumi"
 version = "0.1.0"
-description = "Japanese-first Claude Code desktop client"
+description = "Sumi — Japanese-first Claude Code desktop client"
 edition = "2021"
 license = "MIT"
 authors = ["hironori-oi <ai-lab@improver.jp>"]
@@ -9,7 +9,7 @@ repository = "https://github.com/hironori-oi/ccmux-ide"
 rust-version = "1.77"
 
 [lib]
-name = "ccmux_ide_lib"
+name = "sumi_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

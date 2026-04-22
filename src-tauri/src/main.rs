@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    ccmux_ide_lib::run()
+    sumi_lib::run()
 }

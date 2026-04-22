@@ -1,4 +1,4 @@
-# Deploy the ccmux-ide GitHub Pages site (under /site) on every push to main
+# Deploy the Sumi GitHub Pages site (under /site) on every push to main
 # that touches site/**, and on manual dispatch.
 #
 # One-time repo setup (owner action):

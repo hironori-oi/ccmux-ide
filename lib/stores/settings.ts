@@ -18,11 +18,14 @@ import {
  * Week 6 Chunk 3 / PM-210: アプリ設定の永続化ストア。
  *
  * ## 永続化戦略
- * 本来は `@tauri-apps/plugin-store` で `~/.ccmux-ide-gui/settings.json` に保存する
+ * 本来は `@tauri-apps/plugin-store` で `~/.sumi/settings.json` に保存する
  * 方針だが、現時点の `package.json` に plugin-store が未導入のため、暫定で
- * Zustand の `persist` + `localStorage` を使い、キー `ccmux-ide-gui:settings`
+ * Zustand の `persist` + `localStorage` を使い、キー `sumi:settings`
  * で保存する。M3 PM-250/251 で plugin-store に移行する予定（同キー JSON を
  * マイグレーションでコピー可能）。
+ *
+ * DEC-054: 旧 key `ccmux-ide-gui:settings` からの transparent migration を
+ * safeStorage の getItem に実装済。
  *
  * ## 責務
  * - appearance（テーマ / アクセント / フォントサイズ）の保持
@@ -47,9 +50,17 @@ interface SettingsState {
   resetSettings: () => void;
 }
 
+/** DEC-054: 旧 settings key（`ccmux-ide-gui:settings`）。transparent migration で読む。 */
+const LEGACY_SETTINGS_KEY = "ccmux-ide-gui:settings";
+/** 新 settings key。 */
+const SETTINGS_STORAGE_KEY = "sumi:settings";
+
 /**
  * localStorage が利用できない環境（SSR / static export の build 時など）では
  * no-op storage を返し、Hydration Mismatch を避ける。
+ *
+ * DEC-054: 旧 `ccmux-ide-gui:settings` からの 1 回限り transparent migration を
+ * getItem に実装。初回 rehydrate でもマイグレーション後の設定が読まれる。
  */
 const safeStorage = createJSONStorage(() => {
   if (typeof window === "undefined") {
@@ -59,7 +70,35 @@ const safeStorage = createJSONStorage(() => {
       removeItem: () => {},
     };
   }
-  return window.localStorage;
+  return {
+    getItem: (name: string): string | null => {
+      const value = window.localStorage.getItem(name);
+      if (value !== null) return value;
+      if (name === SETTINGS_STORAGE_KEY) {
+        const legacy = window.localStorage.getItem(LEGACY_SETTINGS_KEY);
+        if (legacy !== null) {
+          try {
+            window.localStorage.setItem(name, legacy);
+            window.localStorage.removeItem(LEGACY_SETTINGS_KEY);
+            // eslint-disable-next-line no-console
+            console.info(
+              "[sumi] migrated settings: ccmux-ide-gui:settings -> sumi:settings"
+            );
+          } catch {
+            // quota / SecurityError は無視
+          }
+          return legacy;
+        }
+      }
+      return null;
+    },
+    setItem: (name: string, value: string) => {
+      window.localStorage.setItem(name, value);
+    },
+    removeItem: (name: string) => {
+      window.localStorage.removeItem(name);
+    },
+  };
 });
 
 export const useSettingsStore = create<SettingsState>()(
@@ -145,7 +184,7 @@ export const useSettingsStore = create<SettingsState>()(
       resetSettings: () => set({ settings: DEFAULT_APP_SETTINGS }),
     }),
     {
-      name: "ccmux-ide-gui:settings",
+      name: SETTINGS_STORAGE_KEY,
       storage: safeStorage,
       version: 3,
       // v1 → v2: Week 7 Chunk 2 / PM-251 で themePreset を追加（デフォルト orange）

@@ -11,9 +11,10 @@
  *   だけで zustand store や next-themes には依存しない（ユニットで単体利用可）。
  *
  * ## 初期化（layout.tsx / theme-provider.tsx を触らない代替戦略）
- * `readPersistedAppearance()` で `localStorage["ccmux-ide-gui:settings"]` から
+ * `readPersistedAppearance()` で `localStorage["sumi:settings"]` から
  * 保存済み設定を同期読み出し、AppearanceSettings の `useEffect` 初回と
  * onChange の両方で `applyAccent` / `applyThemePreset` を呼ぶ構成。
+ * DEC-054: 旧 `ccmux-ide-gui:settings` から fallback 読みして transparent migrate する。
  * settings ページに入った瞬間に DOM が同期されるため、別ページから戻った
  * 場合も `next-themes` の mode 変更を受けて再適用する（AppearanceSettings
  * 側で `resolvedTheme` を dep に入れる）。
@@ -98,11 +99,14 @@ export function applyThemePreset(
 }
 
 /**
- * localStorage から zustand 永続化キー `ccmux-ide-gui:settings` を同期読み出し。
+ * localStorage から zustand 永続化キー `sumi:settings` を同期読み出し。
  *
  * 失敗時（未保存 / 破損 / SSR）は `null` を返す。AppearanceSettings の
  * useEffect 初回マウント時に呼び、見つかれば applyThemePreset + applyAccent を
  * 即時実行する。
+ *
+ * DEC-054: 新 key 未存在時は旧 `ccmux-ide-gui:settings` を fallback で読む
+ * （transparent migration は settings store 側の safeStorage が処理する）。
  *
  * Round E2: 背景画像（backgroundImage）も返す。旧バージョン（v2 以前）で
  * 未設定の場合は `DEFAULT_BACKGROUND_IMAGE` を返す。
@@ -116,7 +120,9 @@ export function readPersistedAppearance():
   | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.localStorage.getItem("ccmux-ide-gui:settings");
+    const raw =
+      window.localStorage.getItem("sumi:settings") ??
+      window.localStorage.getItem("ccmux-ide-gui:settings");
     if (!raw) return null;
     const parsed = JSON.parse(raw) as {
       state?: { settings?: AppSettings };

@@ -32,8 +32,11 @@ import { callTauri } from "@/lib/tauri-api";
  * ```
  */
 
-/** persist 用 localStorage key（新規）。 */
-export const PROJECT_REGISTRY_STORAGE_KEY = "ccmux-project-registry";
+/** persist 用 localStorage key（DEC-054 で `ccmux-project-registry` から改名）。 */
+export const PROJECT_REGISTRY_STORAGE_KEY = "sumi-project-registry";
+
+/** DEC-054: 旧 key（`ccmux-project-registry`）。migration 時に読み取って移行し、移行後削除する。 */
+const LEGACY_PROJECT_REGISTRY_KEY = "ccmux-project-registry";
 
 /**
  * PRJ-012 v3.3 / Chunk B (DEC-033): sidecar の生存状態。
@@ -204,6 +207,11 @@ export function findProjectById(
 /**
  * SSR / static export ビルド時に `localStorage` が無いケースを guard した
  * JSONStorage。
+ *
+ * DEC-054: `ccmux-project-registry` → `sumi-project-registry` への 1 回限り
+ * transparent migration を getItem にインライン実装。zustand persist の初回
+ * rehydrate でもマイグレーション後のデータが読まれるので、state が空に
+ * ならない。
  */
 const safeStorage = createJSONStorage(() => {
   if (typeof window === "undefined") {
@@ -213,7 +221,36 @@ const safeStorage = createJSONStorage(() => {
       removeItem: () => {},
     };
   }
-  return window.localStorage;
+  return {
+    getItem: (name: string): string | null => {
+      const value = window.localStorage.getItem(name);
+      if (value !== null) return value;
+      // DEC-054: 新 registry key 空 + 旧 key 存在の時のみ transparent に migrate
+      if (name === PROJECT_REGISTRY_STORAGE_KEY) {
+        const legacy = window.localStorage.getItem(LEGACY_PROJECT_REGISTRY_KEY);
+        if (legacy !== null) {
+          try {
+            window.localStorage.setItem(name, legacy);
+            window.localStorage.removeItem(LEGACY_PROJECT_REGISTRY_KEY);
+            // eslint-disable-next-line no-console
+            console.info(
+              "[sumi] migrated project registry: ccmux-project-registry -> sumi-project-registry"
+            );
+          } catch {
+            // quota / SecurityError は無視（fallback で legacy を返すのみ）
+          }
+          return legacy;
+        }
+      }
+      return null;
+    },
+    setItem: (name: string, value: string) => {
+      window.localStorage.setItem(name, value);
+    },
+    removeItem: (name: string) => {
+      window.localStorage.removeItem(name);
+    },
+  };
 });
 
 /**
@@ -338,7 +375,8 @@ async function buildRegisteredProject(
   };
 }
 
-/** 旧 storage key を削除する（起動時 1 回）。 */
+/** 旧 storage key（v3.1 以前）を削除する（起動時 1 回）。
+ *  DEC-054 の registry migration は safeStorage の getItem が transparent に処理する。 */
 function purgeLegacyStorage(): void {
   if (typeof window === "undefined") return;
   for (const key of LEGACY_STORAGE_KEYS) {

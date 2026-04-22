@@ -1,7 +1,7 @@
 {
-  "name": "ccmux-ide",
+  "name": "sumi",
   "version": "0.1.0",
-  "description": "Japanese-first Claude Code desktop client (Tauri + Next.js)",
+  "description": "Sumi — Japanese-first Claude Code desktop client (Tauri + Next.js)",
   "license": "MIT",
   "private": true,
   "type": "module",

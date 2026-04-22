@@ -1,5 +1,5 @@
 # ============================================================================
-# ccmux-ide / Multi-platform Release Build (PM-282)
+# Sumi / Multi-platform Release Build (PM-282)
 # ----------------------------------------------------------------------------
 # 目的:
 #   v* タグが push されたタイミングで Windows (NSIS/MSI) / macOS (DMG x64 +
@@ -220,7 +220,7 @@ jobs:
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ccmux-ide-${{ matrix.platform.label }}
+          name: sumi-${{ matrix.platform.label }}
           path: ${{ matrix.platform.bundle_globs }}
           if-no-files-found: warn
           retention-days: 14
@@ -273,7 +273,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: artifacts
-          pattern: ccmux-ide-*
+          pattern: sumi-*
           merge-multiple: true
 
       - name: List downloaded artifacts

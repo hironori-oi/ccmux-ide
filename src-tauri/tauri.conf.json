@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ccmux-ide",
+  "productName": "Sumi",
   "version": "0.1.0",
-  "identifier": "jp.improver.ccmux-ide",
+  "identifier": "jp.improver.sumi",
   "build": {
     "frontendDist": "../out",
     "devUrl": "http://localhost:3000",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "ccmux-ide",
+        "title": "Sumi",
         "width": 1280,
         "height": 820,
         "minWidth": 900,
@@ -35,6 +35,7 @@
           "$APPLOCALDATA/**",
           "$APPDATA/ccmux-images/**",
           "$HOME/.claude/**",
+          "$HOME/.sumi/**",
           "$HOME/.ccmux-ide-gui/**",
           "$HOME/Pictures/**",
           "$HOME/Desktop/**",

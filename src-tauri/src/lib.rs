@@ -1,7 +1,7 @@
-//! ccmux-ide Tauri backend entrypoint.
+//! Sumi Tauri backend entrypoint.
 //!
-//! Derived from ccmux-ide (MIT Licensed). See `commands/*.rs` for the modules
-//! migrated from `C:\Users\hiron\Desktop\ccmux-ide\src\ide\`.
+//! Derived from ccmux by @Shin-sibainu (MIT Licensed). See `commands/*.rs` for
+//! the modules migrated from the upstream ccmux Rust TUI.
 
 mod commands;
 mod events;
