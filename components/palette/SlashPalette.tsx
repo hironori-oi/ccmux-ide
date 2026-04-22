@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Command as CommandIcon, Sparkles, Wrench, Package } from "lucide-react";
+import { Command as CommandIcon, Sparkles, Wrench, Package, Plug } from "lucide-react";
 
 import {
   Command,
@@ -25,7 +25,7 @@ import {
   type BuiltinSlash,
 } from "@/lib/builtin-slash";
 import { cn } from "@/lib/utils";
-import type { PluginDef, SkillDef, SlashCmd } from "@/lib/types";
+import type { McpServerDef, PluginDef, SkillDef, SlashCmd } from "@/lib/types";
 
 /**
  * PM-201 / PM-202: Slash command palette（`/` 検出時に InputArea の上に出す popup）。
@@ -80,8 +80,9 @@ export interface SlashPaletteProps {
  * v3.4.9: `"builtin"` を追加（組込 slash、`BuiltinSlash` を custom と統一表示するため）。
  * v1.3 PM-953: `"skill"` を追加（Claude Code skill の section、選択で SKILL.md preview）。
  * v1.3 PM-954: `"plugin"` を追加（Claude Code plugin の section、選択で plugin.json preview）。
+ * v1.4 PM-955: `"mcp"` を追加（Claude Code MCP server の section、選択で設定ファイル preview）。
  */
-type SlashSource = SlashCmd["source"] | "builtin" | "skill" | "plugin";
+type SlashSource = SlashCmd["source"] | "builtin" | "skill" | "plugin" | "mcp";
 
 const SOURCE_META: Record<
   SlashSource,
@@ -105,6 +106,12 @@ const SOURCE_META: Record<
     className:
       "border-sky-400/40 bg-sky-500/10 text-sky-600 dark:text-sky-300",
   },
+  mcp: {
+    badge: "mcp",
+    heading: "MCP サーバ (Model Context Protocol)",
+    className:
+      "border-emerald-400/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+  },
   cwd: {
     badge: "cwd",
     heading: "カレント (cwd)",
@@ -125,11 +132,24 @@ const SOURCE_META: Record<
   },
 };
 
-/** スコープ表示順（builtin → skill → plugin → cwd → project → global）。 */
+/**
+ * PM-955: MCP server の scope 表示ラベル（日本語）。description 合成で使う。
+ * McpServerDef.scope は Rust 側 5 値のいずれか。
+ */
+const MCP_SCOPE_LABEL: Record<McpServerDef["scope"], string> = {
+  global: "グローバル",
+  user: "ユーザー",
+  "user-project": "ユーザー(プロジェクト別)",
+  plugin: "プラグイン",
+  project: "プロジェクト",
+};
+
+/** スコープ表示順（builtin → skill → plugin → mcp → cwd → project → global）。 */
 const SCOPE_ORDER: SlashSource[] = [
   "builtin",
   "skill",
   "plugin",
+  "mcp",
   "cwd",
   "project",
   "global",
@@ -197,19 +217,45 @@ interface PluginItem {
 }
 
 /**
- * 表示用の union item（builtin / skill / plugin / custom slash）。
+ * PM-955: MCP server アイテム（McpServerDef を Palette 内部表現に包む）。
+ *
+ * MCP server は Claude Code が外部 tool に接続する仕組み。Phase 1 では選択時に
+ * 設定ファイル (configPath) を Monaco で preview し、toast で scope / transport /
+ * enabled 状態を表示する（実接続・tool 一覧の取得は Agent SDK の自動 load に
+ * 委譲）。Phase 2 で sidecar 経由 `query.mcpServerStatus()` の live 表示、
+ * Phase 3 で toggle UI / Add Server UI を追加予定。
+ */
+interface McpItem {
+  name: string;
+  /** UI 用の 1 行要約（transport + scope + plugin ID 等を合成） */
+  description: string;
+  /** scope / transport / 設定ファイル path（選択時 Monaco 対象） */
+  originalScope: McpServerDef["scope"];
+  transport: McpServerDef["transport"];
+  configPath: string;
+  url: string | null;
+  command: string | null;
+  pluginId: string | null;
+  enabled: boolean;
+  source: "mcp";
+}
+
+/**
+ * 表示用の union item（builtin / skill / plugin / mcp / custom slash）。
  * 内部で filter / group に使う。
  */
 type PaletteItem =
   | (SlashCmd & { kind: "custom" })
   | (BuiltinSlashItem & { kind: "builtin" })
   | (SkillItem & { kind: "skill" })
-  | (PluginItem & { kind: "plugin" });
+  | (PluginItem & { kind: "plugin" })
+  | (McpItem & { kind: "mcp" });
 
 interface GroupedItems {
   builtin: PaletteItem[];
   skill: PaletteItem[];
   plugin: PaletteItem[];
+  mcp: PaletteItem[];
   cwd: PaletteItem[];
   project: PaletteItem[];
   global: PaletteItem[];
@@ -229,6 +275,7 @@ function groupAndLimit(
     builtin: [],
     skill: [],
     plugin: [],
+    mcp: [],
     cwd: [],
     project: [],
     global: [],
@@ -240,6 +287,7 @@ function groupAndLimit(
       if (c.kind === "builtin") return scope === "builtin";
       if (c.kind === "skill") return scope === "skill";
       if (c.kind === "plugin") return scope === "plugin";
+      if (c.kind === "mcp") return scope === "mcp";
       return c.source === scope;
     });
     const taken = bucket.slice(0, remaining);
@@ -260,8 +308,13 @@ function matchesQuery(item: PaletteItem, q: string): boolean {
   if (!q) return true;
   const lower = q.toLowerCase();
   const name = item.name.replace(/^\//, "").toLowerCase();
-  const extra =
-    item.kind === "plugin" ? item.id.toLowerCase() : "";
+  let extra = "";
+  if (item.kind === "plugin") {
+    extra = item.id.toLowerCase();
+  } else if (item.kind === "mcp") {
+    // mcp は transport / scope / pluginId も fuzzy search で引っかかると便利
+    extra = `${item.transport} ${item.originalScope} ${item.pluginId ?? ""}`.toLowerCase();
+  }
   return (
     name.includes(lower) ||
     item.description.toLowerCase().includes(lower) ||
@@ -283,6 +336,8 @@ export function SlashPalette({
   const [skills, setSkills] = useState<SkillItem[]>([]);
   // PM-954: Claude Code plugins（~/.claude/plugins/installed_plugins.json 経由）
   const [plugins, setPlugins] = useState<PluginItem[]>([]);
+  // PM-955: Claude Code MCP servers（5 スコープ統合、Phase 1 = 表示のみ）
+  const [mcpServers, setMcpServers] = useState<McpItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -309,6 +364,9 @@ export function SlashPalette({
   // PM-954: plugin cache key（project 非依存だが、将来 project-level plugin を
   // 扱う余地を残すため skill と同型で管理する）
   const lastPluginFetchKeyRef = useRef<string | null>(null);
+  // PM-955: MCP server cache key（activeProjectPath 依存 — project-local .mcp.json
+  // と ~/.claude.json の projects[abs].mcpServers が project 別に変わるため）
+  const lastMcpFetchKeyRef = useRef<string | null>(null);
 
   // builtin は open 初回のみ取得（project に依存しない固定 7 件 + frontend 追加分）
   useEffect(() => {
@@ -485,22 +543,79 @@ export function SlashPalette({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeProjectPath]);
 
-  // builtin + skill + plugin + custom を PaletteItem に正規化し、query filter → group → limit
+  // PM-955: Claude Code MCP servers を取得。plugin と同じく、project 依存のため
+  // activeProjectPath ごとに invalidate する。失敗時は silent（UI 側で空扱い）。
+  useEffect(() => {
+    if (!open) return;
+
+    const key = activeProjectPath ?? "__no_project__";
+    if (mcpServers.length > 0 && lastMcpFetchKeyRef.current === key) {
+      return;
+    }
+
+    let cancelled = false;
+    callTauri<McpServerDef[]>("list_mcp_servers", {
+      projectPath: activeProjectPath,
+    })
+      .then((list) => {
+        if (cancelled) return;
+        const normalized: McpItem[] = list.map((m) => {
+          // description 合成: transport + scope + (stdio なら command、http/sse なら url)
+          const scopeLabel = MCP_SCOPE_LABEL[m.scope] ?? m.scope;
+          const dest =
+            m.transport === "stdio"
+              ? m.command ?? "(no command)"
+              : m.url ?? "(no url)";
+          const pluginSuffix = m.pluginId ? ` · ${m.pluginId}` : "";
+          const description = `${m.transport} · ${scopeLabel} · ${dest}${pluginSuffix}`;
+          return {
+            name: m.name,
+            description,
+            originalScope: m.scope,
+            transport: m.transport,
+            configPath: m.configPath,
+            url: m.url,
+            command: m.command,
+            pluginId: m.pluginId,
+            enabled: m.enabled,
+            source: "mcp" as const,
+          };
+        });
+        setMcpServers(normalized);
+        lastMcpFetchKeyRef.current = key;
+      })
+      .catch(() => {
+        // MCP 取得失敗は silent（他 section は継続表示）
+        if (cancelled) return;
+        setMcpServers([]);
+        lastMcpFetchKeyRef.current = key;
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // mcpServers を deps に含めると無限ループ、意図的に除外
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, activeProjectPath]);
+
+  // builtin + skill + plugin + mcp + custom を PaletteItem に正規化し、query filter → group → limit
   const { grouped, overflow } = useMemo(() => {
     const merged: PaletteItem[] = [
       ...builtinCmds.map((b) => ({ ...b, kind: "builtin" as const })),
       ...skills.map((s) => ({ ...s, kind: "skill" as const })),
       ...plugins.map((p) => ({ ...p, kind: "plugin" as const })),
+      ...mcpServers.map((m) => ({ ...m, kind: "mcp" as const })),
       ...customCmds.map((c) => ({ ...c, kind: "custom" as const })),
     ];
     const filtered = merged.filter((c) => matchesQuery(c, query));
     return groupAndLimit(filtered, PALETTE_LIMIT);
-  }, [builtinCmds, skills, plugins, customCmds, query]);
+  }, [builtinCmds, skills, plugins, mcpServers, customCmds, query]);
 
   const totalShown =
     grouped.builtin.length +
     grouped.skill.length +
     grouped.plugin.length +
+    grouped.mcp.length +
     grouped.cwd.length +
     grouped.project.length +
     grouped.global.length;
@@ -580,6 +695,46 @@ export function SlashPalette({
    * Phase 2（v1.4+）では enable/disable toggle、install/uninstall UI、plugin
    * 内部 commands のドリルダウン表示を追加する。
    */
+  /**
+   * PM-955 (Phase 1): MCP server 選択時のハンドラ。
+   *
+   * Phase 1 では **実行しない**。Claude Agent SDK が session 起動時に
+   * `mcpServers` option 経由で自動 load するため、ccmux-ide-gui 側の役割は:
+   *  - 設定ファイル (configPath) を Monaco で開いて内容確認
+   *  - toast で scope / transport / enabled 状態 / 接続先を案内
+   *
+   * Phase 2 以降（v1.5+）では `query.mcpServerStatus()` を sidecar 経由で呼び、
+   * 実接続の状態 (connected / failed / needs-auth / pending) と tool 一覧を
+   * live で表示する。Phase 3 で enable/disable toggle / Add Server UI を追加。
+   *
+   * plugin 由来の MCP server は plugin manifest を同時に開くのが親切だが、
+   * 現状 `configPath` が plugin の `.mcp.json` を指すため、その file を開くだけ
+   * で plugin 構造も見えるため追加アクション不要。
+   */
+  function handleMcpClick(item: McpItem) {
+    try {
+      void openFileInEditor(item.configPath);
+      const scopeLabel = MCP_SCOPE_LABEL[item.originalScope] ?? item.originalScope;
+      const state = item.enabled ? "有効" : "無効";
+      const dest =
+        item.transport === "stdio"
+          ? item.command ?? "(no command)"
+          : item.url ?? "(no url)";
+      const pluginSuffix = item.pluginId ? ` · plugin: ${item.pluginId}` : "";
+      toast.message(
+        `MCP「${item.name}」(${state} / ${item.transport} / ${scopeLabel}) を開きました [${dest}]${pluginSuffix}`
+      );
+    } catch (e) {
+      toast.error(
+        `MCP 設定ファイルを開けませんでした: ${
+          e instanceof Error ? e.message : String(e)
+        }`
+      );
+    } finally {
+      onClose();
+    }
+  }
+
   function handlePluginClick(item: PluginItem) {
     try {
       void openFileInEditor(item.manifestPath);
@@ -649,7 +804,8 @@ export function SlashPalette({
               (customCmds.length > 0 ||
                 builtinCmds.length > 0 ||
                 skills.length > 0 ||
-                plugins.length > 0) && (
+                plugins.length > 0 ||
+                mcpServers.length > 0) && (
                 <div className="px-3 py-6 text-center text-xs text-muted-foreground">
                   一致するコマンドはありません
                 </div>
@@ -660,9 +816,10 @@ export function SlashPalette({
               customCmds.length === 0 &&
               builtinCmds.length === 0 &&
               skills.length === 0 &&
-              plugins.length === 0 && (
+              plugins.length === 0 &&
+              mcpServers.length === 0 && (
                 <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-                  コマンド / スキル / プラグインが見つかりません（~/.claude/commands/ に .md、~/.claude/skills/&lt;name&gt;/SKILL.md、または ~/.claude/plugins/ に installed_plugins.json を配置してください）
+                  コマンド / スキル / プラグイン / MCP が見つかりません（~/.claude/commands/ に .md、~/.claude/skills/&lt;name&gt;/SKILL.md、~/.claude/plugins/installed_plugins.json、または .mcp.json を配置してください）
                 </div>
               )}
 
@@ -690,6 +847,8 @@ export function SlashPalette({
                             handleSkillClick(item);
                           } else if (item.kind === "plugin") {
                             handlePluginClick(item);
+                          } else if (item.kind === "mcp") {
+                            handleMcpClick(item);
                           } else {
                             onSelect(item);
                             onClose();
@@ -730,28 +889,37 @@ function PaletteRow({
   const isBuiltin = item.kind === "builtin";
   const isSkill = item.kind === "skill";
   const isPlugin = item.kind === "plugin";
-  // source badge: skill / plugin は scope 非表示で固定 label を使う
+  const isMcp = item.kind === "mcp";
+  // source badge: skill / plugin / mcp は scope 非表示で固定 label を使う
   const source: SlashSource = isBuiltin
     ? "builtin"
     : isSkill
     ? "skill"
     : isPlugin
     ? "plugin"
+    : isMcp
+    ? "mcp"
     : item.source;
   const meta = SOURCE_META[source];
 
   // PM-954: plugin の場合は id（marketplace 含む）も cmdk value に入れて fuzzy
-  // search を効かせる。それ以外は従来通り name + description。
-  const cmdkValue = isPlugin
-    ? `${item.id} ${item.name} ${item.description}`
-    : `${item.name} ${simple} ${item.description}`;
+  // search を効かせる。PM-955: mcp は transport / scope / pluginId も cmdk value に。
+  let cmdkValue: string;
+  if (isPlugin) {
+    cmdkValue = `${item.id} ${item.name} ${item.description}`;
+  } else if (isMcp) {
+    cmdkValue = `${item.name} ${item.transport} ${item.originalScope} ${item.pluginId ?? ""} ${item.description}`;
+  } else {
+    cmdkValue = `${item.name} ${simple} ${item.description}`;
+  }
 
-  // argument-hint は custom のみ（builtin / skill / plugin は引数なし）
+  // argument-hint は custom のみ（builtin / skill / plugin / mcp は引数なし）
   const argumentHint =
     item.kind === "custom" ? item.argumentHint ?? null : null;
 
   // PM-953: skill は `/` プレフィックス無しで表示する（slash と区別するため）
   // PM-954: plugin も `/` プレフィックス無し（marketplace 付き ID ではなく短い name を表示）
+  // PM-955: mcp も `/` プレフィックス無し（server 名そのまま）
   const displayName = item.name;
 
   // PM-954: plugin の description が空の場合、内部件数や keywords で補助する
@@ -766,32 +934,39 @@ function PaletteRow({
     descriptionLine = parts.length > 0 ? parts.join(" · ") : "";
   }
 
-  // icon: builtin=Wrench / skill=Sparkles / plugin=Package / slash=Command
+  // icon: builtin=Wrench / skill=Sparkles / plugin=Package / mcp=Plug / slash=Command
   const Icon = isBuiltin
     ? Wrench
     : isSkill
     ? Sparkles
     : isPlugin
     ? Package
+    : isMcp
+    ? Plug
     : CommandIcon;
 
-  // accent color: plugin は sky 系（badge と統一）
+  // accent color: plugin=sky / mcp=emerald（badge と統一）
   const iconColorClass = isBuiltin
     ? "text-orange-600 dark:text-orange-400"
     : isSkill
     ? "text-amber-600 dark:text-amber-400"
     : isPlugin
     ? "text-sky-600 dark:text-sky-400"
+    : isMcp
+    ? "text-emerald-600 dark:text-emerald-400"
     : "text-orange-500";
   const nameColorClass = isSkill
     ? "text-amber-600 dark:text-amber-400"
     : isPlugin
     ? "text-sky-600 dark:text-sky-400"
+    : isMcp
+    ? "text-emerald-600 dark:text-emerald-400"
     : "text-orange-500";
 
-  // PM-954: disabled plugin は UI 上で dimm する（settings.json で enabledPlugins:
-  // false に設定済。選択は可能、Agent SDK は session 起動時に load しない）。
-  const disabledDimm = isPlugin && !item.enabled;
+  // PM-954: disabled plugin、PM-955: disabled mcp を UI 上で dimm する。
+  // 選択は可能、Agent SDK は session 起動時に load しない / tool を call しない。
+  const disabledDimm =
+    (isPlugin && !item.enabled) || (isMcp && !item.enabled);
 
   return (
     <CommandItem
@@ -818,7 +993,7 @@ function PaletteRow({
               {argumentHint}
             </span>
           )}
-          {isPlugin && !item.enabled && (
+          {((isPlugin && !item.enabled) || (isMcp && !item.enabled)) && (
             <span className="shrink-0 rounded border border-muted-foreground/30 px-1 py-0 text-[9px] uppercase text-muted-foreground">
               disabled
             </span>

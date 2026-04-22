@@ -64,3 +64,17 @@ pub mod skills;
 // PM-953 skills.rs と同じく UI 可視化の並行実装に徹する。Phase 2 以降で
 // install / enable / disable toggle UI を追加。
 pub mod plugins;
+
+// PRJ-012 v1.4 / PM-955 (2026-04-20): Claude Code MCP (Model Context Protocol)
+// server discovery。Cursor 上の Claude Code と同等に github / playwright /
+// supabase / vercel / pencil / stitch 等の MCP server を ccmux-ide-gui の
+// SlashPalette 上で可視化する。走査対象は
+//   1. ~/.claude/settings.json  (global)
+//   2. ~/.claude.json top-level mcpServers  (user)
+//   3. ~/.claude.json projects[abs].mcpServers  (user-project)
+//   4. enabled plugin の <install-path>/.mcp.json  (plugin)
+//   5. <project>/.mcp.json  (project-local)
+// disabledMcpServers / disabledMcpjsonServers / enabledPlugins を反映。
+// Phase 1 = list 表示のみ、Agent SDK の `mcpServerStatus()` / `setMcpServers()`
+// による live 接続状態 / toggle UI は v1.5+ (Phase 2/3) 申し送り。
+pub mod mcp;

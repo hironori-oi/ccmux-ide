@@ -529,6 +529,56 @@ export interface SkillDef {
  * - 内部 commands / skills / agents の件数を返すので、Palette では "N commands,
  *   M skills" のような概況を表示できる
  */
+/**
+ * PRJ-012 v1.4 / PM-955: Claude Code MCP server 1 件（`list_mcp_servers` 戻り値の
+ * 要素、Rust `commands::mcp::McpServerDef` と 1:1）。
+ *
+ * Model Context Protocol (MCP) は Claude Code が外部サービス（github / playwright /
+ * supabase / vercel / pencil / stitch / aidesigner / Gmail 等）と tool 経由で
+ * 接続する仕組み。Agent SDK は `Options.mcpServers` で起動時に渡す他、
+ * `query.mcpServerStatus()` / `toggleMcpServer()` / `setMcpServers()` で
+ * dynamic に操作できる。
+ *
+ * ccmux-ide-gui (Phase 1) は disk 上の設定を **5 スコープ統合で走査**し、
+ * SlashPalette に一覧表示する。実接続・tool 取得は Agent SDK の自動 load に
+ * 委譲する（Phase 2 で sidecar 経由 `mcpServerStatus()` の live 表示を予定）。
+ */
+export interface McpServerDef {
+  /** server 名（設定 map の key。例: `github` / `vercel` / `stitch`） */
+  name: string;
+  /**
+   * 由来スコープ。
+   * - `"global"`       : `~/.claude/settings.json` の `mcpServers`
+   * - `"user"`         : `~/.claude.json` 直下の `mcpServers` (全 project 共通)
+   * - `"user-project"` : `~/.claude.json` の `projects["<abs>"].mcpServers`
+   * - `"plugin"`       : `<plugin-install>/.mcp.json` の `mcpServers`
+   * - `"project"`      : `<project>/.mcp.json` の `mcpServers`
+   */
+  scope: "global" | "user" | "user-project" | "plugin" | "project";
+  /** transport 種別。`command` ありで `type` 無しの場合は `stdio` 扱い */
+  transport: "stdio" | "sse" | "http" | "unknown";
+  /** stdio の実行コマンド（`command` field）。stdio 以外では null */
+  command: string | null;
+  /** stdio の引数配列。stdio 以外では空配列 */
+  args: string[];
+  /** sse / http の endpoint URL（`url` field）。stdio では null */
+  url: string | null;
+  /** plugin 由来時の plugin ID (`<name>@<marketplace>`)、それ以外 null */
+  pluginId: string | null;
+  /** 設定ファイルの絶対パス（Monaco preview 用） */
+  configPath: string;
+  /**
+   * 有効無効。以下のいずれかで false になる:
+   * - `~/.claude.json` の project entry `disabledMcpServers` に含まれる
+   * - `~/.claude.json` の project entry `disabledMcpjsonServers` に含まれる
+   *   (project 所属 .mcp.json 由来のみ)
+   * - plugin 由来 かつ `enabledPlugins["<plugin-id>"] === false`
+   */
+  enabled: boolean;
+  /** env key 一覧（secret 値は含まない、key のみ返す） */
+  envKeys: string[];
+}
+
 export interface PluginDef {
   /** plugin ID (`<name>@<marketplace>` 形式、例: `vercel@claude-plugins-official`) */
   id: string;

@@ -36,6 +36,9 @@ use commands::{
     skills::list_skills,
     // PRJ-012 v1.3 / PM-954: Claude Code plugin discovery（Phase 1 = list 表示のみ）。
     plugins::list_plugins,
+    // PRJ-012 v1.4 / PM-955: Claude Code MCP server discovery（Phase 1 = list 表示のみ）。
+    // 5 スコープ統合: global / user / user-project / plugin / project-local。
+    mcp::list_mcp_servers,
     usage::get_usage_stats,
     // PRJ-012 v3.5 / PM-771 (2026-04-20): v3.5.3 UI 再配置により frontend 呼出 0 と
     // なった `worktree` / `status` / `git` module (計 13 command) を削除。
@@ -135,6 +138,8 @@ pub fn run() {
             list_skills,
             // PRJ-012 v1.3 / PM-954: Claude Code plugin discovery（~/.claude/plugins/）
             list_plugins,
+            // PRJ-012 v1.4 / PM-955: Claude Code MCP server discovery（5 スコープ統合）
+            list_mcp_servers,
             // Agent sidecar (Node + Claude Agent SDK TS)
             // PRJ-012 v3.3 / DEC-033: Multi-Sidecar (1 project = 1 sidecar)。
             // API 契約は `commands::agent` モジュール doc を参照。
