@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sumi — Brand Preview</title>
+<style>
+  :root {
+    --sumi-ink: #0c0e12;
+    --sumi-charcoal: #191c21;
+    --sumi-ash: #33363d;
+    --sumi-mist: #b2aca2;
+    --sumi-paper: #f3eee7;
+    --brand: #c15f3c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", "Hiragino Sans", sans-serif;
+    background: var(--sumi-ink);
+    color: var(--sumi-paper);
+    padding: 64px 32px;
+  }
+  h1 { font-weight: 600; letter-spacing: -0.02em; margin-bottom: 8px; }
+  h2 { font-weight: 500; color: var(--sumi-mist); font-size: 14px; text-transform: uppercase; letter-spacing: 0.2em; margin-top: 48px; margin-bottom: 16px; }
+  .grid { display: grid; gap: 24px; }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  .tile {
+    background: var(--sumi-charcoal);
+    border: 1px solid var(--sumi-ash);
+    border-radius: 8px;
+    padding: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 120px;
+  }
+  .tile.light { background: var(--sumi-paper); }
+  .tile-label { color: var(--sumi-mist); font-family: monospace; font-size: 11px; margin-top: 8px; text-align: center; }
+  .swatch { display: flex; flex-direction: column; gap: 0; border-radius: 6px; overflow: hidden; }
+  .swatch-row { display: flex; padding: 20px; color: var(--sumi-paper); font-family: monospace; font-size: 12px; justify-content: space-between; }
+  img.ico { image-rendering: pixelated; }
+  .sizes { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+  .sizes img { background: var(--sumi-ink); border-radius: 4px; }
+</style>
+</head>
+<body>
+  <h1 style="color: var(--sumi-paper);">Sumi (墨) — Brand Preview</h1>
+  <p style="color: var(--sumi-mist); margin: 0 0 48px;">This preview is not a deliverable — it's just for visual QA of the brand assets.</p>
+
+  <h2>Logo variants</h2>
+  <div class="grid grid-2">
+    <div>
+      <div class="tile"><img src="logo-light.svg" alt="" width="216" /></div>
+      <div class="tile-label">logo-light.svg · on sumi-charcoal</div>
+    </div>
+    <div>
+      <div class="tile light"><img src="logo-dark.svg" alt="" width="216" /></div>
+      <div class="tile-label">logo-dark.svg · on sumi-paper</div>
+    </div>
+    <div>
+      <div class="tile"><img src="logo-mark-light.svg" alt="" width="64" /></div>
+      <div class="tile-label">logo-mark-light.svg · 64px</div>
+    </div>
+    <div>
+      <div class="tile light"><img src="logo-mark-dark.svg" alt="" width="64" /></div>
+      <div class="tile-label">logo-mark-dark.svg · 64px</div>
+    </div>
+    <div>
+      <div class="tile"><img src="logo-wordmark-light.svg" alt="" width="160" /></div>
+      <div class="tile-label">logo-wordmark-light.svg</div>
+    </div>
+    <div>
+      <div class="tile light"><img src="logo-wordmark-dark.svg" alt="" width="160" /></div>
+      <div class="tile-label">logo-wordmark-dark.svg</div>
+    </div>
+  </div>
+
+  <h2>App icon at all sizes</h2>
+  <div class="tile" style="justify-content: flex-start;">
+    <div class="sizes">
+      <div style="text-align:center;"><img src="app-icon-32.png" width="32" /><div class="tile-label">32</div></div>
+      <div style="text-align:center;"><img src="app-icon-64.png" width="64" /><div class="tile-label">64</div></div>
+      <div style="text-align:center;"><img src="app-icon-128.png" width="128" /><div class="tile-label">128</div></div>
+      <div style="text-align:center;"><img src="app-icon-256.png" width="256" /><div class="tile-label">256</div></div>
+      <div style="text-align:center;"><img src="app-icon-512.png" width="256" /><div class="tile-label">512 (shown at 256)</div></div>
+    </div>
+  </div>
+
+  <h2>OG card (1200×630)</h2>
+  <div class="tile" style="padding:0; overflow:hidden;"><img src="og.png" style="width:100%; display:block;" /></div>
+
+  <h2>Color system</h2>
+  <div class="swatch">
+    <div class="swatch-row" style="background: #0c0e12"><span>sumi.ink</span><span>#0c0e12 · hsl(220 8% 6%)</span></div>
+    <div class="swatch-row" style="background: #191c21"><span>sumi.charcoal</span><span>#191c21 · hsl(220 6% 12%)</span></div>
+    <div class="swatch-row" style="background: #33363d"><span>sumi.ash</span><span>#33363d · hsl(220 5% 22%)</span></div>
+    <div class="swatch-row" style="background: #b2aca2; color: #0c0e12"><span>sumi.mist</span><span>#b2aca2 · hsl(30 8% 70%)</span></div>
+    <div class="swatch-row" style="background: #f3eee7; color: #0c0e12"><span>sumi.paper</span><span>#f3eee7 · hsl(30 15% 94%)</span></div>
+    <div class="swatch-row" style="background: #c15f3c"><span>brand (claude-orange)</span><span>#c15f3c · hsl(18 55% 50%)</span></div>
+    <div class="swatch-row" style="background: #d9a43a; color: #0c0e12"><span>enso (success)</span><span>#d9a43a · hsl(45 70% 55%)</span></div>
+    <div class="swatch-row" style="background: #cc3333"><span>chigiri (error)</span><span>#cc3333 · hsl(0 60% 50%)</span></div>
+  </div>
+</body>
+</html>

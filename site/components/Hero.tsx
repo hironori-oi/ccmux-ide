@@ -6,7 +6,7 @@ import { ArrowRight, Github } from "lucide-react";
 
 export function Hero() {
   return (
-    <section className="relative overflow-hidden border-b border-zinc-800/60">
+    <section className="relative overflow-hidden border-b border-sumi-ash/60">
       <div className="hero-glow absolute inset-0 -z-10" aria-hidden />
       <div className="grid-bg absolute inset-0 -z-10 opacity-60" aria-hidden />
 
@@ -22,17 +22,16 @@ export function Hero() {
             Tauri 2 + Next.js 15 + shadcn/ui
           </div>
 
-          <h1 className="text-balance text-4xl font-bold tracking-tight text-zinc-50 sm:text-5xl md:text-6xl">
+          <h1 className="text-balance text-4xl font-bold tracking-tight text-sumi-paper sm:text-5xl md:text-6xl">
             Claude Code を、
             <br className="hidden sm:inline" />
-            デスクトップで、
-            <span className="text-brand-fg">美しく。</span>
+            墨でしたためる。
           </h1>
 
-          <p className="mt-6 max-w-2xl text-lg font-light leading-relaxed text-zinc-400 sm:text-xl">
-            Tauri 2 で構築された、日本語話者向けの汎用 Claude Code デスクトップクライアント。
+          <p className="mt-6 max-w-2xl text-lg font-light leading-relaxed text-sumi-mist sm:text-xl">
+            Tauri 2 で構築された、日本語話者のための汎用 Claude Code デスクトップクライアント。
             <br className="hidden sm:inline" />
-            おしゃれな UI、ローカル永続化、ゼロ設定。ただ起動するだけ。
+            墨の哲学で仕上げた、静謐で濃密な開発環境。
           </p>
 
           <div className="mt-10 flex flex-wrap items-center gap-3">
@@ -47,16 +46,16 @@ export function Hero() {
               href="https://github.com/hironori-oi/ccmux-ide"
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900/60 px-5 py-2.5 text-sm font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-900"
+              className="inline-flex items-center gap-2 rounded-md border border-sumi-ash bg-sumi-charcoal/60 px-5 py-2.5 text-sm font-medium text-sumi-paper transition hover:border-sumi-mist/40 hover:bg-sumi-charcoal"
             >
               <Github className="h-4 w-4" />
               GitHub を見る
             </a>
           </div>
 
-          <p className="mt-8 font-mono text-xs text-zinc-500">
+          <p className="mt-8 font-mono text-xs text-sumi-mist/70">
             <span className="inline-code">Windows · macOS · Linux</span>{" "}
-            <span className="ml-2 text-zinc-600">MIT License</span>
+            <span className="ml-2 text-sumi-ash">MIT License</span>
           </p>
         </motion.div>
       </div>

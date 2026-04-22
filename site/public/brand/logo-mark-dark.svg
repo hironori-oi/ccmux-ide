@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sumi (墨) — logo mark (dark ink on light backgrounds)
+
+  Direction C: single brushstroke with kasure (dry-brush fade) + ink drop.
+  Geometry scaled from app-icon-1024.svg (1:16 ratio), preserving the
+  characteristic brush-belly shape and tail drying.
+
+  Uses currentColor so the stroke color follows CSS. Drop and highlight are
+  absolute so the accent stays claude-orange regardless of context.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 64 64"
+  role="img"
+  aria-labelledby="sumi-mark-title sumi-mark-desc"
+  fill="none"
+>
+  <title id="sumi-mark-title">Sumi</title>
+  <desc id="sumi-mark-desc">
+    Sumi logo mark: a single horizontal brushstroke with dry-brush fade and
+    a small ink drop accent. Dark ink variant, for light backgrounds.
+  </desc>
+
+  <defs>
+    <linearGradient id="mark-kasure" x1="0.05" y1="0" x2="0.95" y2="0.02">
+      <stop offset="0%"   stop-color="currentColor" stop-opacity="0.92" />
+      <stop offset="8%"   stop-color="currentColor" stop-opacity="1" />
+      <stop offset="42%"  stop-color="currentColor" stop-opacity="1" />
+      <stop offset="64%"  stop-color="currentColor" stop-opacity="0.96" />
+      <stop offset="78%"  stop-color="currentColor" stop-opacity="0.72" />
+      <stop offset="88%"  stop-color="currentColor" stop-opacity="0.34" />
+      <stop offset="96%"  stop-color="currentColor" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="currentColor" stop-opacity="0" />
+    </linearGradient>
+
+    <linearGradient id="mark-fiber" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"   stop-color="#f3eee7" stop-opacity="0" />
+      <stop offset="55%"  stop-color="#f3eee7" stop-opacity="0" />
+      <stop offset="68%"  stop-color="#f3eee7" stop-opacity="0.6" />
+      <stop offset="86%"  stop-color="#f3eee7" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#f3eee7" stop-opacity="0" />
+    </linearGradient>
+
+    <clipPath id="mark-stroke-clip">
+      <path d="
+        M 9.0 28.3
+        C 12.3 27.0 17.0 26.5 22.5 26.75
+        C 28.75 27.0 34.5 27.5 40.0 28.25
+        C 45.25 29.0 49.9 29.9 54.0 30.9
+        L 56.25 31.4
+        C 56.5 32.0 56.5 32.6 56.25 33.2
+        L 54.25 33.6
+        C 49.9 34.4 45.1 34.9 39.25 35.0
+         C 32.5 35.1 26.0 34.9 20.5 34.5
+        C 15.75 34.2 12.1 33.7 9.5 33.1
+        C 9.0 32.5 8.75 30.0 9.0 28.3
+        Z
+      " />
+    </clipPath>
+  </defs>
+
+  <g>
+    <!-- Main stroke body -->
+    <path d="
+      M 9.0 28.3
+      C 12.3 27.0 17.0 26.5 22.5 26.75
+      C 28.75 27.0 34.5 27.5 40.0 28.25
+      C 45.25 29.0 49.9 29.9 54.0 30.9
+      L 56.25 31.4
+      C 56.5 32.0 56.5 32.6 56.25 33.2
+      L 54.25 33.6
+      C 49.9 34.4 45.1 34.9 39.25 35.0
+      C 32.5 35.1 26.0 34.9 20.5 34.5
+      C 15.75 34.2 12.1 33.7 9.5 33.1
+      C 9.0 32.5 8.75 30.0 9.0 28.3
+      Z
+    " fill="url(#mark-kasure)" color="#0c0e12" />
+
+    <!-- Fiber streaks -->
+    <g clip-path="url(#mark-stroke-clip)">
+      <rect x="36" y="29.4" width="21" height="0.18" fill="url(#mark-fiber)" />
+      <rect x="37" y="30.3" width="20" height="0.14" fill="url(#mark-fiber)" />
+      <rect x="38" y="31.2" width="19" height="0.20" fill="url(#mark-fiber)" />
+      <rect x="37" y="32.0" width="20" height="0.14" fill="url(#mark-fiber)" />
+      <rect x="39" y="32.9" width="18" height="0.18" fill="url(#mark-fiber)" />
+    </g>
+  </g>
+
+  <!-- Accent drop -->
+  <ellipse cx="13.3" cy="46.3" rx="3.0" ry="3.45" fill="#c15f3c" />
+  <ellipse cx="12.5" cy="45.2" rx="0.85" ry="1.0" fill="#f3eee7" fill-opacity="0.24" />
+</svg>

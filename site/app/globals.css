@@ -12,17 +12,17 @@
   }
 
   body {
-    @apply bg-zinc-50 text-zinc-900 antialiased;
+    @apply bg-sumi-paper text-sumi-ink antialiased;
     font-feature-settings: "cv11", "ss01";
   }
 
   .dark body {
-    @apply bg-zinc-950 text-zinc-100;
+    @apply bg-sumi-ink text-sumi-paper;
   }
 
   /* Focus rings (keyboard only) */
   :focus-visible {
-    @apply outline-none ring-2 ring-brand-fg ring-offset-2 ring-offset-zinc-950;
+    @apply outline-none ring-2 ring-brand-fg ring-offset-2 ring-offset-sumi-ink;
   }
 
   ::selection {

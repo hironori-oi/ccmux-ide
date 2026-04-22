@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sumi (墨) — master app icon at 1024x1024.
+
+  This is the source of truth for every rasterized platform icon. All sizes
+  should be regenerated from this SVG using scripts/generate-icons.mjs.
+
+  Compositional principles:
+  - 墨色 70% (sumi-ink bg, paper grain), paper 20% (the stroke), orange 10% (drop)
+  - Brushstroke enters with pressure (thickest ~20% in), then gradually lifts
+    and dries out toward the right — kasure happens *between* fibers, not in
+    clean rectangles.
+  - Drop sits at rule-of-thirds lower-left.
+  - All margin on all sides is ≥ 96px (≈ 9.4%) so platform rounded-rect masks
+    never crop the mark.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 1024 1024"
+  width="1024"
+  height="1024"
+  role="img"
+  aria-labelledby="sumi-appicon-title sumi-appicon-desc"
+>
+  <title id="sumi-appicon-title">Sumi — app icon</title>
+  <desc id="sumi-appicon-desc">
+    The Sumi application icon: a brushstroke with dry-brush fade and a single
+    orange ink drop, centered on a deep sumi-ink background.
+  </desc>
+
+  <defs>
+    <!--
+      Kasure gradient: full ink from 0-42%, gentle taper to 64%, strong fade
+      68-92%, fully transparent at 100%. Asymmetric so the brush tail reads
+      as "lifted", not "clipped".
+    -->
+    <linearGradient id="sumi-app-kasure" x1="0.05" y1="0" x2="0.95" y2="0.02">
+      <stop offset="0%"   stop-color="#f3eee7" stop-opacity="0.92" />
+      <stop offset="8%"   stop-color="#f3eee7" stop-opacity="1" />
+      <stop offset="42%"  stop-color="#f3eee7" stop-opacity="1" />
+      <stop offset="64%"  stop-color="#f3eee7" stop-opacity="0.96" />
+      <stop offset="78%"  stop-color="#f3eee7" stop-opacity="0.72" />
+      <stop offset="88%"  stop-color="#f3eee7" stop-opacity="0.34" />
+      <stop offset="96%"  stop-color="#f3eee7" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#f3eee7" stop-opacity="0" />
+    </linearGradient>
+
+    <!--
+      Brush fiber lines — these are the "kasure streaks", thin horizontal
+      dark-ish lines drawn ON TOP of the stroke near the tail, to simulate
+      the brush hairs separating as the ink dries. They read as structure,
+      not damage.
+    -->
+    <linearGradient id="sumi-app-fiber" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"   stop-color="#0c0e12" stop-opacity="0" />
+      <stop offset="55%"  stop-color="#0c0e12" stop-opacity="0" />
+      <stop offset="68%"  stop-color="#0c0e12" stop-opacity="0.55" />
+      <stop offset="86%"  stop-color="#0c0e12" stop-opacity="0.35" />
+      <stop offset="100%" stop-color="#0c0e12" stop-opacity="0" />
+    </linearGradient>
+
+    <!-- Paper grain -->
+    <pattern id="sumi-app-paper" x="0" y="0" width="6" height="6" patternUnits="userSpaceOnUse">
+      <rect width="6" height="6" fill="#0c0e12" />
+      <circle cx="1.5" cy="1.5" r="0.18" fill="#191c21" opacity="0.55" />
+      <circle cx="4.5" cy="3.8" r="0.14" fill="#191c21" opacity="0.40" />
+      <circle cx="2.4" cy="5.1" r="0.12" fill="#191c21" opacity="0.35" />
+    </pattern>
+
+    <!-- Soft radial behind drop -->
+    <radialGradient id="sumi-app-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#c15f3c" stop-opacity="0.22" />
+      <stop offset="60%" stop-color="#c15f3c" stop-opacity="0.06" />
+      <stop offset="100%" stop-color="#c15f3c" stop-opacity="0" />
+    </radialGradient>
+
+    <!--
+      Group for the brushstroke so we can apply a single clipping path that
+      contains all the fiber detail — keeps the fibers ON the stroke.
+    -->
+    <clipPath id="sumi-app-stroke-clip">
+      <path d="
+        M 144 452
+        C 196 432, 272 424, 360 428
+        C 460 432, 552 440, 640 452
+        C 724 464, 798 478, 864 494
+        L 900 503
+        C 904 512, 904 522, 900 531
+        L 868 538
+        C 798 551, 722 558, 628 560
+        C 520 562, 416 558, 328 552
+        C 252 547, 194 539, 152 530
+        C 144 520, 140 480, 144 452
+        Z
+      " />
+    </clipPath>
+  </defs>
+
+  <!-- Background: solid sumi-ink with subtle paper-grain -->
+  <rect width="1024" height="1024" fill="#0c0e12" />
+  <rect width="1024" height="1024" fill="url(#sumi-app-paper)" />
+
+  <!-- Soft glow behind the drop; anchors the accent without making it look "SaaS" -->
+  <ellipse cx="240" cy="740" rx="190" ry="190" fill="url(#sumi-app-glow)" />
+
+  <!--
+    Brushstroke body. A sumi brush lays down ink with pressure — thickest in
+    the first third (where the artist presses), thinning as the hand lifts
+    and moves. Shape below approximates that: gentle belly, narrowing tail.
+  -->
+  <g>
+    <!-- Main ink body, filled with kasure gradient -->
+    <path
+      d="
+        M 144 452
+        C 196 432, 272 424, 360 428
+        C 460 432, 552 440, 640 452
+        C 724 464, 798 478, 864 494
+        L 900 503
+        C 904 512, 904 522, 900 531
+        L 868 538
+        C 798 551, 722 558, 628 560
+        C 520 562, 416 558, 328 552
+        C 252 547, 194 539, 152 530
+        C 144 520, 140 480, 144 452
+        Z
+      "
+      fill="url(#sumi-app-kasure)"
+    />
+
+    <!-- Brush fiber streaks: thin horizontal paths clipped to the stroke.
+         These give the "hair" texture of a drying sumi brush. -->
+    <g clip-path="url(#sumi-app-stroke-clip)">
+      <rect x="580" y="470" width="340" height="2.2" fill="url(#sumi-app-fiber)" />
+      <rect x="600" y="484" width="320" height="1.8" fill="url(#sumi-app-fiber)" />
+      <rect x="620" y="498" width="300" height="2.4" fill="url(#sumi-app-fiber)" />
+      <rect x="610" y="512" width="310" height="1.6" fill="url(#sumi-app-fiber)" />
+      <rect x="630" y="526" width="290" height="2.0" fill="url(#sumi-app-fiber)" />
+      <rect x="650" y="540" width="270" height="1.4" fill="url(#sumi-app-fiber)" />
+      <!-- Slightly denser dry patch just before the final fade -->
+      <rect x="780" y="476" width="140" height="1.0" fill="#0c0e12" opacity="0.35" />
+      <rect x="790" y="490" width="130" height="0.9" fill="#0c0e12" opacity="0.30" />
+      <rect x="800" y="520" width="120" height="1.1" fill="#0c0e12" opacity="0.32" />
+    </g>
+  </g>
+
+  <!-- Accent drop -->
+  <ellipse cx="213" cy="740" rx="48" ry="55" fill="#c15f3c" />
+  <!-- Viscosity highlight (subtle, reads as ink, not SaaS glow) -->
+  <ellipse cx="200" cy="722" rx="13" ry="16" fill="#f3eee7" fill-opacity="0.24" />
+</svg>

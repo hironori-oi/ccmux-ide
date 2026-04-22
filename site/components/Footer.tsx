@@ -1,42 +1,41 @@
 import Link from "next/link";
+import { Logo, Wordmark } from "./Logo";
 
 export function Footer() {
   return (
-    <footer className="border-t border-zinc-800/60 bg-zinc-950 py-12">
+    <footer className="border-t border-sumi-ash/60 bg-sumi-ink py-12">
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="flex flex-col gap-6 md:flex-row md:items-start md:justify-between">
           <div className="max-w-md">
-            <div className="flex items-center gap-2 text-zinc-100">
-              <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-gradient-to-br from-brand to-brand-muted text-xs text-white">
-                ◆
-              </span>
-              <span className="font-semibold">
-                ccmux<span className="text-brand-fg">-ide</span>
-              </span>
+            <div className="flex items-center gap-2 text-sumi-paper">
+              <Logo size={22} className="text-sumi-paper" />
+              <Wordmark height={16} className="text-sumi-paper" />
             </div>
-            <p className="mt-3 text-sm leading-relaxed text-zinc-500">
-              日本語話者のための、おしゃれな Claude Code デスクトップクライアント。
+            <p className="mt-3 text-sm leading-relaxed text-sumi-mist">
+              Claude Code を、墨でしたためる。
+              <br />
+              日本語話者のための、静謐で濃密なデスクトップクライアント。
             </p>
           </div>
 
           <div className="grid grid-cols-2 gap-8 text-sm sm:grid-cols-3">
             <div>
-              <h4 className="font-medium text-zinc-300">Product</h4>
-              <ul className="mt-3 space-y-2 text-zinc-500">
+              <h4 className="font-medium text-sumi-paper">Product</h4>
+              <ul className="mt-3 space-y-2 text-sumi-mist">
                 <li>
-                  <Link href="/" className="hover:text-zinc-200">
+                  <Link href="/" className="hover:text-sumi-paper">
                     Home
                   </Link>
                 </li>
                 <li>
-                  <Link href="/docs" className="hover:text-zinc-200">
+                  <Link href="/docs" className="hover:text-sumi-paper">
                     Docs
                   </Link>
                 </li>
                 <li>
                   <a
                     href="https://github.com/hironori-oi/ccmux-ide/releases/latest"
-                    className="hover:text-zinc-200"
+                    className="hover:text-sumi-paper"
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -46,12 +45,12 @@ export function Footer() {
               </ul>
             </div>
             <div>
-              <h4 className="font-medium text-zinc-300">Community</h4>
-              <ul className="mt-3 space-y-2 text-zinc-500">
+              <h4 className="font-medium text-sumi-paper">Community</h4>
+              <ul className="mt-3 space-y-2 text-sumi-mist">
                 <li>
                   <a
                     href="https://github.com/hironori-oi/ccmux-ide"
-                    className="hover:text-zinc-200"
+                    className="hover:text-sumi-paper"
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -61,7 +60,7 @@ export function Footer() {
                 <li>
                   <a
                     href="https://github.com/hironori-oi/ccmux-ide/issues"
-                    className="hover:text-zinc-200"
+                    className="hover:text-sumi-paper"
                     target="_blank"
                     rel="noreferrer"
                   >
@@ -71,8 +70,8 @@ export function Footer() {
               </ul>
             </div>
             <div>
-              <h4 className="font-medium text-zinc-300">Legal</h4>
-              <ul className="mt-3 space-y-2 text-zinc-500">
+              <h4 className="font-medium text-sumi-paper">Legal</h4>
+              <ul className="mt-3 space-y-2 text-sumi-mist">
                 <li>MIT License</li>
                 <li>
                   Based on{" "}
@@ -80,7 +79,7 @@ export function Footer() {
                     href="https://github.com/Shin-sibainu/ccmux"
                     target="_blank"
                     rel="noreferrer"
-                    className="hover:text-zinc-200"
+                    className="hover:text-sumi-paper"
                   >
                     ccmux by @Shin-sibainu
                   </a>
@@ -90,15 +89,15 @@ export function Footer() {
           </div>
         </div>
 
-        <div className="mt-10 border-t border-zinc-800/60 pt-6 text-xs text-zinc-600">
+        <div className="mt-10 border-t border-sumi-ash/60 pt-6 text-xs text-sumi-ash">
           <p>
-            Claude and Anthropic are trademarks of Anthropic, PBC. ccmux-ide is an
-            unofficial community project and is not affiliated with, endorsed by, or
-            sponsored by Anthropic.
+            Claude and Anthropic are trademarks of Anthropic, PBC. Sumi is an
+            unofficial community project and is not affiliated with, endorsed
+            by, or sponsored by Anthropic.
           </p>
           <p className="mt-2">
-            © {new Date().getFullYear()} ccmux-ide contributors. Released under the MIT
-            License.
+            © {new Date().getFullYear()} Sumi contributors. Released under the
+            MIT License.
           </p>
         </div>
       </div>

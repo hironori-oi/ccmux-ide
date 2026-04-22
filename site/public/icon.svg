@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sumi favicon / Safari mask-icon.
+  Simplified for 16px legibility: thicker stroke, smaller kasure region,
+  larger accent drop (proportionally) so both elements read at small sizes.
+  Opaque sumi-ink bg ensures it looks consistent regardless of browser chrome.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 32 32"
+  role="img"
+  aria-label="Sumi"
+>
+  <rect width="32" height="32" fill="#0c0e12" rx="6" />
+  <!-- Stroke: chunkier, tapers more gently so 16px render keeps ink density -->
+  <path
+    d="M 5 14 L 24 14 L 27 14.4 L 26.6 17.6 L 24 18 L 5 18 Z"
+    fill="#f3eee7"
+  />
+  <!-- Tail kasure: a small fade chip that keeps the kasure feel but is readable -->
+  <rect x="24" y="14.4" width="3" height="3.2" fill="#f3eee7" opacity="0.45" />
+  <!-- Accent drop -->
+  <circle cx="7.4" cy="24" r="3.2" fill="#c15f3c" />
+</svg>
