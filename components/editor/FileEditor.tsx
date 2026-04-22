@@ -137,6 +137,14 @@ export function FileEditor({ openFileId }: FileEditorProps) {
 
   return (
     <Suspense fallback={<EditorSkeleton />}>
+      {/*
+       * PM-956: PM-870 の body bg-transparent 化で Monaco 背景が透過し
+       * text が壁紙に埋もれて見えない症状への対応。editor 本体は可読性
+       * 最優先で半透明黒 overlay を敷き、壁紙は薄く透ける程度に抑える。
+       * Terminal PM-932 の DOM overlay 方式と同設計、ただし editor は
+       * 透過度を控えめ (0.92) にして text 視認性確保。
+       */}
+      <div className="h-full w-full bg-background/95">
       <SafeMonacoEditor
         height="100%"
         defaultLanguage={file.language}
@@ -184,6 +192,7 @@ export function FileEditor({ openFileId }: FileEditorProps) {
           insertSpaces: true,
         }}
       />
+      </div>
     </Suspense>
   );
 }
