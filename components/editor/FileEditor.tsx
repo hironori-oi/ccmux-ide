@@ -9,6 +9,11 @@ import { SafeMonacoEditor } from "@/components/common/SafeMonacoEditor";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useEditorStore } from "@/lib/stores/editor";
+import { useSettingsStore } from "@/lib/stores/settings";
+import {
+  registerMonacoThemes,
+  resolveMonacoTheme,
+} from "@/lib/monaco-theme";
 
 /**
  * PRJ-012 v3.4 Chunk A (DEC-034 Must 1): 単一ファイル Monaco エディタ。
@@ -43,16 +48,34 @@ export function FileEditor({ openFileId }: FileEditorProps) {
   const reloadFile = useEditorStore((s) => s.reloadFile);
 
   const { resolvedTheme } = useTheme();
-  const monacoTheme = resolvedTheme === "dark" ? "vs-dark" : "vs-light";
+  // PM-949: app preset + mode を Monaco theme 名に解決する。
+  // 旧実装は `"vs-light"` を渡していたが Monaco ビルトインは `"vs"`。
+  const themePreset = useSettingsStore(
+    (s) => s.settings.appearance.themePreset
+  );
+  const mode = resolvedTheme === "dark" ? "dark" : "light";
+  const monacoTheme = resolveMonacoTheme(themePreset, mode);
 
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
 
   // Monaco `addCommand` は editor instance が必要なので onMount で登録する。
   // keybinding は Monaco の `KeyMod.CtrlCmd | KeyCode.KeyS` を利用（Ctrl+S / Cmd+S）。
+
+  // PM-949: app theme preset / light-dark の切替に Monaco editor instance の
+  // theme を追従させる。`monaco.editor.setTheme()` は global に効くので、
+  // ここで単発呼び出ししておけば同一 page の全 Monaco instance に反映される。
   useEffect(() => {
-    // openFileId / file の入替時に再登録されるのは onMount 経由なので、
-    // ここでは何もしない。cleanup も editor dispose で吸収される。
-  }, [openFileId]);
+    let cancelled = false;
+    void import("monaco-editor").then((monaco) => {
+      if (cancelled) return;
+      // custom theme を未登録なら登録（idempotent）
+      registerMonacoThemes(monaco);
+      monaco.editor.setTheme(monacoTheme);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [monacoTheme]);
 
   if (!file) {
     return (
@@ -109,22 +132,22 @@ export function FileEditor({ openFileId }: FileEditorProps) {
         value={file.content}
         theme={monacoTheme}
         path={file.path}
-        onMount={(ed) => {
+        onMount={(ed, monaco) => {
           editorRef.current = ed;
-          // Ctrl+S / Cmd+S で save（Monaco の KeyMod / KeyCode は Editor.onMount の
-          // 第 2 引数 monaco から取得）。ここでは monaco instance を引数で受け取る
-          // 代わりに dynamic import した monaco-editor の定数を使う。
-          void import("monaco-editor").then((monaco) => {
-            ed.addCommand(
-              // KeyMod.CtrlCmd = Ctrl on Win/Linux, Cmd on macOS
-              monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
-              () => {
-                void saveFile(file.id).catch(() => {
-                  // toast / error 状態は store 内で処理済。
-                });
-              }
-            );
-          });
+          // PM-949: mount 時点で custom theme を登録しておくことで、
+          // `theme` prop に custom theme id (`ccmux-*`) を渡しても
+          // "Theme is not defined" warning が出ないようにする。
+          registerMonacoThemes(monaco);
+          // Ctrl+S / Cmd+S で save（onMount の monaco instance から KeyMod / KeyCode を取得）。
+          ed.addCommand(
+            // KeyMod.CtrlCmd = Ctrl on Win/Linux, Cmd on macOS
+            monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+            () => {
+              void saveFile(file.id).catch(() => {
+                // toast / error 状態は store 内で処理済。
+              });
+            }
+          );
         }}
         onChange={(value) => {
           // Monaco は編集時に undefined を渡すことがあるので guard

@@ -37,11 +37,13 @@ export function getFileIconSpec(name: string): FileIconSpec {
   // --- 特殊ファイル名 ---
   if (lower === "dockerfile" || lower.startsWith("dockerfile."))
     return { Icon: FileText, colorClass: "text-blue-500" };
+  if (lower === "docker-compose.yml" || lower === "docker-compose.yaml")
+    return { Icon: FileText, colorClass: "text-blue-500" };
   if (lower === ".gitignore" || lower === ".gitattributes" || lower === ".gitmodules")
     return { Icon: FileText, colorClass: "text-orange-600 dark:text-orange-400" };
   if (lower === "package.json" || lower === "package-lock.json")
     return { Icon: FileJson, colorClass: "text-red-500" };
-  if (lower === "pnpm-lock.yaml" || lower === "yarn.lock")
+  if (lower === "pnpm-lock.yaml" || lower === "yarn.lock" || lower === "bun.lockb")
     return { Icon: FileText, colorClass: "text-orange-500" };
   if (lower.startsWith("tsconfig") && (ext === "json" || lower.endsWith(".json")))
     return { Icon: FileJson, colorClass: "text-blue-600 dark:text-blue-400" };
@@ -53,8 +55,20 @@ export function getFileIconSpec(name: string): FileIconSpec {
     return { Icon: FileBadge, colorClass: "text-amber-600" };
   if (lower === ".env" || lower.startsWith(".env."))
     return { Icon: FileBadge, colorClass: "text-yellow-600 dark:text-yellow-400" };
-  if (lower === ".npmrc" || lower === ".editorconfig" || lower === ".prettierrc")
+  if (
+    lower === ".npmrc" ||
+    lower === ".editorconfig" ||
+    lower === ".prettierrc" ||
+    lower === ".prettierrc.json" ||
+    lower === ".eslintrc" ||
+    lower === ".eslintrc.json" ||
+    lower === ".eslintrc.js" ||
+    lower === ".nvmrc" ||
+    lower === ".babelrc"
+  )
     return { Icon: FileText, colorClass: "text-slate-500" };
+  if (lower === "makefile" || lower === "gnumakefile" || lower === "cmakelists.txt")
+    return { Icon: FileTerminal, colorClass: "text-amber-700 dark:text-amber-500" };
 
   // --- 拡張子マッピング ---
   switch (ext) {
