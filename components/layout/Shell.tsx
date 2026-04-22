@@ -495,8 +495,8 @@ export function Shell({ children }: { children?: ReactNode }) {
             </div>
             <div
               className={cn(
-                "min-h-0 flex-1",
-                viewMode === "editor" ? "block" : "hidden"
+                "min-h-0 flex-1 flex-col",
+                viewMode === "editor" ? "flex" : "hidden"
               )}
               aria-hidden={viewMode !== "editor"}
             >
@@ -535,8 +535,8 @@ export function Shell({ children }: { children?: ReactNode }) {
              */}
             <div
               className={cn(
-                "min-h-0 flex-1",
-                viewMode === "preview" ? "block" : "hidden"
+                "min-h-0 flex-1 flex-col",
+                viewMode === "preview" ? "flex" : "hidden"
               )}
               aria-hidden={viewMode !== "preview"}
             >

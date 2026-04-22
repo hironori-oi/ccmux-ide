@@ -32,8 +32,14 @@ export function SplitView({
 }) {
   if (panes.length === 0) return null;
   if (panes.length === 1) {
+    // PM-957: `flex-1` は親が flex container のときにしか効かない。
+    // Shell.tsx の viewMode 切替コンテナが `block` だった時期に
+    // 1 pane の高さが 0 に潰れて壁紙だけが見える regression が発生したため
+    // `h-full w-full` で親の resolved height を直接継承する形に変更。
+    // 2 pane / 4 pane 側は react-resizable-panels が inline style で
+    // 明示サイズを注入するため影響を受けない。
     return (
-      <div className={cn("flex min-h-0 flex-1 flex-col", className)}>
+      <div className={cn("flex h-full w-full min-h-0 flex-col", className)}>
         {panes[0].content}
       </div>
     );

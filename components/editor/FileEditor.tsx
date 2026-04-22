@@ -138,20 +138,16 @@ export function FileEditor({ openFileId }: FileEditorProps) {
   return (
     <Suspense fallback={<EditorSkeleton />}>
       {/*
-       * PM-956 hotfix4 (v1.3.2): 壁紙必須 + text 可読の両立アプローチ。
-       * - 半透明黒 overlay (rgba 0.65) + backdrop-filter: blur(2px) で
-       *   壁紙を透過させつつぼかして text との contrast を確保
-       * - Monaco 内部 DOM は globals.css で transparent 強制、overlay を通す
-       * - React inline style で直接 DOM に backgroundColor を書き込み、
-       *   CSS cache 遅延問題を回避
+       * PM-956 hotfix5 (v1.3.2): 壁紙必須 + text 可読の両立アプローチ。
+       * ターミナル (`--terminal-bg: rgba(0,0,0,0.55)`) と同じ overlay 強度に揃え、
+       * 壁紙の視認性を確保する。blur は壁紙の質感を損なうため除去 (terminal も
+       * blur なし)。Monaco 内部 DOM は globals.css で transparent 強制。
        */}
       <div
         data-ccmux-editor-root
         className="relative h-full w-full"
         style={{
-          backgroundColor: "rgba(0, 0, 0, 0.65)",
-          backdropFilter: "blur(2px)",
-          WebkitBackdropFilter: "blur(2px)",
+          backgroundColor: "rgba(0, 0, 0, 0.55)",
         }}
       >
       <SafeMonacoEditor
