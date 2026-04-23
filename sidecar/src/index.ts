@@ -324,6 +324,12 @@ async function handlePrompt(req: PromptRequest): Promise<void> {
     // (model / maxThinkingTokens / abortController) を明示設定する形にする。
     // こうすることで「prompt 個別指定 > argv default > SDK default」の優先度を
     // 保ちつつ、object literal の duplicate key 警告 (TS1117) を避けられる。
+    //
+    // PM-966 / DEC-055: settingSources はデフォルトで ['user', 'project', 'local']
+    // を指定する。これは Claude Code CLI と同等の自動ファイルベース設定読込を
+    // 有効にするためで、CLAUDE.md / .claude/settings.json / slash commands /
+    // skills / MCP servers が SDK によって自動 discover される。呼び出し側
+    // (Rust `send_agent_prompt`) が明示した場合はそちらを優先する。
     const opts: AgentQueryOptions = {
       cwd: req.options?.cwd ?? process.cwd(),
       permissionMode: req.options?.permissionMode ?? "default",
@@ -334,6 +340,11 @@ async function handlePrompt(req: PromptRequest): Promise<void> {
         "Bash",
         "Glob",
         "Grep",
+      ],
+      settingSources: req.options?.settingSources ?? [
+        "user",
+        "project",
+        "local",
       ],
       ...req.options,
       // --- ここから spread で潰されないよう必ず最後に書く ---
@@ -360,8 +371,9 @@ async function handlePrompt(req: PromptRequest): Promise<void> {
     // resume / model / cwd を可視化。resume が undefined なのに user expectation では
     // set のはず、という乖離を捕捉するためのセンサ。abortController は non-serializable
     // なので除外。dogfood 後に PM-746 でクリーンアップ予定。
+    // PM-966: settingSources も可視化（CLAUDE.md 自動読込が有効か確認用）。
     process.stderr.write(
-      `[agent.ts] query options: resume=${String(opts.resume)}, model=${String(opts.model)}, cwd=${String(opts.cwd)}, requestedResume=${String(requestedResume)}\n`,
+      `[agent.ts] query options: resume=${String(opts.resume)}, model=${String(opts.model)}, cwd=${String(opts.cwd)}, settingSources=${JSON.stringify(opts.settingSources ?? null)}, requestedResume=${String(requestedResume)}\n`,
     );
 
     for await (const ev of runAgentQuery(req.prompt, opts)) {

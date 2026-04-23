@@ -733,6 +733,27 @@ pub async fn send_agent_prompt(
         }
     }
 
+    // PM-966 / DEC-055: SidecarHandle に記録済の project cwd を毎回 prompt options に
+    // 注入する。これを入れないと sidecar が process.cwd()（sidecar 自身のインストール
+    // ディレクトリ = "…/resources/sidecar" 等）にフォールバックし、Claude Agent SDK
+    // は project 外の cwd で動作する。結果として CLAUDE.md / .claude/ settings /
+    // プロジェクトファイルがすべて見えなくなる。
+    options.insert(
+        "cwd".to_string(),
+        serde_json::Value::String(handle.cwd.clone()),
+    );
+
+    // PM-966 / DEC-055: Claude Code CLI と同等の file-based 設定読込を SDK に指示する。
+    // 'user'    = ~/.claude/settings.json + ~/.claude/CLAUDE.md
+    // 'project' = <cwd>/.claude/settings.json + <cwd>/CLAUDE.md + 親ディレクトリの CLAUDE.md
+    // 'local'   = <cwd>/.claude/settings.local.json (gitignore される個人用)
+    // これにより slash commands / skills / MCP / memory がすべて SDK 側で自動 discover
+    // される。SDK デフォルトでは settingSources は空のため、明示指定が必要。
+    options.insert(
+        "settingSources".to_string(),
+        serde_json::json!(["user", "project", "local"]),
+    );
+
     // v3.5.18 PM-830 hotfix debug (2026-04-20): frontend → Rust の resume 伝播を
     // 可視化する。camelCase rename / Option<String> deserialize が正常に効いて
     // いれば、frontend log と一致する値がここに現れる。dogfood 期間中は残置し、

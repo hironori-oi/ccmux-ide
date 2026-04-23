@@ -648,19 +648,21 @@ export function SlashPalette({
   /**
    * PM-953 (Phase 1): skill 選択時のハンドラ。
    *
-   * MVP では **実行しない**。Claude Agent SDK native の skill 機能は sidecar が
-   * session 起動時に自動検知するため、Sumi 側では:
+   * PM-966 / DEC-055: Claude Agent SDK の `settingSources: ['user', 'project', 'local']`
+   * オプション（Rust `send_agent_prompt` から毎回注入）により、SDK が
+   * `~/.claude/skills/` と `<project>/.claude/skills/` を自動で discover して
+   * session に登録する。Sumi 側ではこのクリックで:
    *  - SKILL.md を Monaco で開いて内容を確認できるようにする
-   *  - toast で「sidecar が自動で利用します」と案内
+   *  - toast で「次回プロンプト送信時に Claude が読み込みます」と案内
    *
-   * Phase 2（v1.4+）では sidecar 経由で skill を session に preload する経路を
-   * 実装する（SDK `AgentDefinition.skills` / `supportedCommands()` を参照）。
+   * そのため skill を事前にクリックしなくても、チャットで `/ceo` のような呼び出し
+   * をすれば SDK 側が skill を識別してくれる。クリックは「中身を確認したい時」用。
    */
   function handleSkillClick(item: SkillItem) {
     try {
       void openFileInEditor(item.filePath);
       toast.message(
-        `スキル「${item.name}」の SKILL.md を開きました。Claude のセッションでは自動で利用されます。`
+        `スキル「${item.name}」の SKILL.md を開きました。次のプロンプト送信時に Claude が自動で読み込みます。`
       );
     } catch (e) {
       toast.error(
