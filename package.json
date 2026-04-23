@@ -1,6 +1,6 @@
 {
   "name": "sumi",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "description": "Sumi — Japanese-first Claude Code desktop client (Tauri + Next.js)",
   "license": "MIT",
   "private": true,
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
     "@monaco-editor/react": "^4.6.0",
     "@radix-ui/react-alert-dialog": "^1.1.2",
     "@radix-ui/react-dialog": "^1.1.2",

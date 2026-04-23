@@ -3,9 +3,28 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  DndContext,
+  MouseSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
+  Clock,
   Eye,
   EyeOff,
   FileQuestion,
+  GripVertical,
+  ListOrdered,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -29,11 +48,22 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useSessionStore } from "@/lib/stores/session";
 import { useProjectStore } from "@/lib/stores/project";
 import { useChatStore } from "@/lib/stores/chat";
+import {
+  applySessionOrder,
+  UNCATEGORIZED_KEY,
+  useSessionOrderStore,
+} from "@/lib/stores/session-order";
 import {
   ACTIVITY_VISUAL,
   isActiveKind,
@@ -97,6 +127,13 @@ export function SessionList() {
   const [renameValue, setRenameValue] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<SessionSummary | null>(null);
 
+  // PM-983: セッション表示順の管理（auto = 更新順 / manual = 手動並替）
+  const orderMode = useSessionOrderStore((s) => s.mode);
+  const orderMap = useSessionOrderStore((s) => s.order);
+  const setOrderMode = useSessionOrderStore((s) => s.setMode);
+  const setOrder = useSessionOrderStore((s) => s.setOrder);
+  const removeFromOrder = useSessionOrderStore((s) => s.removeFromOrder);
+
   // v5 Chunk B / DEC-032: 「未分類を表示」toggle。初期 off。
   // activeProjectId != null のときだけ UI を出す（null のときは既に全件表示中）。
   const [showUncategorized, setShowUncategorized] = useState(false);
@@ -149,10 +186,46 @@ export function SessionList() {
   // activeProjectId != null のとき、本体 sessions は fetchSessions が既に
   // project filter 済で返しているのでそのまま使う。ただし万一 race で
   // 混ざった場合のフェールセーフとして client 側でも保険フィルタを通す。
-  const visibleSessions = useMemo(() => {
+  const filteredSessions = useMemo(() => {
     if (activeProjectId === null) return sessions;
     return sessions.filter((s) => s.projectId === activeProjectId);
   }, [sessions, activeProjectId]);
+
+  // PM-983: 表示順を適用。manual モードなら保存済並び順、それ以外は updated_at DESC
+  const projectKey = activeProjectId ?? UNCATEGORIZED_KEY;
+  const visibleSessions = useMemo(
+    () =>
+      applySessionOrder(filteredSessions, projectKey, orderMode, orderMap),
+    [filteredSessions, projectKey, orderMode, orderMap]
+  );
+  const orderedUncategorizedSessions = useMemo(
+    () =>
+      applySessionOrder(
+        uncategorizedSessions,
+        UNCATEGORIZED_KEY,
+        orderMode,
+        orderMap
+      ),
+    [uncategorizedSessions, orderMode, orderMap]
+  );
+
+  // PM-983: drag sensors（4px 移動で activate、通常クリックを誤発火させない）
+  const dndSensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } })
+  );
+
+  // PM-983: drag 完了 → 配列 reorder → store に永続化
+  function handleDragEnd(ev: DragEndEvent, targetKey: string, ids: string[]) {
+    const activeId = ev.active.id;
+    const overId = ev.over?.id;
+    if (!overId || activeId === overId) return;
+    const oldIndex = ids.indexOf(String(activeId));
+    const newIndex = ids.indexOf(String(overId));
+    if (oldIndex < 0 || newIndex < 0) return;
+    const next = arrayMove(ids, oldIndex, newIndex);
+    setOrder(targetKey, next);
+  }
 
   async function handleNewSession() {
     // PM-939 (v3.5.22): プロジェクト未選択時は作成不可。
@@ -198,6 +271,8 @@ export function SessionList() {
   async function submitDelete() {
     if (!deleteTarget) return;
     await deleteSession(deleteTarget.id);
+    // PM-983: 手動並び順 store からも除去（stale 参照回避）
+    removeFromOrder(deleteTarget.id);
     toast.success("セッションを削除しました");
     setDeleteTarget(null);
   }
@@ -209,29 +284,43 @@ export function SessionList() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* 新規セッションボタン
+      {/* 新規セッションボタン + 並び順 toggle
           PM-939 (v3.5.22): activeProjectId が null の時は disabled。
-          title 属性で理由を提示し、ボタン直下に静的な案内テキストも出す。 */}
+          PM-983: 並び順 toggle を追加。デフォルト auto（更新順）、
+          manual に切替でドラッグ&ドロップ並替可能。 */}
       <div className="p-2">
-        <Button
-          onClick={handleNewSession}
-          disabled={!activeProjectId}
-          title={
-            !activeProjectId
-              ? "先にプロジェクトを作成/選択してください"
-              : "新規セッションを作成"
-          }
-          aria-disabled={!activeProjectId}
-          className="w-full justify-start gap-2"
-          size="sm"
-          variant="default"
-        >
-          <Plus className="h-4 w-4" aria-hidden />
-          新規セッション
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            onClick={handleNewSession}
+            disabled={!activeProjectId}
+            title={
+              !activeProjectId
+                ? "先にプロジェクトを作成/選択してください"
+                : "新規セッションを作成"
+            }
+            aria-disabled={!activeProjectId}
+            className="flex-1 justify-start gap-2"
+            size="sm"
+            variant="default"
+          >
+            <Plus className="h-4 w-4" aria-hidden />
+            新規セッション
+          </Button>
+          <OrderModeToggle
+            mode={orderMode}
+            onToggle={() =>
+              setOrderMode(orderMode === "auto" ? "manual" : "auto")
+            }
+          />
+        </div>
         {!activeProjectId && (
           <p className="mt-1.5 px-1 text-[11px] leading-tight text-muted-foreground">
             プロジェクトを選択するとセッションを作成できます
+          </p>
+        )}
+        {orderMode === "manual" && (
+          <p className="mt-1.5 px-1 text-[10px] leading-tight text-muted-foreground">
+            手動並替モード: 各項目の ⋮⋮ ハンドルでドラッグして順序を変更
           </p>
         )}
       </div>
@@ -248,29 +337,18 @@ export function SessionList() {
           <>
             {/* active project の session（通常ケース） */}
             {hasMain && (
-              <motion.ul layout className="flex flex-col gap-1">
-                <AnimatePresence initial={false}>
-                  {visibleSessions.map((s) => (
-                    <motion.li
-                      key={s.id}
-                      layout
-                      initial={{ opacity: 0, y: -4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, x: -12 }}
-                      transition={{ duration: 0.15 }}
-                    >
-                      <SessionItem
-                        session={s}
-                        active={s.id === currentSessionId}
-                        activity={activitiesBySession.get(s.id) ?? "idle"}
-                        onClick={() => void handleLoad(s.id)}
-                        onRename={() => openRename(s)}
-                        onDelete={() => setDeleteTarget(s)}
-                      />
-                    </motion.li>
-                  ))}
-                </AnimatePresence>
-              </motion.ul>
+              <SessionSection
+                sessions={visibleSessions}
+                orderKey={projectKey}
+                orderMode={orderMode}
+                sensors={dndSensors}
+                onDragEnd={handleDragEnd}
+                currentSessionId={currentSessionId}
+                activitiesBySession={activitiesBySession}
+                onLoad={(id) => void handleLoad(id)}
+                onRename={(s) => openRename(s)}
+                onDelete={(s) => setDeleteTarget(s)}
+              />
             )}
 
             {/* 未分類セクション（toggle ON + active project 指定時のみ） */}
@@ -280,30 +358,20 @@ export function SessionList() {
                   <FileQuestion className="h-3 w-3" aria-hidden />
                   未分類
                 </div>
-                <motion.ul layout className="flex flex-col gap-1">
-                  <AnimatePresence initial={false}>
-                    {uncategorizedSessions.map((s) => (
-                      <motion.li
-                        key={`uncat-${s.id}`}
-                        layout
-                        initial={{ opacity: 0, y: -4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, x: -12 }}
-                        transition={{ duration: 0.15 }}
-                      >
-                        <SessionItem
-                          session={s}
-                          active={s.id === currentSessionId}
-                          activity={activitiesBySession.get(s.id) ?? "idle"}
-                          onClick={() => void handleLoad(s.id)}
-                          onRename={() => openRename(s)}
-                          onDelete={() => setDeleteTarget(s)}
-                          muted
-                        />
-                      </motion.li>
-                    ))}
-                  </AnimatePresence>
-                </motion.ul>
+                <SessionSection
+                  sessions={orderedUncategorizedSessions}
+                  orderKey={UNCATEGORIZED_KEY}
+                  orderMode={orderMode}
+                  sensors={dndSensors}
+                  onDragEnd={handleDragEnd}
+                  currentSessionId={currentSessionId}
+                  activitiesBySession={activitiesBySession}
+                  onLoad={(id) => void handleLoad(id)}
+                  onRename={(s) => openRename(s)}
+                  onDelete={(s) => setDeleteTarget(s)}
+                  muted
+                  keyPrefix="uncat-"
+                />
               </div>
             )}
           </>
@@ -434,6 +502,188 @@ function EmptyState({ projectSelected }: { projectSelected: boolean }) {
   );
 }
 
+/* ─────────────────────────  Order Mode Toggle  ───────────────────────── */
+
+function OrderModeToggle({
+  mode,
+  onToggle,
+}: {
+  mode: "auto" | "manual";
+  onToggle: () => void;
+}) {
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8 shrink-0"
+            onClick={onToggle}
+            aria-pressed={mode === "manual"}
+            aria-label={
+              mode === "auto"
+                ? "手動並替モードに切替"
+                : "更新順モードに切替"
+            }
+          >
+            {mode === "auto" ? (
+              <Clock className="h-3.5 w-3.5" aria-hidden />
+            ) : (
+              <ListOrdered className="h-3.5 w-3.5" aria-hidden />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="text-xs">
+          {mode === "auto"
+            ? "並び: 更新順 → 手動へ切替"
+            : "並び: 手動 → 更新順へ切替"}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+/* ─────────────────────────  Session Section  ───────────────────────── */
+
+/**
+ * PM-983: セクション 1 つ分の session list 描画。
+ * orderMode === "manual" のときは DndContext + SortableContext で wrap し、
+ * drag&drop 並替を可能にする。auto のときは従来通り motion.ul で描画。
+ */
+function SessionSection({
+  sessions,
+  orderKey,
+  orderMode,
+  sensors,
+  onDragEnd,
+  currentSessionId,
+  activitiesBySession,
+  onLoad,
+  onRename,
+  onDelete,
+  muted = false,
+  keyPrefix = "",
+}: {
+  sessions: SessionSummary[];
+  orderKey: string;
+  orderMode: "auto" | "manual";
+  sensors: ReturnType<typeof useSensors>;
+  onDragEnd: (ev: DragEndEvent, targetKey: string, ids: string[]) => void;
+  currentSessionId: string | null;
+  activitiesBySession: Map<string, ActivityKind>;
+  onLoad: (id: string) => void;
+  onRename: (s: SessionSummary) => void;
+  onDelete: (s: SessionSummary) => void;
+  muted?: boolean;
+  keyPrefix?: string;
+}) {
+  const ids = sessions.map((s) => s.id);
+
+  if (orderMode === "manual") {
+    return (
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragEnd={(ev) => onDragEnd(ev, orderKey, ids)}
+      >
+        <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+          <ul className="flex flex-col gap-1">
+            {sessions.map((s) => (
+              <SortableSessionItem
+                key={`${keyPrefix}${s.id}`}
+                session={s}
+                active={s.id === currentSessionId}
+                activity={activitiesBySession.get(s.id) ?? "idle"}
+                onClick={() => onLoad(s.id)}
+                onRename={() => onRename(s)}
+                onDelete={() => onDelete(s)}
+                muted={muted}
+              />
+            ))}
+          </ul>
+        </SortableContext>
+      </DndContext>
+    );
+  }
+
+  // auto モード（従来動作、アニメーション付き）
+  return (
+    <motion.ul layout className="flex flex-col gap-1">
+      <AnimatePresence initial={false}>
+        {sessions.map((s) => (
+          <motion.li
+            key={`${keyPrefix}${s.id}`}
+            layout
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, x: -12 }}
+            transition={{ duration: 0.15 }}
+          >
+            <SessionItem
+              session={s}
+              active={s.id === currentSessionId}
+              activity={activitiesBySession.get(s.id) ?? "idle"}
+              onClick={() => onLoad(s.id)}
+              onRename={() => onRename(s)}
+              onDelete={() => onDelete(s)}
+              muted={muted}
+            />
+          </motion.li>
+        ))}
+      </AnimatePresence>
+    </motion.ul>
+  );
+}
+
+/* ─────────────────────────  Sortable Session Item  ───────────────────────── */
+
+function SortableSessionItem({
+  session,
+  active,
+  activity,
+  onClick,
+  onRename,
+  onDelete,
+  muted = false,
+}: {
+  session: SessionSummary;
+  active: boolean;
+  activity: ActivityKind;
+  onClick: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  muted?: boolean;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id: session.id });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={cn(isDragging && "opacity-60")}
+    >
+      <SessionItem
+        session={session}
+        active={active}
+        activity={activity}
+        onClick={onClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        muted={muted}
+        dragHandleProps={{ ...attributes, ...listeners }}
+      />
+    </li>
+  );
+}
+
+/* ─────────────────────────  Session Item  ───────────────────────── */
+
 function SessionItem({
   session,
   active,
@@ -442,6 +692,7 @@ function SessionItem({
   onRename,
   onDelete,
   muted = false,
+  dragHandleProps,
 }: {
   session: SessionSummary;
   active: boolean;
@@ -455,6 +706,12 @@ function SessionItem({
   onDelete: () => void;
   /** 未分類セクション用にトーンを落とす */
   muted?: boolean;
+  /**
+   * PM-983: 手動並替モード時に SortableSessionItem から注入される drag handle props。
+   * 存在すれば左端に grip アイコンを表示し、そこのみドラッグ可能にする
+   * （card 本体の click はセッション読込のためドラッグから分離する）。
+   */
+  dragHandleProps?: React.HTMLAttributes<HTMLDivElement> & Record<string, unknown>;
 }) {
   const title = session.title?.trim() || "（無題のセッション）";
   const excerpt = session.lastMessageExcerpt ?? "（まだメッセージはありません）";
@@ -468,7 +725,8 @@ function SessionItem({
   return (
     <div
       className={cn(
-        "group relative flex cursor-pointer flex-col gap-1 rounded-md border p-2 pl-3 text-left transition-colors",
+        "group relative flex cursor-pointer flex-col gap-1 rounded-md border p-2 text-left transition-colors",
+        dragHandleProps ? "pl-7" : "pl-3",
         active
           ? "border-primary/60 bg-primary/10"
           : muted
@@ -491,6 +749,21 @@ function SessionItem({
         }
       }}
     >
+      {/* PM-983: drag handle（手動並替モード時のみ表示）。
+          handle 内の mousedown だけが DnD を起動するので、card 本体の click
+          が壊れない。 */}
+      {dragHandleProps && (
+        <div
+          {...dragHandleProps}
+          className="absolute left-1 top-1/2 flex h-5 w-5 -translate-y-1/2 cursor-grab items-center justify-center rounded text-muted-foreground/60 hover:bg-accent hover:text-foreground active:cursor-grabbing"
+          onClick={(e) => e.stopPropagation()}
+          aria-label="ドラッグで並び替え"
+          title="ドラッグで並び替え"
+          role="button"
+        >
+          <GripVertical className="h-3 w-3" aria-hidden />
+        </div>
+      )}
       {/* v3.5 Chunk C: 左端の activity marker（active session かつ active 状態時のみ） */}
       {showActivityMarker && (
         <span

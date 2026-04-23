@@ -11,6 +11,26 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.8.1] - 2026-04-24
+
+**Session Order Toggle + Drag Reorder** — セッション並び順を更新時刻 / 手動で切替。
+
+### ✨ Added
+
+- **セッション並び順 toggle** (PM-983)。新規セッションボタンの隣に追加。
+  - 🕐 モード（default）: SQLite `list_sessions` の `updated_at DESC`（従来動作）
+  - 📝 モード: 手動並べ替え（ドラッグ&ドロップで順序固定）
+- **手動並び替えの drag & drop** (PM-983)。`@dnd-kit/sortable` を追加し、
+  セッション項目の左端 `⋮⋮` grip アイコンで掴んでドラッグすると並び順を
+  入れ替え可能。並び順は project ごとに独立保存（`sumi:session-order`
+  localStorage、未分類セクションも別 key で独立管理）。
+- **セッション削除時の order 自動クリーンアップ** (PM-983)。削除された session
+  は保存済の並び順からも除去され stale 参照を回避。
+- 依存追加: `@dnd-kit/sortable@^10.0.0`
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.8.0] - 2026-04-24
 
 **Simplified Tray: Fixed 3 Chips + Editor Multi** — Tray の構成をオーナー要望に合わせて大幅簡素化。
