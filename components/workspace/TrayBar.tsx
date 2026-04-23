@@ -31,6 +31,8 @@ import { useProjectStore } from "@/lib/stores/project";
 import { useSessionStore } from "@/lib/stores/session";
 import { useTerminalStore } from "@/lib/stores/terminal";
 import {
+  useCurrentLayout,
+  useCurrentSlots,
   useWorkspaceLayoutStore,
   VISIBLE_SLOTS,
   type SlotContentKind,
@@ -67,8 +69,9 @@ function TrayChips() {
   const openFiles = useEditorStore((s) => s.openFiles);
   const terminals = useTerminalStore((s) => s.terminals);
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
-  const slots = useWorkspaceLayoutStore((s) => s.slots);
-  const layout = useWorkspaceLayoutStore((s) => s.layout);
+  // PM-981: current session の slots / layout を subscribe
+  const slots = useCurrentSlots();
+  const layout = useCurrentLayout();
   // PM-975: セッション別 tray フィルタの基準値。
   // 現在 session がある → その session で作成された chips のみ表示
   // 現在 session なし → 全 chips 表示（legacy / session-less モード）
@@ -411,8 +414,9 @@ function CreationButtons() {
   const createTerminal = useTerminalStore((s) => s.createTerminal);
   const addPreviewInstance = usePreviewInstances((s) => s.addInstance);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  const slots = useWorkspaceLayoutStore((s) => s.slots);
-  const layout = useWorkspaceLayoutStore((s) => s.layout);
+  // PM-981: current session の slots / layout を使う
+  const slots = useCurrentSlots();
+  const layout = useCurrentLayout();
   const setSlot = useWorkspaceLayoutStore((s) => s.setSlot);
   const [spawning, setSpawning] = useState(false);
 
@@ -543,7 +547,8 @@ function CreationButton({
 /* ─────────────────────────  Layout Switcher  ───────────────────────── */
 
 function LayoutSwitcher() {
-  const layout = useWorkspaceLayoutStore((s) => s.layout);
+  // PM-981: current session の layout を subscribe
+  const layout = useCurrentLayout();
   const setLayout = useWorkspaceLayoutStore((s) => s.setLayout);
 
   return (

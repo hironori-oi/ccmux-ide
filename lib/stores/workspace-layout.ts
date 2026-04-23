@@ -3,49 +3,57 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
+import { useSessionStore } from "@/lib/stores/session";
+
 /**
- * PM-969: ヘテロ分割ワークスペースのレイアウト状態。
+ * PM-969 / PM-981: ヘテロ分割ワークスペースのレイアウト状態（セッション別）。
  *
- * `viewMode === "workspace"` のとき、Shell は本 store を参照して slots の内容を
- * レンダリングする。各 slot は nullable で、`null` の場合は「ここにドラッグ」の
- * プレースホルダを表示する。
+ * ## v2 (PM-981): Session-scoped layouts
+ *
+ * v1 は 1 つの `{ slots, layout }` をグローバルに持っていたため、session を
+ * 切り替えても slot の中身が残り続ける問題があった（例: Session A で Chat 2 を
+ * 配置 → Session B に切替 → Chat 2 が slot に残り続ける）。
+ *
+ * v2 では **session id をキーにした Record<sid, { slots, layout }>** に変更。
+ * current session が変わると自動的にその session の layout を読み込む。
+ *
+ * - key = `useSessionStore.currentSessionId` / null 時は `"__default__"`
+ * - 各 session は独立した slot 配置・layout を持つ
+ * - 削除された chip (chat pane / file / pty) は全 session layouts から自動除去
  *
  * ## データモデル
  *
  * ```
- * slots: [A, B, C, D]    // 最大 4 スロット (2x2 grid)
- * layout: "1" | "2h" | "2v" | "4"
+ * layouts: {
+ *   "session-abc": { slots: [Chat1, Chat2, null, null], layout: "2h" },
+ *   "session-xyz": { slots: [Chat1, null, null, null],  layout: "1"  },
+ *   "__default__": { slots: [...], layout: "..." },  // session 未選択時
+ * }
  * ```
- *
- * - layout = "1": slot A のみ表示（B/C/D 非表示、データは保持）
- * - layout = "2h": A と B を横並び（C/D 非表示、データは保持）
- * - layout = "2v": A と C を縦並び（B/D 非表示、データは保持）
- * - layout = "4": 2x2 全部表示
  *
  * ## DnD source / target
  *
- * - Source: TrayBar のチップ（既存の chat session / editor file / terminal pty
- *   / preview 全てから導出）
- * - Target: 各 slot（`useDroppable` で登録）
- * - drop 時: `setSlot(slotIndex, content)` を呼び出し state を更新
+ * - Source: TrayBar のチップ
+ * - Target: 各 slot
+ * - drop 時: `setSlot(slotIndex, content)` を呼び出し、current session の slots
+ *   のみ更新する。他 session の layout は保持されて影響を受けない。
  */
 
 export type SlotContentKind = "chat" | "editor" | "terminal" | "preview";
 
 export interface SlotContent {
-  /** コンテンツの種類（どの pane / view を描画するか） */
   kind: SlotContentKind;
   /**
-   * 参照 ID（refId の意味は kind 別）:
-   * - "chat":     paneId (useChatStore.panes のキー)
-   * - "editor":   fileId (useEditorStore.openFiles[].id)
-   * - "terminal": ptyId (useTerminalStore.terminals のキー)
-   * - "preview":  projectId（preview は project 単位 1 個なので projectId）
+   * 参照 ID:
+   * - "chat":     paneId
+   * - "editor":   fileId
+   * - "terminal": ptyId
+   * - "preview":  preview instance id
    */
   refId: string;
 }
 
-/** slot 数の固定（2x2）。将来 6/9 等に拡張する場合はここを増やす。 */
+/** slot 数の固定（2x2）。 */
 export const MAX_WORKSPACE_SLOTS = 4;
 
 export type WorkspaceLayout = "1" | "2h" | "2v" | "4";
@@ -58,16 +66,51 @@ export const VISIBLE_SLOTS: Record<WorkspaceLayout, number[]> = {
   "4": [0, 1, 2, 3],
 };
 
-export interface WorkspaceLayoutState {
+/** 1 session 分の layout state。 */
+export interface SessionLayout {
   slots: Array<SlotContent | null>;
   layout: WorkspaceLayout;
-  /** slot index に content を割り当てる（既存 content は上書き） */
+}
+
+/** session 未選択 (currentSessionId === null) 時の layout を格納する特殊 key */
+export const DEFAULT_LAYOUT_KEY = "__default__";
+
+function makeEmptyLayout(): SessionLayout {
+  return {
+    slots: Array.from({ length: MAX_WORKSPACE_SLOTS }, () => null),
+    layout: "2h",
+  };
+}
+
+/**
+ * 現在 session id に対応する layout key を取得する。`useSessionStore` の
+ * getState() を直接呼ぶので、rehydrate 前や循環依存下でも安全に動く。
+ */
+function getCurrentLayoutKey(): string {
+  try {
+    return useSessionStore.getState().currentSessionId ?? DEFAULT_LAYOUT_KEY;
+  } catch {
+    return DEFAULT_LAYOUT_KEY;
+  }
+}
+
+export interface WorkspaceLayoutState {
+  /** session id → layout state の map */
+  layouts: Record<string, SessionLayout>;
+
+  /** current session の slots を更新する（同 chip が別 slot なら先に null 化） */
   setSlot: (slotIndex: number, content: SlotContent | null) => void;
-  /** 指定 refId が slot に入っていればそれを空にする（削除時の掃除） */
+
+  /**
+   * 指定 refId の chip を **全 session layouts** から除去する。
+   * 削除された chat pane / file / terminal / preview のクリーンアップ用。
+   */
   removeByRefId: (kind: SlotContentKind, refId: string) => void;
-  /** layout 切替 */
+
+  /** current session の layout を変更 */
   setLayout: (layout: WorkspaceLayout) => void;
-  /** 全 slot をクリア（デバッグ用 / UI リセット用） */
+
+  /** current session の slots を全て null にする */
   clearAll: () => void;
 }
 
@@ -84,20 +127,49 @@ const safeStorage = createJSONStorage(() => {
   return window.localStorage;
 });
 
+/**
+ * v1 → v2 migration:
+ * 旧 state は `{ slots, layout }` だった。v2 は `{ layouts: Record<sid, ...> }`。
+ * 旧データは `__default__` key に移して保持する（session 未選択時に表示される）。
+ */
+function migrateFromV1(
+  persisted: unknown
+): Partial<WorkspaceLayoutState> {
+  if (!persisted || typeof persisted !== "object") {
+    return { layouts: { [DEFAULT_LAYOUT_KEY]: makeEmptyLayout() } };
+  }
+  const old = persisted as {
+    slots?: Array<SlotContent | null>;
+    layout?: WorkspaceLayout;
+    layouts?: Record<string, SessionLayout>;
+  };
+  // 既に v2 shape なら layouts をそのまま使う
+  if (old.layouts) {
+    return { layouts: old.layouts };
+  }
+  // v1 shape を __default__ に移植
+  const legacyLayout: SessionLayout = {
+    slots:
+      Array.isArray(old.slots) && old.slots.length === MAX_WORKSPACE_SLOTS
+        ? old.slots.slice()
+        : Array.from({ length: MAX_WORKSPACE_SLOTS }, () => null),
+    layout: old.layout ?? "2h",
+  };
+  return { layouts: { [DEFAULT_LAYOUT_KEY]: legacyLayout } };
+}
+
 export const useWorkspaceLayoutStore = create<WorkspaceLayoutState>()(
   persist(
     (set) => ({
-      slots: Array.from({ length: MAX_WORKSPACE_SLOTS }, () => null),
-      layout: "2h",
+      layouts: { [DEFAULT_LAYOUT_KEY]: makeEmptyLayout() },
 
       setSlot: (slotIndex, content) =>
         set((s) => {
           if (slotIndex < 0 || slotIndex >= MAX_WORKSPACE_SLOTS) return s;
-          const next = s.slots.slice();
-          // PM-980: 同じ chip (kind + refId) が別 slot に存在する場合は先に
-          // そちらを空にする（1 chip = 1 slot 制約）。
-          // 「移動」のセマンティクス: slot A → slot B にドラッグしたら A は空、
-          // B に表示。同じ内容の複製は作らない。
+          const key = getCurrentLayoutKey();
+          const cur = s.layouts[key] ?? makeEmptyLayout();
+          const next = cur.slots.slice();
+          // PM-980: 同じ chip が他 slot にあれば先に null 化（1 chip = 1 slot）
           if (content) {
             for (let i = 0; i < next.length; i++) {
               if (i === slotIndex) continue;
@@ -108,28 +180,113 @@ export const useWorkspaceLayoutStore = create<WorkspaceLayoutState>()(
             }
           }
           next[slotIndex] = content;
-          return { slots: next };
+          return {
+            layouts: { ...s.layouts, [key]: { ...cur, slots: next } },
+          };
         }),
 
       removeByRefId: (kind, refId) =>
         set((s) => {
-          const next = s.slots.map((c) =>
-            c && c.kind === kind && c.refId === refId ? null : c
-          );
-          return { slots: next };
+          // PM-981: 削除時は **全 session** の layouts から該当 refId を除去。
+          // chip が削除された後も別 session の slot に stale 参照が残ると、
+          // session 切替時に「存在しない chat/file/pty」が描画されてしまうため。
+          const nextLayouts: Record<string, SessionLayout> = {};
+          for (const [sid, layout] of Object.entries(s.layouts)) {
+            nextLayouts[sid] = {
+              ...layout,
+              slots: layout.slots.map((c) =>
+                c && c.kind === kind && c.refId === refId ? null : c
+              ),
+            };
+          }
+          return { layouts: nextLayouts };
         }),
 
-      setLayout: (layout) => set({ layout }),
+      setLayout: (layout) =>
+        set((s) => {
+          const key = getCurrentLayoutKey();
+          const cur = s.layouts[key] ?? makeEmptyLayout();
+          return {
+            layouts: { ...s.layouts, [key]: { ...cur, layout } },
+          };
+        }),
 
       clearAll: () =>
-        set({
-          slots: Array.from({ length: MAX_WORKSPACE_SLOTS }, () => null),
+        set((s) => {
+          const key = getCurrentLayoutKey();
+          return {
+            layouts: { ...s.layouts, [key]: makeEmptyLayout() },
+          };
         }),
     }),
     {
       name: STORAGE_KEY,
       storage: safeStorage,
-      version: 1,
+      version: 2,
+      migrate: (persisted, version) => {
+        if (version < 2) {
+          const migrated = migrateFromV1(persisted);
+          return migrated as WorkspaceLayoutState;
+        }
+        return persisted as WorkspaceLayoutState;
+      },
     }
   )
 );
+
+// ---------------------------------------------------------------------------
+// Helper hooks: current session の layout を subscribe する。
+// component はこれらを経由して slots / layout を読む。
+// ---------------------------------------------------------------------------
+
+/**
+ * current session に対応する layout key を subscribe（session 切替で変化）。
+ * hooks 内部で session / layout 両方を subscribe するための基盤。
+ */
+function useCurrentLayoutKey(): string {
+  const sid = useSessionStore((s) => s.currentSessionId);
+  return sid ?? DEFAULT_LAYOUT_KEY;
+}
+
+/**
+ * 現在 session の slots を subscribe。session 切替で自動的に新 session の
+ * slots に切り替わる。参照が変わらなければ React は再レンダしない。
+ */
+export function useCurrentSlots(): Array<SlotContent | null> {
+  const key = useCurrentLayoutKey();
+  return useWorkspaceLayoutStore((s) => {
+    const layout = s.layouts[key];
+    if (!layout) {
+      // 初回アクセス時は空 slots を返す（store は setSlot 時に初期化）
+      return EMPTY_SLOTS;
+    }
+    return layout.slots;
+  });
+}
+
+/** 固定参照の空 slots 配列（React の snapshot caching 要件）。 */
+const EMPTY_SLOTS: Array<SlotContent | null> = Object.freeze(
+  Array.from({ length: MAX_WORKSPACE_SLOTS }, () => null)
+) as Array<SlotContent | null>;
+
+/**
+ * 指定 slotIndex の current session content を subscribe する専用 hook。
+ * SlotContainer が使う（slot 1 件だけの購読で無駄な rerender を抑制）。
+ */
+export function useCurrentSlotContent(
+  slotIndex: number
+): SlotContent | null {
+  const key = useCurrentLayoutKey();
+  return useWorkspaceLayoutStore((s) => {
+    const layout = s.layouts[key];
+    return layout?.slots[slotIndex] ?? null;
+  });
+}
+
+/**
+ * 現在 session の layout mode を subscribe。
+ */
+export function useCurrentLayout(): WorkspaceLayout {
+  const key = useCurrentLayoutKey();
+  return useWorkspaceLayoutStore((s) => s.layouts[key]?.layout ?? "2h");
+}

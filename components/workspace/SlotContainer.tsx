@@ -22,6 +22,7 @@ import { CCMUX_FILE_PATH_MIME } from "@/lib/file-drag";
 import { useEditorStore } from "@/lib/stores/editor";
 import { useTerminalStore } from "@/lib/stores/terminal";
 import {
+  useCurrentSlotContent,
   useWorkspaceLayoutStore,
   type SlotContent,
 } from "@/lib/stores/workspace-layout";
@@ -43,7 +44,8 @@ export function SlotContainer({
   slotIndex: number;
   slotLabel: string;
 }) {
-  const content = useWorkspaceLayoutStore((s) => s.slots[slotIndex]);
+  // PM-981: current session の slot 内容を subscribe（session 切替で自動更新）
+  const content = useCurrentSlotContent(slotIndex);
   const setSlot = useWorkspaceLayoutStore((s) => s.setSlot);
   const openFile = useEditorStore((s) => s.openFile);
 

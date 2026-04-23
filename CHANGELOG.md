@@ -11,6 +11,33 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.7.4] - 2026-04-24
+
+**Session-Scoped Workspace Layout** — session ごとに slot 配置と layout を独立管理。
+
+### 💎 Changed
+
+- **`useWorkspaceLayoutStore` を session-keyed に全面 refactor** (PM-981)。
+  - v1 は `{ slots, layout }` をグローバルに 1 組だけ持っていたため、session を
+    切替えても slot の中身が残り続け、「Session A で作った Chat 2 が Session B
+    の slot にも残って表示される」状態になっていた。
+  - v2 から `layouts: Record<sessionId, { slots, layout }>` に変更。
+    各 session が独立した slot 配置と layout を持ち、session 切替で自動的に
+    その session の layout に切り替わる。
+  - session 未選択時は `"__default__"` key を使用（後方互換）。
+  - 既存 v1 データは migration で `__default__` key に移され保持される。
+- 新 hook `useCurrentSlots()` / `useCurrentSlotContent(i)` / `useCurrentLayout()`
+  を追加。component はこれらを経由して current session の layout を購読する。
+- **削除された chip は全 session layouts から自動除去** (PM-981)。`removeByRefId`
+  が他 session の slot にも波及してクリーンアップする。stale 参照で「存在しない
+  chat/file/pty」が描画される問題を回避。
+- **Auto-provision を session 切替時にも発火** (PM-981)。新 session の slots が
+  全て空ならメインチャットを slot 0 に自動配置する（依存配列に
+  `currentSessionId` を追加）。
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.7.3] - 2026-04-24
 
 **One Chip = One Slot** — 同じチップは常に 1 slot 限定で表示。

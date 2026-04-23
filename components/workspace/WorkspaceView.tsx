@@ -15,7 +15,10 @@ import {
 import { TrayBar } from "@/components/workspace/TrayBar";
 import { SlotContainer } from "@/components/workspace/SlotContainer";
 import { DEFAULT_PANE_ID } from "@/lib/stores/chat";
+import { useSessionStore } from "@/lib/stores/session";
 import {
+  useCurrentLayout,
+  useCurrentSlots,
   useWorkspaceLayoutStore,
   type SlotContentKind,
   type WorkspaceLayout,
@@ -33,23 +36,28 @@ import {
  * 内で個別に処理する（@dnd-kit をバイパス）。
  */
 export function WorkspaceView() {
-  const layout = useWorkspaceLayoutStore((s) => s.layout);
+  // PM-981: current session の layout / slots を subscribe
+  const layout = useCurrentLayout();
   const setSlot = useWorkspaceLayoutStore((s) => s.setSlot);
-  const slots = useWorkspaceLayoutStore((s) => s.slots);
+  const slots = useCurrentSlots();
+  // PM-981: session 切替を検知して auto-provision を再実行する
+  const currentSessionId = useSessionStore((s) => s.currentSessionId);
 
-  // PM-977: 初回起動 UX。全 slot が空なら main chat を slot 0 に自動配置する。
-  // 旧 5 タブ UI では「チャットタブを開くと即 textarea 表示」だったが、workspace-
-  // first UI では明示配置しないと textarea が出ず「空っぽの画面」で戸惑うため。
-  // ユーザーが明示的に全 slot を空にした状態でも再起動で再配置されるので、
-  // 「常に何か入っている」安心感がある（不要なら即 ✕ で消せる）。
+  // PM-977 / PM-981: 初回起動 UX + session 切替 UX。
+  // Current session の全 slot が空なら main chat を slot 0 に自動配置する。
+  // - 初回起動時: session 未選択 or 初めての session で slot が空 → 自動配置
+  // - session 切替時: 新 session の slot が空 → 自動配置
+  // - ユーザーが明示的に全 slot を空にした状態でも session を切替えて戻すと
+  //   再配置される（「空っぽで戸惑う」を回避）
   useEffect(() => {
     const allEmpty = slots.every((s) => s === null);
     if (allEmpty) {
       setSlot(0, { kind: "chat", refId: DEFAULT_PANE_ID });
     }
-    // 初回のみ判定したいので依存は空配列。
+    // currentSessionId の変化で再評価（session 切替で新 session が空なら
+    // 自動配置）。slots の変化では発火させない（ユーザーの手動操作を尊重）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [currentSessionId]);
 
   const [activeDrag, setActiveDrag] = useState<{
     kind: SlotContentKind;
