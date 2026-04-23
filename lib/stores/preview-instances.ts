@@ -31,11 +31,23 @@ export interface PreviewInstance {
   id: string;
   url: string;
   projectId: string;
+  /**
+   * PM-975: 作成時にアクティブだった SQLite session id。
+   * tray の session フィルタで該当 session のチップだけ表示するのに使う。
+   */
+  creatingSessionId?: string | null;
 }
 
 interface PreviewInstancesState {
   instances: Record<string, PreviewInstance>;
-  addInstance: (projectId: string, initialUrl?: string) => string;
+  addInstance: (
+    projectId: string,
+    options?: {
+      initialUrl?: string;
+      /** PM-975: 作成時 session id（tray フィルタ用） */
+      sessionId?: string | null;
+    }
+  ) => string;
   removeInstance: (id: string) => void;
   setUrl: (id: string, url: string) => void;
   /** 指定 project に属する instance を全削除（project 削除時用、現状呼出元なし）。 */
@@ -67,15 +79,16 @@ export const usePreviewInstances = create<PreviewInstancesState>()(
     (set) => ({
       instances: {},
 
-      addInstance: (projectId, initialUrl) => {
+      addInstance: (projectId, options) => {
         const id = newPreviewId();
         set((s) => ({
           instances: {
             ...s.instances,
             [id]: {
               id,
-              url: initialUrl ?? DEFAULT_PREVIEW_URL,
+              url: options?.initialUrl ?? DEFAULT_PREVIEW_URL,
               projectId,
+              creatingSessionId: options?.sessionId ?? null,
             },
           },
         }));

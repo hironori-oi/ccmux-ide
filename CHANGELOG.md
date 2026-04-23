@@ -11,6 +11,37 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.7.0] - 2026-04-24
+
+**Session-Scoped Tray + Auth Announce Dialog** — セッション別の Tray チップ管理と認証案内 UX 強化。
+
+### ✨ Added
+
+- **セッション別 Tray チップ** (PM-975)。各チャット / エディタ / ターミナル /
+  プレビューを **作成時のアクティブ session id** でタグ付けし、Tray はその
+  `currentSessionId` に紐づくチップのみ表示する。セッション切替で workspace
+  の作業単位が視覚的に分離される:
+  - `OpenFile` / `TerminalState` / `PreviewInstance` に `creatingSessionId`
+    フィールド追加
+  - Chat pane は `pane.currentSessionId` との一致で filter（main pane は
+    常時表示、他 pane の作成起点のため）
+  - Legacy（未タグ）の資産は全 session で表示する後方互換
+  - セッション未選択時（`currentSessionId === null`）は全 chips 表示
+
+- **認証案内ダイアログ** (PM-974)。旧 10 秒 toast では見落としやすかった
+  Claude Code 認証案内を **永続モーダル** に格上げ。workspace 起動後に
+  `check_claude_authenticated` を呼び、未認証なら以下を表示:
+  - 方法 A: `claude login`（Claude Max / Pro、推奨）— クリップボード
+    コピーボタン付き
+  - 方法 B: Anthropic API Key — `/settings` 遷移ボタン
+  - **再確認ボタン**でターミナルで `claude login` 実行後に Rust 側 check
+    を再実行、成功で自動 close
+  - status 詳細表示（`NotFound` / `TokenMissing`）
+  - 「閉じる」でこのセッション限定で非表示（再起動時に再表示）
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.6.3] - 2026-04-23
 
 **Multi-instance Preview** — プレビューを複数同時に独立 URL で表示可能に。

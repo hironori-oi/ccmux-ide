@@ -376,6 +376,14 @@ export const useEditorStore = create<EditorState>()(
         const id = newId();
         const title = basename(path);
         const language = detectLang(path);
+        // PM-975: 現在の session を取得してタグ付け（動的 import で循環参照回避）
+        let creatingSessionId: string | null = null;
+        try {
+          const { useSessionStore } = await import("@/lib/stores/session");
+          creatingSessionId = useSessionStore.getState().currentSessionId;
+        } catch {
+          // session store 未利用の context ではタグなし
+        }
 
         // 先に placeholder を挿入、active 化してから実 read
         const placeholder: OpenFile = {
@@ -388,6 +396,7 @@ export const useEditorStore = create<EditorState>()(
           dirty: false,
           loading: true,
           error: null,
+          creatingSessionId,
         };
         set((state) => {
           const pane =

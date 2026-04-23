@@ -28,6 +28,7 @@ import { useChatStore } from "@/lib/stores/chat";
 import { useEditorStore } from "@/lib/stores/editor";
 import { usePreviewInstances } from "@/lib/stores/preview-instances";
 import { useProjectStore } from "@/lib/stores/project";
+import { useSessionStore } from "@/lib/stores/session";
 import { useTerminalStore } from "@/lib/stores/terminal";
 import {
   useWorkspaceLayoutStore,
@@ -68,6 +69,10 @@ function TrayChips() {
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const slots = useWorkspaceLayoutStore((s) => s.slots);
   const layout = useWorkspaceLayoutStore((s) => s.layout);
+  // PM-975: セッション別 tray フィルタの基準値。
+  // 現在 session がある → その session で作成された chips のみ表示
+  // 現在 session なし → 全 chips 表示（legacy / session-less モード）
+  const currentSessionId = useSessionStore((s) => s.currentSessionId);
 
   const visibleSlotIndexes = useMemo(() => VISIBLE_SLOTS[layout], [layout]);
   const placedRefs = useMemo(() => {
@@ -79,11 +84,18 @@ function TrayChips() {
     return m;
   }, [slots, visibleSlotIndexes]);
 
-  // PM-971: チャット pane を追加順で並べ、「Chat 1」「Chat 2」と連番表示。
-  // Object.keys の順は追加順が保証される（JS spec）。
+  // PM-975: session フィルタ。currentSessionId がある → pane.currentSessionId が
+  // 一致する chat pane のみ表示。currentSessionId 無しの時は全 pane 表示。
+  // main pane は「常時存在」が前提のため session 関係なく表示する（他 pane 作成の
+  // 起点として残す）。
   const chatItems = useMemo(() => {
-    const paneIds = Object.keys(chatPanes);
-    return paneIds.map((paneId, idx) => ({
+    const paneEntries = Object.entries(chatPanes);
+    const filtered = paneEntries.filter(([paneId, pane]) => {
+      if (paneId === "main") return true; // main は常時表示
+      if (!currentSessionId) return true; // session 未選択時は全表示
+      return pane.currentSessionId === currentSessionId;
+    });
+    return filtered.map(([paneId], idx) => ({
       kind: "chat" as const,
       refId: paneId,
       label: `Chat ${idx + 1}`,
@@ -91,27 +103,39 @@ function TrayChips() {
         paneId === "main"
           ? `Chat ${idx + 1}（メインチャット）`
           : `Chat ${idx + 1}（pane-id: ${paneId}）`,
-      // main は削除不可（chat は常に 1 個以上必要）。他 pane は削除可。
       deletable: paneId !== "main",
     }));
-  }, [chatPanes]);
+  }, [chatPanes, currentSessionId]);
 
   const editorItems = useMemo(
     () =>
-      openFiles.map((f) => ({
-        kind: "editor" as const,
-        refId: f.id,
-        label: f.title,
-        tooltip: f.path,
-        deletable: true,
-      })),
-    [openFiles]
+      openFiles
+        .filter((f) => {
+          // PM-975: creatingSessionId が一致する file のみ（legacy = null は常時表示）
+          if (!f.creatingSessionId) return true;
+          if (!currentSessionId) return true;
+          return f.creatingSessionId === currentSessionId;
+        })
+        .map((f) => ({
+          kind: "editor" as const,
+          refId: f.id,
+          label: f.title,
+          tooltip: f.path,
+          deletable: true,
+        })),
+    [openFiles, currentSessionId]
   );
 
   const terminalItems = useMemo(() => {
     if (!activeProjectId) return [];
     return Object.values(terminals)
       .filter((t) => t.projectId === activeProjectId && !t.exited)
+      .filter((t) => {
+        // PM-975: creatingSessionId 一致（legacy = null は常時表示）
+        if (!t.creatingSessionId) return true;
+        if (!currentSessionId) return true;
+        return t.creatingSessionId === currentSessionId;
+      })
       .map((t, i) => ({
         kind: "terminal" as const,
         refId: t.ptyId,
@@ -119,15 +143,19 @@ function TrayChips() {
         tooltip: t.title,
         deletable: true,
       }));
-  }, [terminals, activeProjectId]);
+  }, [terminals, activeProjectId, currentSessionId]);
 
-  // PM-973: Preview は project 依存ではなく instance ごとに独立した URL を持つ。
-  // Tray 左側の「既定チップ」を廃止し、+ ボタンで作った instance のみ表示。
+  // PM-973 / PM-975: Preview は instance ごとに独立、creatingSessionId で filter。
   const previewInstancesMap = usePreviewInstances((s) => s.instances);
   const previewItems = useMemo(() => {
     if (!activeProjectId) return [];
     return Object.values(previewInstancesMap)
       .filter((inst) => inst.projectId === activeProjectId)
+      .filter((inst) => {
+        if (!inst.creatingSessionId) return true;
+        if (!currentSessionId) return true;
+        return inst.creatingSessionId === currentSessionId;
+      })
       .map((inst, idx) => ({
         kind: "preview" as const,
         refId: inst.id,
@@ -135,7 +163,7 @@ function TrayChips() {
         tooltip: inst.url,
         deletable: true,
       }));
-  }, [previewInstancesMap, activeProjectId]);
+  }, [previewInstancesMap, activeProjectId, currentSessionId]);
 
   const isEmpty =
     chatItems.length === 0 &&
@@ -371,6 +399,7 @@ function CreationButtons() {
   const addChatPane = useChatStore((s) => s.addPane);
   const createTerminal = useTerminalStore((s) => s.createTerminal);
   const addPreviewInstance = usePreviewInstances((s) => s.addInstance);
+  const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const slots = useWorkspaceLayoutStore((s) => s.slots);
   const layout = useWorkspaceLayoutStore((s) => s.layout);
   const setSlot = useWorkspaceLayoutStore((s) => s.setSlot);
@@ -411,7 +440,10 @@ function CreationButtons() {
    */
   function handleAddPreview() {
     if (disabled || !activeProjectId) return;
-    const id = addPreviewInstance(activeProjectId);
+    // PM-975: 現在 session を instance に記録 (tray filter 用)
+    const id = addPreviewInstance(activeProjectId, {
+      sessionId: currentSessionId,
+    });
     // 空 slot を探して自動配置（なければ tray のみ）
     const visibleIndexes = VISIBLE_SLOTS[layout];
     const emptyIndex = visibleIndexes.find((i) => !slots[i]);

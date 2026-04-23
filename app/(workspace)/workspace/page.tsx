@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { AuthPromptDialog } from "@/components/auth/AuthPromptDialog";
 import { HelloBubble } from "@/components/onboarding/HelloBubble";
 import { CommandPalette } from "@/components/palette/CommandPalette";
 import { FilePalette } from "@/components/palette/FilePalette";
@@ -36,6 +37,8 @@ export default function WorkspacePage() {
       <CommandPalette onOpenSearch={() => setSearchOpen(true)} />
       <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />
       <FilePalette />
+      {/* PM-974: 認証未設定なら永続ダイアログで案内（toast だけでは見落としがち） */}
+      <AuthPromptDialog />
     </div>
   );
 }

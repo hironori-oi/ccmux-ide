@@ -60,6 +60,11 @@ export interface TerminalState {
   exitCode: number | null;
   /** exit 受信後 true。sub-tab に「終了」ラベル、close ボタンで除去可。 */
   exited: boolean;
+  /**
+   * PM-975: 作成時にアクティブだった SQLite session id。
+   * tray の session フィルタで該当 session のチップだけ表示するのに使う。
+   */
+  creatingSessionId?: string | null;
 }
 
 /**
@@ -179,6 +184,14 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
           (t.paneId ?? TERMINAL_DEFAULT_PANE_ID) === resolvedPaneId
       ).length;
       const title = makeTitle(existing + 1, shell);
+      // PM-975: 現在の session を取得してタグ付け
+      let creatingSessionId: string | null = null;
+      try {
+        const { useSessionStore } = await import("@/lib/stores/session");
+        creatingSessionId = useSessionStore.getState().currentSessionId;
+      } catch {
+        // session store 未利用の context ではタグなし
+      }
       set((prev) => ({
         terminals: {
           ...prev.terminals,
@@ -190,6 +203,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
             startedAt: Date.now(),
             exitCode: null,
             exited: false,
+            creatingSessionId,
           },
         },
         activeTerminalId: ptyId,

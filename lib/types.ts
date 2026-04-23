@@ -425,6 +425,12 @@ export interface OpenFile {
   dirty: boolean;
   loading: boolean;
   error: string | null;
+  /**
+   * PM-975: 作成時にアクティブだった SQLite session id。
+   * tray の session フィルタで該当 session のチップだけ表示するのに使う。
+   * null は「session なし時 / legacy 既存ファイル」で、全セッションで表示される。
+   */
+  creatingSessionId?: string | null;
 }
 
 /** `get_usage_stats` 戻り値。 */
