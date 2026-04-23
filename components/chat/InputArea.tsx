@@ -20,7 +20,9 @@ import { ClearSessionDialog } from "@/components/chat/ClearSessionDialog";
 import { ModelPickerDialog } from "@/components/chat/ModelPickerDialog";
 import { EffortPickerDialog } from "@/components/chat/EffortPickerDialog";
 import { useChatStore, DEFAULT_PANE_ID, type Attachment } from "@/lib/stores/chat";
-import { useDialogStore } from "@/lib/stores/dialog";
+// DEC-057 v1.11.0: dialog store は session-preferences の継承源として使用しない
+// (project 間 leak 防止)。ModelPickerDialog/EffortPickerDialog/HelpDialog 等で
+// 独立に useDialogStore を参照しているため、import は本ファイルから除去して OK。
 import {
   resolveSessionPreferences,
   useSessionPreferencesStore,
@@ -361,19 +363,23 @@ export function InputArea({
       // dispatch される (split second pane 送信時の DEFAULT_PANE_ID 誤配信を解消)。
       claimNextSendForPane(activeProjectId, paneId);
 
-      // v1.9.0 (DEC-053): session 別 preferences を per-query options として Rust に
+      // v1.11.0 (DEC-057): session 別 preferences を per-query options として Rust に
       // 渡す。sidecar (handlePrompt) は req.options.{model,maxThinkingTokens,
       // permissionMode} を SDK query option に上書きする実装なので、argv 再起動を
-      // 経ずに設定切替が適用される。global fallback は dialog store の
-      // selectedModel / selectedEffort。
-      const dialog = useDialogStore.getState();
+      // 経ずに設定切替が適用される。
+      //
+      // DEC-053 で使っていた dialog.selectedModel / selectedEffort 継承は撤廃。
+      // fallback は **当該 project の perProject** → HARD_DEFAULT。
+      const prefState = useSessionPreferencesStore.getState();
+      const projectPref = prefState.perProject[activeProjectId] ?? null;
       const globalDefaults: SessionPreferences = {
-        model: dialog.selectedModel ?? null,
-        effort: dialog.selectedEffort ?? null,
-        permissionMode: DEFAULT_PERMISSION_MODE,
+        model: projectPref?.model ?? null,
+        effort: projectPref?.effort ?? null,
+        permissionMode:
+          projectPref?.permissionMode ?? DEFAULT_PERMISSION_MODE,
       };
       const resolvedPrefs = resolveSessionPreferences(
-        useSessionPreferencesStore.getState(),
+        prefState,
         sessionId,
         globalDefaults,
       );

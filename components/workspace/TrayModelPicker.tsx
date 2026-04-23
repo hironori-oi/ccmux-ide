@@ -14,9 +14,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useDialogStore } from "@/lib/stores/dialog";
+import { useProjectStore } from "@/lib/stores/project";
 import { useSessionStore } from "@/lib/stores/session";
 import {
+  selectProjectPreferences,
   selectSessionPreferences,
   useSessionPreferencesStore,
 } from "@/lib/stores/session-preferences";
@@ -24,27 +25,33 @@ import { MODEL_CHOICES, type ModelId } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
- * PRJ-012 v1.9.0 (DEC-053): TrayBar 用 **セッション別モデル picker**。
+ * PRJ-012 v1.11.0 (DEC-057): TrayBar 用 **セッション別モデル picker**。
  *
  * - 選択値は session-preferences store (`perSession[sessionId].model`) に保存
+ * - 変更時は `perProject[projectId].model` にも sticky に記録される（DEC-057）
  * - session 未選択時は disabled + `—` 表示
- * - model 未設定時は dialog store の global default を fallback として表示
+ * - model 未設定時は **当該 project の perProject[projectId]** を fallback として表示
+ *   （dialog store の selectedModel は参照しない / project leak 防止）
  * - 値変更は per-query で sidecar に反映される（`send_agent_prompt` options）。
  *   argv 再起動は行わない（DEC-053）
  */
 export function TrayModelPicker() {
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const pref = useSessionPreferencesStore((s) =>
     selectSessionPreferences(s, currentSessionId),
   );
+  const projectPref = useSessionPreferencesStore((s) =>
+    selectProjectPreferences(s, activeProjectId),
+  );
   const setPreference = useSessionPreferencesStore((s) => s.setPreference);
-
-  const dialogModel = useDialogStore((s) => s.selectedModel);
 
   const [open, setOpen] = useState(false);
 
   const disabled = !currentSessionId;
-  const effective: ModelId = pref?.model ?? dialogModel;
+  // DEC-057: 表示 fallback も perProject を参照（dialog store には触らない）
+  const effective: ModelId | null =
+    pref?.model ?? projectPref?.model ?? null;
   const meta =
     MODEL_CHOICES.find((m) => m.id === effective) ?? MODEL_CHOICES[0];
 
@@ -52,7 +59,14 @@ export function TrayModelPicker() {
     if (!currentSessionId) return;
     setOpen(false);
     if (id === effective) return;
-    setPreference(currentSessionId, { model: id });
+    // DEC-057: session 所属 project をまず session cache から解決、
+    // 取れなければ activeProjectId を使う（通常は一致する）
+    const owningProjectId =
+      useSessionStore
+        .getState()
+        .sessions.find((s) => s.id === currentSessionId)?.projectId ??
+      activeProjectId;
+    setPreference(currentSessionId, owningProjectId ?? null, { model: id });
   }
 
   if (disabled) {

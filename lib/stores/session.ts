@@ -158,39 +158,57 @@ async function readActiveProjectId(): Promise<string | null> {
 }
 
 /**
- * v1.9.0 (DEC-053): 新規 session 確定直後に session-preferences store を
- * global default で seed する。既に登録済なら no-op (initializeSession 内部で
- * guard 済)。
+ * v1.11.0 (DEC-057): 新規 session 確定直後に session-preferences store を
+ * **当該 project の perProject** (無ければ HARD_DEFAULT_PREFERENCES) で seed する。
+ * 既に登録済なら no-op (initializeSession 内部で guard 済)。
  *
- * 循環依存 (dialog / types → session) を避けるため動的 import で都度ロードする。
+ * DEC-053 で使っていた dialog.selectedModel / selectedEffort 参照は除去。
+ * project 切替時の設定 leak を根治する（DEC-057）。
+ *
+ * 循環依存を避けるため動的 import で都度ロードする。
  */
-async function seedSessionPreferences(sessionId: string): Promise<void> {
+async function seedSessionPreferences(
+  sessionId: string,
+  projectId: string | null,
+): Promise<void> {
   if (!sessionId) return;
   try {
-    const [prefMod, dialogMod, typesMod] = await Promise.all([
-      import("@/lib/stores/session-preferences"),
-      import("@/lib/stores/dialog"),
-      import("@/lib/types"),
-    ]);
-    const dialog = dialogMod.useDialogStore.getState();
-    prefMod.useSessionPreferencesStore.getState().initializeSession(sessionId, {
-      model: dialog.selectedModel ?? null,
-      effort: dialog.selectedEffort ?? null,
-      permissionMode: typesMod.DEFAULT_PERMISSION_MODE,
-    });
+    const prefMod = await import("@/lib/stores/session-preferences");
+    prefMod.useSessionPreferencesStore
+      .getState()
+      .initializeSession(
+        sessionId,
+        projectId,
+        prefMod.HARD_DEFAULT_PREFERENCES,
+      );
   } catch {
     // store 未ロード / SSR などでは黙って skip
   }
 }
 
 /**
- * v1.9.0 (DEC-053): 既存 session の lazy 初期化。
+ * v1.11.0 (DEC-057): 既存 session の lazy 初期化。
  *
  * 過去バージョンで作成された session (= session-preferences に未登録)
- * を UI で開いた際に呼ぶ。登録済なら initializeSession 内で no-op。
+ * を UI で開いた際に呼ぶ。登録済なら ensureSessionPreferences 内で no-op。
  */
-async function ensureSessionPreferences(sessionId: string): Promise<void> {
-  return seedSessionPreferences(sessionId);
+async function ensureSessionPreferences(
+  sessionId: string,
+  projectId: string | null,
+): Promise<void> {
+  if (!sessionId) return;
+  try {
+    const prefMod = await import("@/lib/stores/session-preferences");
+    prefMod.useSessionPreferencesStore
+      .getState()
+      .ensureSessionPreferences(
+        sessionId,
+        projectId,
+        prefMod.HARD_DEFAULT_PREFERENCES,
+      );
+  } catch {
+    // store 未ロード / SSR などでは黙って skip
+  }
 }
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -234,8 +252,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       useChatStore.getState().setMessages(chatMessages);
       useChatStore.getState().setSessionId(id);
       set({ currentSessionId: id, isLoading: false });
-      // v1.9.0 (DEC-053): 既存 session の lazy 初期化（未登録なら seed）。
-      void ensureSessionPreferences(id);
+      // v1.11.0 (DEC-057): 既存 session の lazy 初期化（未登録なら perProject or
+      // HARD_DEFAULT で seed）。所属 projectId は sessions cache から解決する。
+      const owningProjectId =
+        get().sessions.find((s) => s.id === id)?.projectId ?? null;
+      void ensureSessionPreferences(id, owningProjectId);
     } catch (e) {
       set({
         error: String(e),
@@ -283,8 +304,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         currentSessionId: session.id,
         isLoading: false,
       });
-      // v1.9.0 (DEC-053): 新規 session の preferences を global default で seed する。
-      void seedSessionPreferences(session.id);
+      // v1.11.0 (DEC-057): 新規 session の preferences を当該 project の perProject
+      // (無ければ HARD_DEFAULT_PREFERENCES) で seed する。dialog store は参照しない。
+      void seedSessionPreferences(session.id, projectId);
       return session;
     } catch (e) {
       set({ error: String(e), isLoading: false });

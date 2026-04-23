@@ -14,9 +14,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useDialogStore } from "@/lib/stores/dialog";
+import { useProjectStore } from "@/lib/stores/project";
 import { useSessionStore } from "@/lib/stores/session";
 import {
+  selectProjectPreferences,
   selectSessionPreferences,
   useSessionPreferencesStore,
 } from "@/lib/stores/session-preferences";
@@ -24,26 +25,31 @@ import { EFFORT_CHOICES, type EffortLevel } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
- * PRJ-012 v1.9.0 (DEC-053): TrayBar 用 **セッション別 推論工数 picker**。
+ * PRJ-012 v1.11.0 (DEC-057): TrayBar 用 **セッション別 推論工数 picker**。
  *
  * - 選択値は session-preferences store (`perSession[sessionId].effort`)
+ * - 変更時は `perProject[projectId].effort` にも sticky に記録
  * - session 未選択時は disabled + `—`
- * - 未設定時は dialog store の global default を fallback 表示
+ * - 未設定時は **当該 project の perProject** を fallback 表示（dialog 参照なし）
  * - 値変更は per-query で `send_agent_prompt` options.maxThinkingTokens に反映
  */
 export function TrayEffortPicker() {
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const pref = useSessionPreferencesStore((s) =>
     selectSessionPreferences(s, currentSessionId),
   );
+  const projectPref = useSessionPreferencesStore((s) =>
+    selectProjectPreferences(s, activeProjectId),
+  );
   const setPreference = useSessionPreferencesStore((s) => s.setPreference);
-
-  const dialogEffort = useDialogStore((s) => s.selectedEffort);
 
   const [open, setOpen] = useState(false);
 
   const disabled = !currentSessionId;
-  const effective: EffortLevel = pref?.effort ?? dialogEffort;
+  const effective: EffortLevel | null =
+    pref?.effort ?? projectPref?.effort ?? null;
+  // 未設定 (null) 時は medium (index 1) を表示上の既定とする（従来互換）
   const meta =
     EFFORT_CHOICES.find((e) => e.id === effective) ?? EFFORT_CHOICES[1];
 
@@ -51,7 +57,12 @@ export function TrayEffortPicker() {
     if (!currentSessionId) return;
     setOpen(false);
     if (id === effective) return;
-    setPreference(currentSessionId, { effort: id });
+    const owningProjectId =
+      useSessionStore
+        .getState()
+        .sessions.find((s) => s.id === currentSessionId)?.projectId ??
+      activeProjectId;
+    setPreference(currentSessionId, owningProjectId ?? null, { effort: id });
   }
 
   if (disabled) {

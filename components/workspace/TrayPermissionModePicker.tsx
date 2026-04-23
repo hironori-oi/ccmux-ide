@@ -14,8 +14,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useProjectStore } from "@/lib/stores/project";
 import { useSessionStore } from "@/lib/stores/session";
 import {
+  selectProjectPreferences,
   selectSessionPreferences,
   useSessionPreferencesStore,
 } from "@/lib/stores/session-preferences";
@@ -27,11 +29,12 @@ import {
 import { cn } from "@/lib/utils";
 
 /**
- * PRJ-012 v1.9.0 (DEC-053): TrayBar 用 **セッション別 permission-mode picker**。
+ * PRJ-012 v1.11.0 (DEC-057): TrayBar 用 **セッション別 permission-mode picker**。
  *
  * - 選択値は session-preferences store (`perSession[sessionId].permissionMode`)
+ * - 変更時は `perProject[projectId].permissionMode` にも sticky に記録
  * - session 未選択時は disabled + `—`
- * - 未設定時は `DEFAULT_PERMISSION_MODE = "default"` fallback
+ * - 未設定時は当該 project の perProject or `DEFAULT_PERMISSION_MODE = "default"` fallback
  * - 値変更は per-query で `send_agent_prompt` options.permissionMode に反映
  *
  * UX 注意: `bypassPermissions` は全操作自動承認のためリスクが高い。trigger ボタン
@@ -40,8 +43,12 @@ import { cn } from "@/lib/utils";
  */
 export function TrayPermissionModePicker() {
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const pref = useSessionPreferencesStore((s) =>
     selectSessionPreferences(s, currentSessionId),
+  );
+  const projectPref = useSessionPreferencesStore((s) =>
+    selectProjectPreferences(s, activeProjectId),
   );
   const setPreference = useSessionPreferencesStore((s) => s.setPreference);
 
@@ -49,7 +56,9 @@ export function TrayPermissionModePicker() {
 
   const disabled = !currentSessionId;
   const effective: PermissionMode =
-    pref?.permissionMode ?? DEFAULT_PERMISSION_MODE;
+    pref?.permissionMode ??
+    projectPref?.permissionMode ??
+    DEFAULT_PERMISSION_MODE;
   const meta =
     PERMISSION_MODE_CHOICES.find((c) => c.value === effective) ??
     PERMISSION_MODE_CHOICES[0];
@@ -58,7 +67,14 @@ export function TrayPermissionModePicker() {
     if (!currentSessionId) return;
     setOpen(false);
     if (value === effective) return;
-    setPreference(currentSessionId, { permissionMode: value });
+    const owningProjectId =
+      useSessionStore
+        .getState()
+        .sessions.find((s) => s.id === currentSessionId)?.projectId ??
+      activeProjectId;
+    setPreference(currentSessionId, owningProjectId ?? null, {
+      permissionMode: value,
+    });
   }
 
   if (disabled) {

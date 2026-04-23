@@ -11,6 +11,35 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.11.0] - 2026-04-24
+
+**Session Preferences を Project 別に独立保持** — DEC-053 で導入した
+session-preferences store の global fallback (`useDialogStore.selectedModel` /
+`selectedEffort`) が project 切替時に前 project の設定を連れ回す leak を起こして
+いたため、継承源を当該 project の `perProject[projectId]` に変更し、project scope
+で完全独立化する（DEC-057）。
+
+### Fixed
+
+- プロジェクト切替時にモデル / 工数 / 実行モードが前プロジェクトの値に変更される
+  不具合を修正 (DEC-057)
+
+### Changed
+
+- `lib/stores/session-preferences.ts` を拡張し、プロジェクト単位の最後の設定
+  `perProject: Record<projectId, SessionPreferences>` を追加（perSession は維持）
+- 新規セッション作成時の初期値継承源を `useDialogStore` の global default から、
+  所属プロジェクトの `perProject[projectId]` に変更（無ければ HARD_DEFAULT:
+  `{ model: null, effort: null, permissionMode: "default" }`）
+- `setPreference(sessionId, projectId, patch)` シグネチャに変更。perSession と
+  perProject を同時更新する（project scoped sticky）
+- `TrayModelPicker` / `TrayEffortPicker` / `TrayPermissionModePicker` の fallback
+  表示を dialog store から perProject 参照に変更
+- `InputArea` の送信時 resolve fallback も `perProject[activeProjectId]` → HARD_DEFAULT
+  の順に変更（dialog store 非参照）
+- persist schema version を 2 に上げ、旧形 (perSession のみ) → 新形 (perProject: {}
+  を補完) への migrate 関数を実装。既存ユーザーの perSession 値は保持される
+
 ## [v1.10.0] - 2026-04-24
 
 **L字 3 分割 + Project 別 Layout 独立 + Preview localhost iframe** — ワークスペース
