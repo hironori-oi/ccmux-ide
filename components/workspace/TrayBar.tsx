@@ -2,17 +2,20 @@
 
 import { useMemo, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Columns2,
   FileText,
+  FolderOpen,
   LayoutGrid,
+  MessageSquare,
   MessageSquarePlus,
   Monitor,
   Plus,
   Rows2,
   Square,
   TerminalSquare,
-  MessageSquare,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -31,26 +34,18 @@ import {
   useWorkspaceLayoutStore,
   VISIBLE_SLOTS,
   type SlotContentKind,
-  type WorkspaceLayout,
 } from "@/lib/stores/workspace-layout";
 import { cn } from "@/lib/utils";
 
 /**
- * PM-970: workspace の上部 Tray Bar（全面再設計）。
+ * PM-971: workspace の上部 Tray Bar（削除ボタン + エディタ追加ボタン + 簡潔命名）。
  *
- * ## 責務
- *
- * 1. **チップ表示** — chat / editor / terminal / preview の開いている項目を
- *    icon-first のコンパクトチップで一覧する。label は最大 12 文字 truncate、
- *    tooltip で full name 表示。
- * 2. **新規作成ボタン** — チャット / ターミナル / プレビューを 1 クリックで追加。
- *    エディタは sidebar のファイルを slot 直接 D&D で開く設計のため button なし。
- * 3. **LayoutSwitcher 統合** — 1 / 2 横 / 2 縦 / 2x2 を右端に inline 配置。
- *
- * ## 旧 TrayBar との差分
- * - チップに "Chat (main)" のような長文を出さず、Chat は icon のみ。
- * - Editor は 12 文字でファイル名 truncate、tooltip で full path。
- * - 全体を 1 行に収め、縦スペース節約（従来 2 段 → 1 段 + 44px）。
+ * ## v1.6.0 → v1.6.1 の差分
+ * - 各チップに小さな ✕ ボタンを追加: クリックで chat pane / editor file / terminal pty
+ *   を閉じる（同時に slot に配置中なら slot も空にする）
+ * - 📝+ エディタ追加ボタンを Tray 右側に追加: Tauri dialog で file picker を開く
+ * - チャットチップを「Chat 1」「Chat 2」...の連番表示に変更（旧 "Main" / pane-id 抜粋）
+ * - Preview は project 依存で 1 つのみ、かつ削除ボタン非表示（project を切替で自動変化）
  */
 export function TrayBar() {
   return (
@@ -85,16 +80,22 @@ function TrayChips() {
     return m;
   }, [slots, visibleSlotIndexes]);
 
-  const chatItems = useMemo(
-    () =>
-      Object.keys(chatPanes).map((paneId) => ({
-        kind: "chat" as const,
-        refId: paneId,
-        label: paneId === "main" ? "Main" : paneId.replace(/^pane-/, ""),
-        tooltip: paneId === "main" ? "Main chat" : `Chat pane (${paneId})`,
-      })),
-    [chatPanes]
-  );
+  // PM-971: チャット pane を追加順で並べ、「Chat 1」「Chat 2」と連番表示。
+  // Object.keys の順は追加順が保証される（JS spec）。
+  const chatItems = useMemo(() => {
+    const paneIds = Object.keys(chatPanes);
+    return paneIds.map((paneId, idx) => ({
+      kind: "chat" as const,
+      refId: paneId,
+      label: `Chat ${idx + 1}`,
+      tooltip:
+        paneId === "main"
+          ? `Chat ${idx + 1}（メインチャット）`
+          : `Chat ${idx + 1}（pane-id: ${paneId}）`,
+      // main は削除不可（chat は常に 1 個以上必要）。他 pane は削除可。
+      deletable: paneId !== "main",
+    }));
+  }, [chatPanes]);
 
   const editorItems = useMemo(
     () =>
@@ -103,6 +104,7 @@ function TrayChips() {
         refId: f.id,
         label: f.title,
         tooltip: f.path,
+        deletable: true,
       })),
     [openFiles]
   );
@@ -114,8 +116,9 @@ function TrayChips() {
       .map((t, i) => ({
         kind: "terminal" as const,
         refId: t.ptyId,
-        label: `${i + 1}`,
+        label: `Terminal ${i + 1}`,
         tooltip: t.title,
+        deletable: true,
       }));
   }, [terminals, activeProjectId]);
 
@@ -125,8 +128,9 @@ function TrayChips() {
       {
         kind: "preview" as const,
         refId: activeProjectId,
-        label: "",
-        tooltip: "プレビュー (外部サイト / dev server)",
+        label: "Preview",
+        tooltip: "プレビュー（外部サイト / dev server）",
+        deletable: false,
       },
     ];
   }, [activeProjectId]);
@@ -139,7 +143,9 @@ function TrayChips() {
   if (isEmpty && previewItems.length === 0) {
     return (
       <div className="flex h-full min-w-0 items-center gap-1 overflow-hidden text-[11px] text-muted-foreground">
-        <span>右の「+」ボタンで追加するか、サイドバーのファイルを slot にドラッグしてください</span>
+        <span>
+          右の「+」ボタンで追加するか、サイドバーのファイルを slot にドラッグしてください
+        </span>
       </div>
     );
   }
@@ -174,6 +180,14 @@ function TrayChips() {
   );
 }
 
+interface TrayChipItem {
+  kind: SlotContentKind;
+  refId: string;
+  label: string;
+  tooltip: string;
+  deletable: boolean;
+}
+
 function ChipGroup({
   icon,
   color,
@@ -182,12 +196,7 @@ function ChipGroup({
 }: {
   icon: React.ReactNode;
   color: string;
-  items: Array<{
-    kind: SlotContentKind;
-    refId: string;
-    label: string;
-    tooltip: string;
-  }>;
+  items: TrayChipItem[];
   placedRefs: Set<string>;
 }) {
   if (items.length === 0) return null;
@@ -196,10 +205,7 @@ function ChipGroup({
       {items.map((it) => (
         <TrayChip
           key={`${it.kind}:${it.refId}`}
-          kind={it.kind}
-          refId={it.refId}
-          label={it.label}
-          tooltip={it.tooltip}
+          item={it}
           icon={icon}
           color={color}
           isPlaced={placedRefs.has(`${it.kind}:${it.refId}`)}
@@ -212,22 +218,17 @@ function ChipGroup({
 const MAX_CHIP_LABEL_CHARS = 12;
 
 function TrayChip({
-  kind,
-  refId,
-  label,
-  tooltip,
+  item,
   icon,
   color,
   isPlaced,
 }: {
-  kind: SlotContentKind;
-  refId: string;
-  label: string;
-  tooltip: string;
+  item: TrayChipItem;
   icon: React.ReactNode;
   color: string;
   isPlaced: boolean;
 }) {
+  const { kind, refId, label, tooltip, deletable } = item;
   const id = `tray-${kind}-${refId}`;
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id,
@@ -241,39 +242,113 @@ function TrayChip({
       : label;
 
   return (
+    <div
+      className={cn(
+        "relative flex h-6 shrink-0 items-center gap-0 rounded border text-[11px] transition-all",
+        isDragging && "opacity-40",
+        isPlaced ? "opacity-50" : color
+      )}
+    >
+      {/* ドラッグハンドル領域 = チップ本体 */}
+      <TooltipProvider delayDuration={400}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              ref={setNodeRef}
+              type="button"
+              {...listeners}
+              {...attributes}
+              className={cn(
+                "flex h-full cursor-grab items-center gap-1 rounded-l pl-1.5",
+                !deletable && "rounded-r pr-1.5",
+                deletable && "pr-1",
+                "active:cursor-grabbing"
+              )}
+              aria-label={tooltip}
+            >
+              {icon}
+              <span className="max-w-[120px] truncate text-[11px]">
+                {displayLabel}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="max-w-[320px] text-xs">
+            <p className="truncate">{tooltip}</p>
+            {isPlaced ? (
+              <p className="text-[10px] text-muted-foreground">
+                配置済（✕ でも削除可）
+              </p>
+            ) : (
+              <p className="text-[10px] text-muted-foreground">
+                Slot にドラッグして表示
+              </p>
+            )}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+
+      {/* 削除ボタン */}
+      {deletable && (
+        <DeleteChipButton kind={kind} refId={refId} label={label} />
+      )}
+    </div>
+  );
+}
+
+function DeleteChipButton({
+  kind,
+  refId,
+  label,
+}: {
+  kind: SlotContentKind;
+  refId: string;
+  label: string;
+}) {
+  const removeChatPane = useChatStore((s) => s.removePane);
+  const closeFile = useEditorStore((s) => s.closeFile);
+  const closeTerminal = useTerminalStore((s) => s.closeTerminal);
+  const removeByRefId = useWorkspaceLayoutStore((s) => s.removeByRefId);
+
+  async function handleDelete(e: React.MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    try {
+      if (kind === "chat") {
+        removeChatPane(refId);
+      } else if (kind === "editor") {
+        closeFile(refId);
+      } else if (kind === "terminal") {
+        await closeTerminal(refId);
+      }
+      // slot に配置済なら slot も空に
+      removeByRefId(kind, refId);
+      toast.message(`${label} を削除しました`);
+    } catch (err) {
+      toast.error(
+        `削除に失敗しました: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  return (
     <TooltipProvider delayDuration={400}>
       <Tooltip>
         <TooltipTrigger asChild>
           <button
-            ref={setNodeRef}
             type="button"
-            {...listeners}
-            {...attributes}
+            onClick={(e) => void handleDelete(e)}
             className={cn(
-              "flex h-6 shrink-0 cursor-grab items-center gap-1 rounded border px-1.5 text-[11px] transition-all",
-              "active:cursor-grabbing",
-              isDragging && "opacity-40",
-              isPlaced ? "opacity-50" : color
+              "ml-0.5 flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-sm",
+              "opacity-60 transition-all hover:bg-destructive/20 hover:text-destructive hover:opacity-100",
+              "mr-1"
             )}
-            aria-label={tooltip}
+            aria-label={`${label} を削除`}
           >
-            {icon}
-            {displayLabel && (
-              <span className="max-w-[120px] truncate text-[11px]">
-                {displayLabel}
-              </span>
-            )}
+            <X className="h-3 w-3" aria-hidden />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-[320px] text-xs">
-          <p className="truncate">{tooltip}</p>
-          {isPlaced ? (
-            <p className="text-[10px] text-muted-foreground">配置済</p>
-          ) : (
-            <p className="text-[10px] text-muted-foreground">
-              Slot にドラッグして表示
-            </p>
-          )}
+        <TooltipContent side="bottom" className="text-xs">
+          削除
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -290,6 +365,7 @@ function CreationButtons() {
   });
   const addChatPane = useChatStore((s) => s.addPane);
   const createTerminal = useTerminalStore((s) => s.createTerminal);
+  const openFile = useEditorStore((s) => s.openFile);
   const [spawning, setSpawning] = useState(false);
 
   const disabled = !activeProjectId;
@@ -298,10 +374,30 @@ function CreationButtons() {
     if (disabled) return;
     const id = addChatPane();
     if (!id) {
-      toast.message("チャットペインは 4 つまでです");
+      toast.message("チャットは 4 個までです");
       return;
     }
     toast.success("チャットを追加しました");
+  }
+
+  async function handleAddEditor() {
+    if (disabled || !activeProjectPath) return;
+    try {
+      // Tauri native file picker。defaultPath でプロジェクトルートから開始。
+      const selected = await openDialog({
+        multiple: false,
+        directory: false,
+        defaultPath: activeProjectPath,
+        title: "エディタで開くファイルを選択",
+      });
+      if (!selected || typeof selected !== "string") return;
+      await openFile(selected);
+      toast.success("ファイルを開きました");
+    } catch (e) {
+      toast.error(
+        `ファイルを開けませんでした: ${e instanceof Error ? e.message : String(e)}`
+      );
+    }
   }
 
   async function handleAddTerminal() {
@@ -311,7 +407,9 @@ function CreationButtons() {
       const ptyId = await createTerminal(activeProjectId, activeProjectPath);
       if (ptyId) toast.success("ターミナルを追加しました");
     } catch (e) {
-      toast.error(`ターミナル起動失敗: ${e instanceof Error ? e.message : String(e)}`);
+      toast.error(
+        `ターミナル起動失敗: ${e instanceof Error ? e.message : String(e)}`
+      );
     } finally {
       setSpawning(false);
     }
@@ -327,6 +425,13 @@ function CreationButtons() {
         onClick={handleAddChat}
       />
       <CreationButton
+        icon={<FolderOpen className="h-3.5 w-3.5" aria-hidden />}
+        label="エディタでファイルを開く"
+        colorClass="text-amber-500 hover:bg-amber-500/10"
+        disabled={disabled}
+        onClick={handleAddEditor}
+      />
+      <CreationButton
         icon={<TerminalSquare className="h-3.5 w-3.5" aria-hidden />}
         label="ターミナル追加"
         colorClass="text-emerald-500 hover:bg-emerald-500/10"
@@ -338,8 +443,7 @@ function CreationButtons() {
           ) : undefined
         }
       />
-      {/* Preview は project に 1 個、チップ自体が常時存在するため + ボタン不要。
-          Editor は Sidebar のファイルを slot 直接 D&D で開く設計のため + ボタンなし。 */}
+      {/* Preview は project に 1 個、チップ自体が常時存在するため + ボタン不要。 */}
     </>
   );
 }
@@ -453,5 +557,3 @@ function LayoutBtn({
     </TooltipProvider>
   );
 }
-// Unused suppression for WorkspaceLayout type (kept for future extension)
-void ({} as WorkspaceLayout);

@@ -11,6 +11,30 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.6.1] - 2026-04-23
+
+**Tray UX Polish** — 削除ボタン + エディタ追加ボタン + チャット名簡潔化。
+
+### ✨ Added
+
+- **チップ削除ボタン** (PM-971)。各チップに小さな ✕ ボタンを追加。クリックで
+  chat pane / editor file / terminal pty を閉じ、同時に slot に配置中なら
+  slot も自動で空にする。main chat と preview は削除不可。
+- **📂 エディタ追加ボタン** (PM-971)。Tray 右側の創造ボタン群に「エディタで
+  ファイルを開く」を追加。クリックで Tauri ネイティブのファイルピッカー
+  ダイアログが開き、defaultPath を project ルートに指定。選択した
+  ファイルは `openFile` で開かれる。
+- **チャットチップの簡潔命名** (PM-971)。旧 "Main" / pane-id 抜粋 →
+  **「Chat 1」「Chat 2」…** の連番表示に変更。tooltip でメイン判定も案内。
+
+### 🔧 Fixed
+
+- `terminalItems` の label を「Terminal 1」「Terminal 2」…の連番表示に整理
+  （旧は `t.title` 直出で冗長）
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.6.0] - 2026-04-23
 
 **Workspace-First UI** — タブ廃止、ワークスペースがアプリそのものに。Tray Bar を
