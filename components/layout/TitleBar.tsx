@@ -104,12 +104,13 @@ export function TitleBar() {
   }
 
   // v3.5.5: プロジェクト完全削除（registry から除外 + sidecar kill）
+  // v1.12.0 (DEC-058): 成功 toast は removeProject 内でセッション数を含めて
+  // 発火するため、ここでは明示しない（二重 toast 防止）。エラー時は store が
+  // 自前で toast.error するため、fire-and-forget の catch も不要。
   function handleConfirmRemove() {
     if (!activeProject) return;
-    const name = activeProject.title;
     void removeProject(activeProject.id);
     setRemoveConfirmOpen(false);
-    toast.success(`プロジェクトを削除しました: ${name}`);
   }
 
   // v3.5.5: 停止中なら「再起動」ボタンに切替

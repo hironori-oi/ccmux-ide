@@ -130,6 +130,17 @@ export interface SessionPreferencesState {
    */
   clearSession: (sessionId: string) => void;
 
+  /**
+   * v1.12.0 (DEC-058): project 削除 cascade 用。
+   *
+   * - `perProject[projectId]` を削除（sticky 値を消す）
+   * - `perSession[sid]` から対象 session 群を削除
+   *
+   * project 削除は非可逆なので sticky 値も同時に破棄するのが正しい挙動
+   * （clearSession と違い project 単位で一括 purge）。
+   */
+  purgeProject: (projectId: string, sessionIds: readonly string[]) => void;
+
   /** 全クリア（devtools / テスト用）。 */
   reset: () => void;
 }
@@ -245,6 +256,43 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
           delete next[sessionId];
           // perProject は保持（同 project の次 session に継承されるべき）
           return { perSession: next };
+        }),
+
+      purgeProject: (projectId, sessionIds) =>
+        set((state) => {
+          // perProject[projectId] の削除
+          let nextPerProject = state.perProject;
+          if (projectId in state.perProject) {
+            nextPerProject = { ...state.perProject };
+            delete nextPerProject[projectId];
+          }
+          // perSession から対象 session 群を削除
+          let nextPerSession = state.perSession;
+          if (sessionIds.length > 0) {
+            const ids = new Set(sessionIds);
+            let changed = false;
+            const purged: Record<string, SessionPreferences> = {};
+            for (const [sid, pref] of Object.entries(state.perSession)) {
+              if (ids.has(sid)) {
+                changed = true;
+                continue;
+              }
+              purged[sid] = pref;
+            }
+            if (changed) {
+              nextPerSession = purged;
+            }
+          }
+          if (
+            nextPerProject === state.perProject &&
+            nextPerSession === state.perSession
+          ) {
+            return state;
+          }
+          return {
+            perProject: nextPerProject,
+            perSession: nextPerSession,
+          };
         }),
 
       reset: () => set({ perSession: {}, perProject: {} }),

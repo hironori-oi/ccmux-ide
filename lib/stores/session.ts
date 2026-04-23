@@ -87,6 +87,16 @@ interface SessionState {
     sessionId: string,
     sdkSessionId: string | null
   ) => Promise<void>;
+
+  /**
+   * v1.12.0 (DEC-058): project 削除 cascade に伴い、指定 session 群を
+   * session store state から **DB 削除なしで** 外す。
+   *
+   * DB 側は Rust `delete_project` のトランザクションで既に削除済なので、
+   * frontend は state cache を整合させるだけでよい。`currentSessionId` が
+   * 削除対象なら null に戻し、chat store にも `setSessionId(null)` を反映する。
+   */
+  purgeSessions: (sessionIds: readonly string[]) => void;
 }
 
 /**
@@ -360,6 +370,27 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (e) {
       set({ error: String(e), isLoading: false });
     }
+  },
+
+  purgeSessions: (sessionIds) => {
+    if (sessionIds.length === 0) return;
+    const ids = new Set(sessionIds);
+    const state = get();
+    const nextSessions = state.sessions.filter((s) => !ids.has(s.id));
+    const wasCurrent =
+      state.currentSessionId !== null && ids.has(state.currentSessionId);
+    if (wasCurrent) {
+      try {
+        useChatStore.getState().clearSession();
+        useChatStore.getState().setSessionId(null);
+      } catch {
+        // chat store 未ロード等では skip
+      }
+    }
+    set({
+      sessions: nextSessions,
+      currentSessionId: wasCurrent ? null : state.currentSessionId,
+    });
   },
 
   // PM-830 (v3.5.14): SDK side session id を frontend cache + DB に書き戻す。

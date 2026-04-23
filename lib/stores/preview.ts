@@ -177,6 +177,17 @@ interface PreviewStoreState {
    *   （minimize 中の 0 サイズ event 等のガード）。
    */
   setWindowGeometry: (projectId: string, geometry: PreviewWindowGeometry) => void;
+
+  /**
+   * v1.12.0 (DEC-058): project 削除 cascade 用。
+   *
+   * `urls[projectId]` / `windowGeometries[projectId]` / `openedWebviewLabels[projectId]`
+   * の 3 map 全てから当該 project を削除する。spawn 済 WebviewWindow の kill は
+   * ここでは扱わない（Rust 側は AgentState / PtyState のように一元管理していない
+   * ため）。ユーザーが project を削除するまでに preview window を閉じていない
+   * ケースは極小想定。
+   */
+  removeProject: (projectId: string) => void;
 }
 
 /** SSR 時の localStorage 不在を guard した JSONStorage。 */
@@ -297,6 +308,30 @@ export const usePreviewStore = create<PreviewStoreState>()(
           },
         }));
       },
+
+      removeProject: (projectId) =>
+        set((state) => {
+          if (!projectId) return state;
+          const hasUrls = projectId in state.urls;
+          const hasGeom = projectId in state.windowGeometries;
+          const hasLabel = projectId in state.openedWebviewLabels;
+          if (!hasUrls && !hasGeom && !hasLabel) return state;
+          const nextUrls = hasUrls ? { ...state.urls } : state.urls;
+          if (hasUrls) delete nextUrls[projectId];
+          const nextGeom = hasGeom
+            ? { ...state.windowGeometries }
+            : state.windowGeometries;
+          if (hasGeom) delete nextGeom[projectId];
+          const nextLabels = hasLabel
+            ? { ...state.openedWebviewLabels }
+            : state.openedWebviewLabels;
+          if (hasLabel) delete nextLabels[projectId];
+          return {
+            urls: nextUrls,
+            windowGeometries: nextGeom,
+            openedWebviewLabels: nextLabels,
+          };
+        }),
     }),
     {
       name: PREVIEW_STORAGE_KEY,

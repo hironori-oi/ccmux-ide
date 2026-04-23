@@ -40,6 +40,11 @@ interface SessionOrderState {
   setOrder: (projectKey: string, ids: string[]) => void;
   /** session 削除時に order からも除去 */
   removeFromOrder: (sessionId: string) => void;
+  /**
+   * v1.12.0 (DEC-058): project 削除 cascade 用。
+   * `order[projectId]` を丸ごと削除する。
+   */
+  removeProject: (projectId: string) => void;
 }
 
 const STORAGE_KEY = "sumi:session-order";
@@ -69,6 +74,14 @@ export const useSessionOrderStore = create<SessionOrderState>()(
           for (const [k, arr] of Object.entries(s.order)) {
             next[k] = arr.filter((id) => id !== sessionId);
           }
+          return { order: next };
+        }),
+
+      removeProject: (projectId) =>
+        set((s) => {
+          if (!(projectId in s.order)) return s;
+          const next = { ...s.order };
+          delete next[projectId];
           return { order: next };
         }),
     }),

@@ -207,6 +207,14 @@ interface EditorState {
    */
   purgeFile: (id: string) => void;
 
+  /**
+   * v1.12.0 (DEC-058): project 削除 cascade 用。
+   *
+   * 指定 path prefix 配下の全 file を pool / 全 pane から閉じる。project の
+   * path 直下に限定（Windows: 大小無視 + セパレータ無視の stable 判定）する。
+   */
+  purgeByPathPrefix: (pathPrefix: string) => void;
+
   /** 他のタブを全て閉じる（指定 id のみ残す）。dirty チェックは呼出側。 */
   closeOtherFiles: (id: string, paneId?: string) => void;
 
@@ -502,6 +510,52 @@ export const useEditorStore = create<EditorState>()(
             ),
           }));
         }
+      },
+
+      purgeByPathPrefix: (pathPrefix) => {
+        set((state) => {
+          if (!pathPrefix) return state;
+          // Windows / Unix 共通の stable 判定: 区切り文字を normalize し、
+          // 大文字小文字を無視する（Windows FS 互換）。
+          const norm = (p: string) =>
+            p.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
+          const prefix = norm(pathPrefix);
+          const prefixSlash = prefix + "/";
+          const targetIds = new Set(
+            state.openFiles
+              .filter((f) => {
+                const np = norm(f.path);
+                return np === prefix || np.startsWith(prefixSlash);
+              })
+              .map((f) => f.id)
+          );
+          if (targetIds.size === 0) return state;
+
+          const nextPanes: typeof state.editorPanes = {};
+          for (const [pid, pane] of Object.entries(state.editorPanes)) {
+            const nextIds = pane.openFileIds.filter(
+              (fid) => !targetIds.has(fid)
+            );
+            const nextActive =
+              pane.activeFileId && targetIds.has(pane.activeFileId)
+                ? (nextIds[0] ?? null)
+                : pane.activeFileId;
+            nextPanes[pid] = {
+              openFileIds: nextIds,
+              activeFileId: nextActive,
+            };
+          }
+          const nextFiles = state.openFiles.filter((f) => !targetIds.has(f.id));
+          const nextActiveGlobal =
+            state.activeFileId && targetIds.has(state.activeFileId)
+              ? (nextPanes[state.activeEditorPaneId]?.activeFileId ?? null)
+              : state.activeFileId;
+          return {
+            openFiles: nextFiles,
+            editorPanes: nextPanes,
+            activeFileId: nextActiveGlobal,
+          };
+        });
       },
 
       /**

@@ -432,6 +432,51 @@ export const useProjectStore = create<ProjectState>()(
         } catch {
           // silent fallback: ログに残した上で registry 更新は継続
         }
+
+        // v1.12.0 / DEC-058: Rust `delete_project` で sessions テーブルの
+        // cascade 削除を実行 → frontend store cleanup → project 本体削除。
+        //
+        // 削除 path を把握するため、先に project 自体を state から消さずに
+        // path / id を取得する。
+        const target = get().projects.find((p) => p.id === id);
+        const targetPath = target?.path ?? null;
+        const targetTitle = target?.title ?? id;
+
+        let deletedSessionIds: string[] = [];
+        try {
+          const result = await callTauri<{
+            projectId: string;
+            deletedSessionIds: string[];
+          }>("delete_project", { projectId: id });
+          deletedSessionIds = Array.isArray(result?.deletedSessionIds)
+            ? result.deletedSessionIds
+            : [];
+        } catch (e) {
+          // DB 側 cascade 失敗時は frontend も変更しない。呼出側（UI）で toast を出せる
+          // よう error state をセットして throw する。sidecar は既に停止済だが、
+          // project を消さずに error 状態で残す（再試行可能にする）。
+          const msg = `プロジェクト削除に失敗しました (${targetTitle}): ${String(e)}`;
+          set({ error: msg });
+          if (typeof window !== "undefined") {
+            void import("sonner").then((m) => {
+              m.toast.error(msg);
+            });
+          }
+          throw e;
+        }
+
+        // DB 成功後に frontend の各 store から関連 entry を purge する。
+        // 動的 import で循環依存を避ける。
+        try {
+          const { purgeProjectArtifacts } = await import(
+            "@/lib/stores/purge-project"
+          );
+          purgeProjectArtifacts(id, deletedSessionIds, targetPath);
+        } catch (e) {
+          // purge util 自体が失敗した（import 失敗等）場合も、project 削除は続行する
+          console.warn("[project-store] purgeProjectArtifacts 呼出失敗:", e);
+        }
+
         set((state) => {
           const nextProjects = state.projects.filter((p) => p.id !== id);
           const nextActive =
@@ -445,6 +490,20 @@ export const useProjectStore = create<ProjectState>()(
             sidecarStatus: nextStatus,
           };
         });
+
+        // 削除セッション数を明示して通知（既存パターン踏襲、絵文字なし）
+        if (typeof window !== "undefined") {
+          void import("sonner").then((m) => {
+            const sessionCount = deletedSessionIds.length;
+            if (sessionCount > 0) {
+              m.toast.success(
+                `プロジェクトと${sessionCount}個のセッションを削除しました: ${targetTitle}`
+              );
+            } else {
+              m.toast.success(`プロジェクトを削除しました: ${targetTitle}`);
+            }
+          });
+        }
       },
 
       setActiveProject: (id) => {

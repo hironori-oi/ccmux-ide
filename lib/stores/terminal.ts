@@ -128,6 +128,15 @@ interface TerminalStoreState {
   /** project に紐づく pty のみを返す (UI filter 用)。 */
   getTerminalsForProject: (projectId: string) => TerminalState[];
 
+  /**
+   * v1.12.0 (DEC-058): project 削除 cascade 用。
+   *
+   * 該当 project の pty を全て kill + store から除去する。kill は
+   * fire-and-forget（Rust 側で child が既に死んでいれば no-op）。
+   * 各 pane の `activeTerminalId` が削除対象なら null にフォールバックする。
+   */
+  purgeProject: (projectId: string) => void;
+
   // ---- PM-924: pane lifecycle ----
   /** pane 追加。TERMINAL_MAX_PANES 到達時は no-op + 既存 active を返す。 */
   addTerminalPane: () => string;
@@ -323,6 +332,54 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     return Object.values(get().terminals)
       .filter((t) => t.projectId === projectId)
       .sort((a, b) => a.startedAt - b.startedAt);
+  },
+
+  purgeProject: (projectId) => {
+    if (!projectId) return;
+    const state = get();
+    const targetIds = Object.values(state.terminals)
+      .filter((t) => t.projectId === projectId)
+      .map((t) => t.ptyId);
+    if (targetIds.length === 0) return;
+    const removed = new Set(targetIds);
+
+    set((s) => {
+      const nextTerminals: Record<string, TerminalState> = {};
+      for (const [id, t] of Object.entries(s.terminals)) {
+        if (!removed.has(id)) nextTerminals[id] = t;
+      }
+      // 各 pane の activeTerminalId が削除対象なら同 pane の残存から選び直す
+      const nextTerminalPanes: Record<string, TerminalPaneState> = {};
+      for (const [pid, pane] of Object.entries(s.terminalPanes)) {
+        if (pane.activeTerminalId && removed.has(pane.activeTerminalId)) {
+          const fallback = Object.values(nextTerminals).find(
+            (t) => (t.paneId ?? TERMINAL_DEFAULT_PANE_ID) === pid
+          );
+          nextTerminalPanes[pid] = {
+            ...pane,
+            activeTerminalId: fallback ? fallback.ptyId : null,
+          };
+        } else {
+          nextTerminalPanes[pid] = pane;
+        }
+      }
+      const nextActive =
+        s.activeTerminalId && removed.has(s.activeTerminalId)
+          ? nextTerminalPanes[s.activeTerminalPaneId]?.activeTerminalId ?? null
+          : s.activeTerminalId;
+      return {
+        terminals: nextTerminals,
+        terminalPanes: nextTerminalPanes,
+        activeTerminalId: nextActive,
+      };
+    });
+
+    // pty_kill は fire-and-forget（Rust 側 idempotent）
+    for (const id of targetIds) {
+      void callTauri<void>("pty_kill", { ptyId: id }).catch((e) => {
+        logger.warn("[terminal-store] purgeProject kill failed:", e);
+      });
+    }
   },
 
   addTerminalPane: () => {

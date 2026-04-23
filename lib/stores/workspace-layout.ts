@@ -152,6 +152,12 @@ export interface WorkspaceLayoutState {
 
   /** current project × session の slots を全て null にする */
   clearAll: () => void;
+
+  /**
+   * v1.12.0 (DEC-058): project 削除 cascade 用。
+   * `layouts[projectId]` を丸ごと削除する。inner の全 session layout も同時消滅。
+   */
+  removeProject: (projectId: string) => void;
 }
 
 const STORAGE_KEY = "sumi:workspace-layout";
@@ -404,6 +410,14 @@ export const useWorkspaceLayoutStore = create<WorkspaceLayoutState>()(
               makeEmptyLayout()
             ),
           };
+        }),
+
+      removeProject: (projectId) =>
+        set((s) => {
+          if (!projectId || !(projectId in s.layouts)) return s;
+          const next = { ...s.layouts };
+          delete next[projectId];
+          return { layouts: next };
         }),
     }),
     {

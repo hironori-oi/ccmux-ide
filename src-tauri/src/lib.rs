@@ -23,9 +23,9 @@ use commands::{
     claude_usage::{get_claude_rate_limits, ClaudeUsageCache},
     config::{get_api_key, set_api_key},
     history::{
-        append_message, create_session, delete_session, get_session_messages, init_history_db,
-        list_sessions, rename_session, update_session_project, update_session_sdk_id,
-        HistoryState,
+        append_message, create_session, delete_project, delete_session, get_session_messages,
+        init_history_db, list_sessions, rename_session, update_session_project,
+        update_session_sdk_id, HistoryState,
     },
     image_paste::save_clipboard_image,
     memory_tree::scan_memory_tree,
@@ -157,6 +157,10 @@ pub fn run() {
             rename_session,
             // PRJ-012 v5 / Chunk B / DEC-032: session の project_id 再割当
             update_session_project,
+            // PRJ-012 v1.12.0 / DEC-058: project 削除時に所属 session を cascade 削除する
+            // transaction 化コマンド。戻り値の deletedSessionIds で frontend 側 store の
+            // per-session entry を purge する。
+            delete_project,
             // PRJ-012 v3.5.14 / PM-830: SDK 側 session UUID を保存して resume 経由
             // で context 継続するための更新コマンド。sidecar からの sdk_session_ready
             // event を frontend が受けて呼ぶ。

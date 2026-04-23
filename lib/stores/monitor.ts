@@ -58,6 +58,12 @@ interface MonitorStore {
    */
   perSession: Record<string, MonitorState>;
   setMonitor: (state: MonitorState, sessionId?: string | null) => void;
+  /**
+   * v1.12.0 (DEC-058): 指定 session 群の snapshot を perSession から purge する。
+   * Project 削除 cascade で呼ばれる（`purgeProjectArtifacts`）。
+   * 対象が無ければ state は参照同値を保つ（React 再レンダ回避）。
+   */
+  purgeSessions: (sessionIds: readonly string[]) => void;
   reset: () => void;
 }
 
@@ -73,6 +79,22 @@ export const useMonitorStore = create<MonitorStore>((set) => ({
         next.perSession = { ...s.perSession, [sessionId]: monitor };
       }
       return next;
+    }),
+  purgeSessions: (sessionIds) =>
+    set((s) => {
+      if (sessionIds.length === 0) return s;
+      const ids = new Set(sessionIds);
+      let changed = false;
+      const next: Record<string, MonitorState> = {};
+      for (const [sid, snap] of Object.entries(s.perSession)) {
+        if (ids.has(sid)) {
+          changed = true;
+          continue;
+        }
+        next[sid] = snap;
+      }
+      if (!changed) return s;
+      return { perSession: next };
     }),
   reset: () => set({ monitor: null, perSession: {} }),
 }));

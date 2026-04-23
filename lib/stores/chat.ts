@@ -192,6 +192,19 @@ interface ChatState {
   clearProjectSnapshot: (projectId: string) => void;
 
   /**
+   * v1.12.0 (DEC-058): 指定 session 群を chat state から一掃する。
+   *
+   * - `panes[*].currentSessionId` が対象なら null に戻す（messages もクリア）
+   * - `panes[*].creatingSessionId` が対象なら null に戻す（Tray フィルタから脱落させる）
+   * - `projectSnapshots[*][*]` に同様の操作を適用
+   *
+   * project 削除 cascade で呼ばれる。`clearProjectSnapshot` と組み合わせて、
+   * project 削除後に **どの pane にも stale な sessionId が残らない** ことを
+   * 保証する。
+   */
+  purgeSessions: (sessionIds: readonly string[]) => void;
+
+  /**
    * PRJ-012 v3.5.11 Chunk E (Cross-Project Events): `projectSnapshots[projectId][paneId]`
    * を直接 update する。snapshot が無ければ初期 snapshot を作成してから update。
    *
@@ -567,6 +580,51 @@ export const useChatStore = create<ChatState>()(
           const next = { ...state.projectSnapshots };
           delete next[projectId];
           return { projectSnapshots: next };
+        });
+      },
+
+      purgeSessions: (sessionIds) => {
+        if (sessionIds.length === 0) return;
+        const ids = new Set(sessionIds);
+        set((state) => {
+          let changed = false;
+          const transformPane = (pane: ChatPaneState): ChatPaneState => {
+            const hitCurrent =
+              pane.currentSessionId !== null && ids.has(pane.currentSessionId);
+            const hitCreating =
+              pane.creatingSessionId != null && ids.has(pane.creatingSessionId);
+            if (!hitCurrent && !hitCreating) return pane;
+            changed = true;
+            if (hitCurrent) {
+              return {
+                ...pane,
+                messages: [],
+                streaming: false,
+                activity: { kind: "idle" },
+                attachments: [],
+                currentSessionId: null,
+                scrollTargetMessageId: null,
+                highlightedMessageId: null,
+                creatingSessionId: hitCreating ? null : pane.creatingSessionId,
+              };
+            }
+            return { ...pane, creatingSessionId: null };
+          };
+
+          const nextPanes: Record<string, ChatPaneState> = {};
+          for (const [pid, pane] of Object.entries(state.panes)) {
+            nextPanes[pid] = transformPane(pane);
+          }
+          const nextSnapshots: Record<string, Record<string, ChatPaneState>> = {};
+          for (const [projId, snap] of Object.entries(state.projectSnapshots)) {
+            const nextSnap: Record<string, ChatPaneState> = {};
+            for (const [pid, pane] of Object.entries(snap)) {
+              nextSnap[pid] = transformPane(pane);
+            }
+            nextSnapshots[projId] = nextSnap;
+          }
+          if (!changed) return state;
+          return { panes: nextPanes, projectSnapshots: nextSnapshots };
         });
       },
 

@@ -197,7 +197,12 @@ fn sessions_has_column(conn: &Connection, column: &str) -> Result<bool> {
     Ok(false)
 }
 
-/// 後方互換 alias（既存テスト用）。
+/// `sessions.project_id` 列の存在チェック。
+///
+/// v1.12.0 (DEC-058) 以降、`delete_project` が本列に依存して cascade するため、
+/// **apply_ddl の末尾で invariant として assertion** し、万一 migration が
+/// 完走しなかった DB では起動時に検知できるようにする。既存テストからの
+/// 参照と役割を合わせて 1 本化した（旧 unused warning の正式活用）。
 fn sessions_has_project_id(conn: &Connection) -> Result<bool> {
     sessions_has_column(conn, "project_id")
 }
@@ -322,6 +327,16 @@ fn apply_ddl(conn: &Connection) -> Result<()> {
         [],
     )
     .context("idx_sessions_project_id 作成失敗")?;
+
+    // v1.12.0 / DEC-058 invariant check:
+    // `delete_project` が project_id 列に依存するため、migration が完走して
+    // 列が存在することを起動時に verify する。失敗すれば init_history_db が
+    // Err を返し、lib.rs の setup hook 側でログに残る（Tauri 起動は継続）。
+    if !sessions_has_project_id(conn)? {
+        return Err(anyhow::anyhow!(
+            "migration 未完: sessions.project_id 列が存在しません (delete_project 不可)"
+        ));
+    }
 
     Ok(())
 }
@@ -782,6 +797,107 @@ pub async fn delete_session(
             return Err(format!("session_id={session_id} が存在しません"));
         }
         Ok(())
+    })
+    .await
+}
+
+/// PRJ-012 v1.12.0 / DEC-058: プロジェクト削除の cascade 実装結果。
+///
+/// `delete_project` の戻り値として Frontend に渡す。Frontend 側は
+/// `deleted_session_ids` を受け取って、session キーを持つ各 store
+/// (session-preferences / monitor / chat / editor / terminal 等) の該当
+/// entry を purge する。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteProjectResult {
+    /// 削除した project id（引数のエコーバック）。
+    pub project_id: String,
+    /// `sessions` テーブルから cascade 削除された session id 群。
+    /// Frontend は ここに含まれる id について per-session state を全 purge する。
+    pub deleted_session_ids: Vec<String>,
+}
+
+/// プロジェクト削除の cascade 実装 (PRJ-012 v1.12.0 / DEC-058)。
+///
+/// `sessions` テーブルに `project_id = ?1` で紐づく session を検索して、
+/// それらを **単一 transaction** で削除する。`messages` / `attachments` は
+/// sessions の FK `ON DELETE CASCADE` により自動削除される（下位 DDL 参照）。
+/// FTS5 trigger (`messages_ad`) も同 transaction 内で messages の delete に
+/// 追随するため、cascade 全体が原子的に成立する。
+///
+/// ## 返り値
+/// 削除した session id 群を `DeleteProjectResult.deletedSessionIds` に詰めて返す。
+/// Frontend 側で zustand store (session-preferences / monitor / chat 等) の
+/// session キー entry を purge するのに利用する。
+///
+/// ## 失敗時の原子性
+/// transaction 内で 1 step でも失敗すれば `tx.commit()?` に到達せず `Drop` で
+/// 自動 ROLLBACK される。frontend には Err(String) が返り、store は一切変更
+/// されない（呼出側は catch してリトライ or エラー toast を出す）。
+///
+/// ## projects テーブルの扱い
+/// v1.12.0 時点で `projects` テーブルは DB に存在しない（プロジェクト一覧は
+/// localStorage 側の zustand persist store で管理）。そのため本関数は
+/// `sessions` テーブルの cascade のみ担い、projects 本体の削除は Frontend
+/// (`useProjectStore.removeProject`) に委ねる。将来 projects テーブルを
+/// 追加したタイミングで、この transaction 内に `DELETE FROM projects WHERE id = ?1`
+/// を差し込む形で拡張する。
+///
+/// ## なぜ SELECT + DELETE を 2 step に分けるか
+/// `DELETE ... RETURNING id` は rusqlite + SQLite 3.35+ で使えるが、
+/// FTS5 trigger 連動との組み合わせで稀に戻り値が欠ける実装差があるため、
+/// 安全な **(1) SELECT で id 一覧, (2) DELETE** の 2 step 方式を採用する。
+/// 同一 transaction 内なので他セッションから中間状態は観測されない。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn delete_project(
+    state: State<'_, HistoryState>,
+    project_id: String,
+) -> Result<DeleteProjectResult, String> {
+    let pid_c = project_id.clone();
+    with_conn_mut(&state, move |conn| {
+        // FK 連鎖削除 (messages / attachments ON DELETE CASCADE) のため毎回 ON。
+        // WAL journal mode の接続でも session 単位で設定が必要。
+        conn.execute("PRAGMA foreign_keys = ON", [])
+            .map_err(|e| format!("PRAGMA foreign_keys 失敗: {e}"))?;
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("transaction 開始失敗: {e}"))?;
+
+        // Step 1: 削除対象の session id 一覧を取得する。
+        // 空 Vec なら session 無し project の登録解除のみ（DELETE も実質 no-op）。
+        let mut deleted_session_ids: Vec<String> = {
+            let mut stmt = tx
+                .prepare("SELECT id FROM sessions WHERE project_id = ?1")
+                .map_err(|e| format!("sessions SELECT prepare 失敗: {e}"))?;
+            let iter = stmt
+                .query_map(params![pid_c], |row| row.get::<_, String>(0))
+                .map_err(|e| format!("sessions SELECT query 失敗: {e}"))?;
+            let mut out = Vec::new();
+            for row in iter {
+                out.push(row.map_err(|e| format!("sessions SELECT row 失敗: {e}"))?);
+            }
+            out
+        };
+
+        // Step 2: sessions を一括 DELETE。
+        // ON DELETE CASCADE 経由で messages / attachments / messages_fts も連鎖削除。
+        tx.execute(
+            "DELETE FROM sessions WHERE project_id = ?1",
+            params![pid_c],
+        )
+        .map_err(|e| format!("sessions DELETE 失敗: {e}"))?;
+
+        // Step 3: transaction commit。Drop 時 rollback との境界。
+        tx.commit()
+            .map_err(|e| format!("transaction commit 失敗: {e}"))?;
+
+        // 安定した順序で返す（Frontend のログ / テスト assertion を安定化させる目的）。
+        deleted_session_ids.sort();
+        Ok(DeleteProjectResult {
+            project_id: pid_c,
+            deleted_session_ids,
+        })
     })
     .await
 }
@@ -1287,5 +1403,207 @@ mod tests {
         let sdk_session_id: Option<String> = row.get(6).unwrap();
         assert_eq!(id, "s1");
         assert_eq!(sdk_session_id.as_deref(), Some("abc-123"));
+    }
+
+    // -----------------------------------------------------------------------
+    // v1.12.0 / DEC-058: delete_project transaction cascade の SQL 検証
+    //
+    // Tauri State を介さず、delete_project 内部の transaction 手順と同じ
+    // SQL を直接発行して、cascade の挙動と messages / attachments の連鎖削除、
+    // 未対象 project (session_id 未一致) の保持を確認する。
+    // -----------------------------------------------------------------------
+
+    /// delete_project: 対象 project の sessions 全件が削除され、id リストが返る。
+    /// 他 project の sessions は残る。
+    #[test]
+    fn delete_project_cascade_removes_target_sessions_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+
+        // proj-A に 2 件、proj-B に 1 件、未分類 1 件
+        for (id, pid, ts) in [
+            ("s-a1", Some("proj-A"), 10i64),
+            ("s-a2", Some("proj-A"), 20i64),
+            ("s-b1", Some("proj-B"), 30i64),
+            ("s-none", None::<&str>, 40i64),
+        ] {
+            conn.execute(
+                "INSERT INTO sessions \
+                   (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+                 VALUES (?1, NULL, ?2, ?2, NULL, ?3, NULL)",
+                params![id, ts, pid],
+            )
+            .unwrap();
+        }
+
+        // delete_project(proj-A) の内部手順を再現:
+        // SELECT で id 一覧取得 → DELETE で一括削除（同一 transaction 想定）
+        let target = "proj-A";
+        let deleted_ids: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT id FROM sessions WHERE project_id = ?1")
+                .unwrap();
+            let iter = stmt
+                .query_map(params![target], |r| r.get::<_, String>(0))
+                .unwrap();
+            iter.map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(deleted_ids.len(), 2);
+        assert!(deleted_ids.contains(&"s-a1".to_string()));
+        assert!(deleted_ids.contains(&"s-a2".to_string()));
+
+        let affected = conn
+            .execute(
+                "DELETE FROM sessions WHERE project_id = ?1",
+                params![target],
+            )
+            .unwrap();
+        assert_eq!(affected, 2);
+
+        // proj-B / 未分類 は残る
+        let remaining: i64 = conn
+            .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 2);
+        let b_count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sessions WHERE project_id = ?1",
+                params!["proj-B"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(b_count, 1);
+    }
+
+    /// delete_project: sessions を DELETE すると messages / attachments も
+    /// FK `ON DELETE CASCADE` で連鎖削除される（messages_fts trigger も追随）。
+    #[test]
+    fn delete_project_cascades_to_messages_and_attachments() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+        // FK CASCADE 有効化（delete_project 本体と同じ）
+        conn.execute("PRAGMA foreign_keys = ON", []).unwrap();
+
+        // proj-A の session 1 件 + message 2 件 + attachment 1 件、
+        // proj-B の session 1 件 + message 1 件（残るべき）
+        conn.execute(
+            "INSERT INTO sessions \
+               (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES ('s-a', NULL, 1, 1, NULL, 'proj-A', NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions \
+               (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES ('s-b', NULL, 2, 2, NULL, 'proj-B', NULL)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, created_at) \
+             VALUES ('m-a1', 's-a', 'user', 'hello', 10), \
+                    ('m-a2', 's-a', 'assistant', 'hi', 11), \
+                    ('m-b1', 's-b', 'user', 'keep me', 12)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO attachments (id, message_id, path, mime_type) \
+             VALUES ('at-a1', 'm-a1', '/tmp/x.png', 'image/png')",
+            [],
+        )
+        .unwrap();
+
+        // proj-A 削除
+        conn.execute(
+            "DELETE FROM sessions WHERE project_id = ?1",
+            params!["proj-A"],
+        )
+        .unwrap();
+
+        // sessions: s-a 消滅、s-b 残存
+        let sess: i64 = conn
+            .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(sess, 1);
+
+        // messages: m-a1 / m-a2 消滅、m-b1 残存
+        let msg: i64 = conn
+            .query_row("SELECT count(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(msg, 1);
+        let has_mb1: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM messages WHERE id = 'm-b1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_mb1, 1);
+
+        // attachments: at-a1 消滅
+        let att: i64 = conn
+            .query_row("SELECT count(*) FROM attachments", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(att, 0);
+
+        // messages_fts: 削除対象 message は hit しない
+        let hits_hi: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'hi'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits_hi, 0);
+        let hits_keep: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM messages_fts WHERE messages_fts MATCH 'keep'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits_keep, 1);
+    }
+
+    /// delete_project: session 無し project を渡すと deleted_session_ids は空、
+    /// かつ他の sessions / messages は一切触られない。
+    #[test]
+    fn delete_project_empty_project_returns_empty_list() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_ddl(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sessions \
+               (id, title, created_at, updated_at, project_path, project_id, sdk_session_id) \
+             VALUES ('s-keep', NULL, 1, 1, NULL, 'proj-KEEP', NULL)",
+            [],
+        )
+        .unwrap();
+
+        // session が紐付いていない project を削除
+        let ids: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT id FROM sessions WHERE project_id = ?1")
+                .unwrap();
+            let iter = stmt
+                .query_map(params!["proj-EMPTY"], |r| r.get::<_, String>(0))
+                .unwrap();
+            iter.map(|r| r.unwrap()).collect()
+        };
+        assert!(ids.is_empty());
+        let affected = conn
+            .execute(
+                "DELETE FROM sessions WHERE project_id = ?1",
+                params!["proj-EMPTY"],
+            )
+            .unwrap();
+        assert_eq!(affected, 0);
+
+        // proj-KEEP の session は残存
+        let remaining: i64 = conn
+            .query_row("SELECT count(*) FROM sessions", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(remaining, 1);
     }
 }

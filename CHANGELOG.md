@@ -11,6 +11,34 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.12.0] - 2026-04-24
+
+**プロジェクト削除時のセッション cascade 削除と store cleanup** — 従来、
+`removeProject` は `useProjectStore` から project を外すのみで、`sessions`
+テーブルに紐づく session や各 zustand store (session-preferences / workspace-layout
+/ preview / session-order / monitor / terminal / editor / chat) の project /
+session キー entry が残留し、孤児 session や localStorage 肥大・UI の stale 参照を
+招いていた。Rust `delete_project` コマンドで同一 transaction 内に sessions を
+cascade 削除し、削除された session id を Frontend に返す新フローに差替えて修正
+する（DEC-058）。
+
+### Fixed
+
+- プロジェクト削除時に所属セッションが DB / store に残留する不具合を修正
+  (DEC-058)
+- project 削除により、workspace-layout / session-preferences / preview /
+  session-order / monitor など各 store の関連 entry も全て cleanup されるように
+  修正
+- `sessions_has_project_id` の unused warning を `apply_ddl` 末尾の invariant
+  check で正式活用し解消
+
+### Added
+
+- Rust command `delete_project(projectId)` を追加（rusqlite transaction で
+  sessions を cascade 削除し、削除された session id を Frontend に返す）
+- `lib/stores/purge-project.ts` を新規追加し、project 削除時の store cleanup を
+  一元化
+
 ## [v1.11.0] - 2026-04-24
 
 **Session Preferences を Project 別に独立保持** — DEC-053 で導入した
