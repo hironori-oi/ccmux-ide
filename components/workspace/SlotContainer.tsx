@@ -40,9 +40,12 @@ import { cn } from "@/lib/utils";
 export function SlotContainer({
   slotIndex,
   slotLabel,
+  className,
 }: {
   slotIndex: number;
   slotLabel: string;
+  /** 外側から grid セル span 等を追加するための optional class。 */
+  className?: string;
 }) {
   // PM-981: current session の slot 内容を subscribe（session 切替で自動更新）
   const content = useCurrentSlotContent(slotIndex);
@@ -96,7 +99,8 @@ export function SlotContainer({
       onDrop={(e) => void handleDrop(e)}
       className={cn(
         "flex min-h-0 flex-1 flex-col border border-border/40 transition-colors",
-        isDragTarget && "border-primary/60 bg-primary/5"
+        isDragTarget && "border-primary/60 bg-primary/5",
+        className
       )}
     >
       <SlotHeader

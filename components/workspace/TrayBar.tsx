@@ -8,7 +8,7 @@ import {
   LayoutGrid,
   MessageSquare,
   Monitor,
-  Rows2,
+  PanelRightDashed,
   Square,
   TerminalSquare,
   X,
@@ -100,8 +100,8 @@ function TrayChips() {
         ? [0]
         : layout === "2h"
           ? [0, 1]
-          : layout === "2v"
-            ? [0, 2]
+          : layout === "3"
+            ? [0, 1, 2]
             : [0, 1, 2, 3];
     for (const idx of visibleIndexes) {
       const c = slots[idx];
@@ -447,10 +447,10 @@ function LayoutSwitcher() {
         onClick={() => setLayout("2h")}
       />
       <LayoutBtn
-        active={layout === "2v"}
-        icon={<Rows2 className="h-3.5 w-3.5" aria-hidden />}
-        label="2 縦分割"
-        onClick={() => setLayout("2v")}
+        active={layout === "3"}
+        icon={<PanelRightDashed className="h-3.5 w-3.5" aria-hidden />}
+        label="L字 3 分割（左全高 + 右上下）"
+        onClick={() => setLayout("3")}
       />
       <LayoutBtn
         active={layout === "4"}

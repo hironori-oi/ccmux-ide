@@ -34,7 +34,9 @@ import {
  *
  * 構成:
  *   ┌─ TrayBar (チップ + 新規作成 + LayoutSwitcher inline) ─┐
- *   └─ SlotGrid (layout に応じて 1 / 2h / 2v / 4)        ─┘
+ *   └─ SlotGrid (layout に応じて 1 / 2h / 3 / 4)         ─┘
+ *
+ * v1.10.0 (DEC-054): `"2v"` を廃止し `"3"` (L字 3 分割: 左全高 + 右上下) を追加。
  *
  * DndContext で wrap し、drop 時に `setSlot` を発火。DragOverlay でドラッグ中の
  * ghost chip を表示。Sidebar の ProjectTree からの HTML5 native drop は SlotContainer
@@ -202,10 +204,18 @@ function SlotGrid({ layout }: { layout: WorkspaceLayout }) {
       </div>
     );
   }
-  if (layout === "2v") {
+  if (layout === "3") {
+    // v1.10.0 (DEC-054): L字 3 分割
+    //   ┌──────┬──────┐
+    //   │      │  B   │
+    //   │  A   ├──────┤
+    //   │      │  C   │
+    //   └──────┴──────┘
+    // slot0 = A (左全高 / row-span-2), slot1 = B (右上), slot2 = C (右下)
     return (
-      <div className="grid h-full grid-rows-2 gap-px bg-border/20">
-        <SlotContainer slotIndex={0} slotLabel="A" />
+      <div className="grid h-full grid-cols-2 grid-rows-2 gap-px bg-border/20">
+        <SlotContainer slotIndex={0} slotLabel="A" className="row-span-2" />
+        <SlotContainer slotIndex={1} slotLabel="B" />
         <SlotContainer slotIndex={2} slotLabel="C" />
       </div>
     );

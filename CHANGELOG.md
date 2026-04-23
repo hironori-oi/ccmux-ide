@@ -11,11 +11,59 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.10.0] - 2026-04-24
+
+**L字 3 分割 + Project 別 Layout 独立 + Preview localhost iframe** — ワークスペース
+分割モードを整理し、project 切替時の layout leak を解消。localhost URL は
+slot 内で iframe 表示できるようにする（DEC-054 / DEC-055 / DEC-056）。
+
+### Added
+
+- **L字 3 分割レイアウト (DEC-054)** — LayoutSwitcher に `"3"` (左 1 全高 +
+  右上 + 右下) を追加。左 slot を Chat、右上を Editor、右下を Terminal / Preview
+  として使う等、縦 2 分割より実用的な構成を提供する。
+- **Preview の localhost iframe 表示 (DEC-056)** — `isLocalUrl()` で URL host が
+  `localhost` / `127.0.0.1` / `*.localhost` / `0.0.0.0` / `::1` かを判定し、
+  internal URL は slot 内 `<iframe sandbox referrerPolicy="no-referrer">` で
+  表示する。外部 URL は既存の `spawn_preview_window` (Tauri 2 WebviewWindowBuilder)
+  による別ウィンドウ spawn を継続（DEC-052 の「iframe 撤退」を internal 限定で
+  条件付き上書き）。CSP は `frame-src 'self' http://localhost:* http://127.0.0.1:*
+  http://*.localhost https:` で許可済みのため追加設定不要。
+
+### Changed
+
+- **Workspace Layout の store を project 別に独立保持 (DEC-055)** —
+  `layouts: Record<sessionId, SessionLayout>` から
+  `layouts: Record<projectId, Record<sessionId, SessionLayout>>` に refactor。
+  session id は project をまたいで uniqueness が保証されないため、project 切替時に
+  別 project の session id と衝突して layout が leak する事故を解消。
+  `useProjectStore.getState()` で遅延参照し循環依存を回避。
+- **LayoutSwitcher UI の再構成 (DEC-054)** — `"2v"` (縦 2 分割) ボタンを削除し、
+  新設の `"3"` (L字 3 分割、lucide-react `PanelRightDashed` icon) を追加。
+
+### Removed
+
+- **`"2v"` (縦 2 分割) モード (DEC-054)** — 実測利用が少なく、L字 3 分割のほうが
+  実用的という判断。既存の `"2v"` state は自動で `"2h"` に変換され、
+  slot2 の chip は slot1 に移送される（slot1 既存があれば破棄）。
+- **CHANGELOG の絵文字** — Keep a Changelog に寄せ、`### Added` / `### Changed` /
+  `### Removed` のプレーン見出しに統一。
+
+### Migration
+
+- `sumi:workspace-layout` localStorage (persist version 2 → 3): 旧 flat
+  `{ [sid]: SessionLayout }` は `__legacy__` project key の配下に退避される。
+  他 project は参照せず、新 project は空状態から開始。
+- `"2v"` layout 値は migration 時に `"2h"` + slot2→slot1 移送で正規化される。
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.9.0] - 2026-04-24
 
 **Session-Scoped Model / Effort / Permission-Mode** — StatusBar の model/effort picker を TrayBar に移設し、session 単位で切替できるようにする。新規に permission-mode picker を追加（DEC-053）。
 
-### ✨ Added
+### Added
 
 - **TrayPermissionModePicker (新規)** — TrayBar に `default` / `acceptEdits` /
   `bypassPermissions` / `plan` の 4 モードを切替できる Popover を追加。選択値は
@@ -27,7 +75,7 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
   `useDialogStore` の `selectedModel` / `selectedEffort` を global default として
   seed（sticky 挙動）。
 
-### 💎 Changed
+### Changed
 
 - **StatusBar の ModelPickerPopover / EffortPickerPopover を TrayBar に移設**
   (DEC-053)。StatusBar はシステム指標（OAuth gauge / ClaudeActivitySummary /
@@ -38,7 +86,7 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
   引数を追加して透過し、sidecar 側の既存 `req.options` 分岐で SDK query
   options を上書きする経路を採用。
 
-### 🧹 Removed
+### Removed
 
 - **`components/chat/ModelPickerPopover.tsx` / `EffortPickerPopover.tsx`** の
   2 ファイルを削除（StatusBar 専用の未使用コンポーネントになったため）。

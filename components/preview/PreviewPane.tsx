@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/tooltip";
 import { logger } from "@/lib/logger";
 import { callTauri } from "@/lib/tauri-api";
+import { isLocalUrl } from "@/lib/url";
 import { useProjectStore } from "@/lib/stores/project";
 import {
   DEFAULT_PREVIEW_URL,
@@ -37,6 +38,9 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
  * 切替 (Windows WebView2 user data dir 競合を解消)。
  * PRJ-012 v1.2 / PM-945 (2026-04-20): Preview window の位置 / サイズを project ごとに
  * 記憶。次回「アプリ内で開く」時に同じ geometry で spawn する (Cursor / VSCode 同等)。
+ * PRJ-012 v1.10.0 / DEC-056 (2026-04-24): URL が localhost 系 (internal) の場合は
+ * slot 内 iframe で表示し、外部 URL (https://…) は既存の別ウィンドウ spawn を維持する
+ * 条件付き分岐を追加（DEC-052 の「iframe 撤退」を internal URL 限定で条件付き上書き）。
  *
  * ## 戦略転換の経緯
  *
@@ -462,93 +466,147 @@ export function PreviewPane({ previewId }: { previewId?: string } = {}) {
     );
   }
 
+  // v1.10.0 (DEC-056): committedUrl が localhost 系なら slot 内 iframe で表示する。
+  // CSP は tauri.conf.json で `frame-src 'self' http://localhost:* http://127.0.0.1:*
+  // http://*.localhost https:` が許可済みのため追加設定不要。
+  const isInternal = isLocalUrl(committedUrl);
+
   return (
-    <div className="flex h-full w-full items-center justify-center p-8">
+    <div className="flex h-full w-full flex-col">
+      {/* URL 入力バー（共通）: 上部に配置して internal / external どちらでも編集可能 */}
       <form
         onSubmit={handleSubmit}
-        className="flex w-full max-w-xl flex-col gap-3"
+        className="flex shrink-0 items-center gap-2 border-b bg-muted/10 px-2 py-1.5"
       >
         <label
           htmlFor="preview-url-input"
-          className="text-sm font-medium text-foreground"
+          className="sr-only"
         >
           Preview URL
         </label>
+        <Input
+          id="preview-url-input"
+          type="text"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onBlur={() => handleCommitUrl(inputValue)}
+          placeholder="http://localhost:3000"
+          spellCheck={false}
+          aria-label="プレビュー URL"
+          className="h-8 min-w-0 flex-1 text-xs"
+        />
+        {/* DEC-056: internal URL は iframe 表示中でも、ユーザーが「別ウィンドウで
+            開きたい」シーンに備え spawn ボタンを残す。external URL では主要 CTA。 */}
+        <Button
+          type="button"
+          onClick={() => void handleOpenInApp()}
+          variant={isInternal ? "outline" : "default"}
+          size="sm"
+          aria-label="別ウィンドウで開く"
+          title="別ウィンドウ (Tauri WebviewWindow) で開く"
+          className="h-8 shrink-0 gap-1 text-xs"
+          disabled={isOpeningInApp}
+        >
+          <Monitor className="h-3.5 w-3.5" aria-hidden />
+          別ウィンドウ
+        </Button>
+        <Button
+          type="button"
+          onClick={() => void handleOpenExternal()}
+          variant="outline"
+          size="sm"
+          aria-label="外部ブラウザで開く"
+          title="外部ブラウザで開く"
+          className="h-8 shrink-0 gap-1 text-xs"
+        >
+          <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+          ブラウザ
+        </Button>
+      </form>
 
-        <div className="flex flex-col gap-2">
-          <Input
-            id="preview-url-input"
-            type="text"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onBlur={() => handleCommitUrl(inputValue)}
-            placeholder="http://localhost:3000"
-            spellCheck={false}
-            aria-label="プレビュー URL"
-            className="h-10 w-full text-sm"
+      {/* 本体: internal は iframe、external は案内 + spawn 中央カード */}
+      {isInternal ? (
+        <div className="relative min-h-0 flex-1 bg-background">
+          <iframe
+            key={committedUrl}
+            src={committedUrl}
+            title={`Preview: ${committedUrl}`}
+            className="h-full w-full border-0"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+            referrerPolicy="no-referrer"
+            // Tauri 2 の dragDropEnabled=false 下でも iframe 内の native scroll は動く。
+            // NOTE: iframe 内 URL 変更を検知する方法は cross-origin 制約で無いため、
+            //       URL 入力欄の onBlur / Enter で再 mount（`key={committedUrl}`）に
+            //       頼る設計。
           />
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              onClick={() => void handleOpenInApp()}
-              variant="default"
-              size="lg"
-              aria-label="アプリ内で開く"
-              title="アプリ内で開く (Tauri WebviewWindow)"
-              className="h-10 gap-2"
-              disabled={isOpeningInApp}
-            >
-              <Monitor className="h-4 w-4" aria-hidden />
-              アプリ内で開く
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void handleOpenExternal()}
-              variant="outline"
-              size="lg"
-              aria-label="外部ブラウザで開く"
-              title="外部ブラウザで開く"
-              className="h-10 gap-2"
-            >
-              <ExternalLink className="h-4 w-4" aria-hidden />
-              ブラウザで開く
-            </Button>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-8">
+          <div className="flex w-full max-w-xl flex-col gap-3">
+            <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+              <Info
+                className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                aria-hidden
+              />
+              <span>
+                外部 URL (<code className="font-mono text-[11px]">{committedUrl}</code>) は
+                WebView2 の security layer により iframe では表示できないため、
+                「別ウィンドウ」または「ブラウザで開く」をご利用ください。
+                localhost の URL を指定するとこの欄に iframe 表示されます。
+                （PM-945 / v1.2: 別ウィンドウの位置とサイズはプロジェクトごとに記憶されます）
+              </span>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      aria-label="詳細"
+                      className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:text-foreground"
+                    >
+                      <Info className="h-3 w-3" aria-hidden />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-[340px] text-[11px]">
+                    v1.0 (PM-925〜933) は iframe 方式を試みましたが、WebView2 の
+                    security layer で外部 URL の接続拒否が解消せず撤退。
+                    v1.1 (PM-943) で Tauri 2 secondary WebviewWindow に切替、
+                    PM-944 で JS API → Rust `WebviewWindowBuilder` に再切替
+                    (Windows WebView2 user data dir 競合を `data_directory` 明示で解消)。
+                    v1.10.0 (DEC-056) で localhost URL のみ slot 内 iframe 表示に復帰。
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                onClick={() => void handleOpenInApp()}
+                variant="default"
+                size="lg"
+                aria-label="別ウィンドウで開く"
+                title="別ウィンドウで開く (Tauri WebviewWindow)"
+                className="h-10 gap-2"
+                disabled={isOpeningInApp}
+              >
+                <Monitor className="h-4 w-4" aria-hidden />
+                別ウィンドウで開く
+              </Button>
+              <Button
+                type="button"
+                onClick={() => void handleOpenExternal()}
+                variant="outline"
+                size="lg"
+                aria-label="外部ブラウザで開く"
+                title="外部ブラウザで開く"
+                className="h-10 gap-2"
+              >
+                <ExternalLink className="h-4 w-4" aria-hidden />
+                ブラウザで開く
+              </Button>
+            </div>
           </div>
         </div>
-
-        <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
-          <Info
-            className="mt-0.5 h-3.5 w-3.5 shrink-0"
-            aria-hidden
-          />
-          <span>
-            「アプリ内で開く」は Sumi 内の別 window で表示します
-            （PM-944 / v1.1 Phase 4.1 Rust spawn）。表示されないサイトは「ブラウザで開く」をご利用ください。
-            （PM-945 / v1.2: ウィンドウ位置とサイズはプロジェクトごとに記憶されます）
-          </span>
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="詳細"
-                  className="ml-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:text-foreground"
-                >
-                  <Info className="h-3 w-3" aria-hidden />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-[340px] text-[11px]">
-                v1.0 (PM-925〜933) は iframe 方式を試みましたが、WebView2 の
-                security layer で外部 URL の接続拒否が解消せず撤退。
-                v1.1 (PM-943) で Tauri 2 secondary WebviewWindow に切替、
-                PM-944 で JS API → Rust `WebviewWindowBuilder` に再切替
-                (Windows WebView2 user data dir 競合を `data_directory` 明示で解消)。
-                同一 window 内 preview (Cursor 同等 UX) は Phase 4.2 で対応予定。
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      </form>
+      )}
     </div>
   );
 }
