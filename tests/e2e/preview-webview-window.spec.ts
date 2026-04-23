@@ -67,10 +67,11 @@ test.describe("PreviewPane — in-app WebviewWindow (PM-944)", () => {
   }) => {
     await page.goto("/workspace");
 
-    // プレビュータブへ切替
-    await page.getByRole("tab", { name: /プレビュー/ }).first().click();
+    // PM-970 workspace-first UI: プレビュータブは廃止されたため、Tray Bar の
+    // 🌐+ ボタンで preview instance を作成 + 空 slot に自動配置する。
+    await page.getByRole("button", { name: "プレビューを配置" }).click();
 
-    // URL 入力欄が visible になる (= project active, PreviewPane 本体が render)
+    // URL 入力欄が visible になる (= preview slot が active, PreviewPane 本体が render)
     const urlInput = page.locator("#preview-url-input");
     await expect(urlInput).toBeVisible({ timeout: 10_000 });
 
@@ -109,7 +110,8 @@ test.describe("PreviewPane — in-app WebviewWindow (PM-944)", () => {
   test("clicking 'ブラウザで開く' invokes shell open", async ({ page }) => {
     await page.goto("/workspace");
 
-    await page.getByRole("tab", { name: /プレビュー/ }).first().click();
+    // PM-970: Tray Bar の 🌐+ ボタンで preview instance を作成 + 空 slot に配置
+    await page.getByRole("button", { name: "プレビューを配置" }).click();
 
     const urlInput = page.locator("#preview-url-input");
     await expect(urlInput).toBeVisible({ timeout: 10_000 });

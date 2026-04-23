@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -14,6 +14,7 @@ import {
 
 import { TrayBar } from "@/components/workspace/TrayBar";
 import { SlotContainer } from "@/components/workspace/SlotContainer";
+import { DEFAULT_PANE_ID } from "@/lib/stores/chat";
 import {
   useWorkspaceLayoutStore,
   type SlotContentKind,
@@ -34,6 +35,21 @@ import {
 export function WorkspaceView() {
   const layout = useWorkspaceLayoutStore((s) => s.layout);
   const setSlot = useWorkspaceLayoutStore((s) => s.setSlot);
+  const slots = useWorkspaceLayoutStore((s) => s.slots);
+
+  // PM-977: 初回起動 UX。全 slot が空なら main chat を slot 0 に自動配置する。
+  // 旧 5 タブ UI では「チャットタブを開くと即 textarea 表示」だったが、workspace-
+  // first UI では明示配置しないと textarea が出ず「空っぽの画面」で戸惑うため。
+  // ユーザーが明示的に全 slot を空にした状態でも再起動で再配置されるので、
+  // 「常に何か入っている」安心感がある（不要なら即 ✕ で消せる）。
+  useEffect(() => {
+    const allEmpty = slots.every((s) => s === null);
+    if (allEmpty) {
+      setSlot(0, { kind: "chat", refId: DEFAULT_PANE_ID });
+    }
+    // 初回のみ判定したいので依存は空配列。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [activeDrag, setActiveDrag] = useState<{
     kind: SlotContentKind;
