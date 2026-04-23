@@ -270,6 +270,18 @@ export const DEFAULT_BACKGROUND_IMAGE: BackgroundImageSettings = {
 };
 
 /**
+ * PM-967: チャット表示まわりの設定。
+ *
+ * ツール呼び出し（Read / Edit / Bash 等）を折り畳み表示するかの制御。デフォルトは
+ * **折り畳み ON**（= Claude の回答テキストだけを表示し、tool 操作はグループで集約）。
+ * オーナーが詳細を見たい時だけヘッダの toggle で切替可能。
+ */
+export interface ChatDisplaySettings {
+  /** true = 各 tool use を個別カードで表示 / false = 連続する tool を折り畳み */
+  showToolDetails: boolean;
+}
+
+/**
  * アプリ全体の永続化設定。
  *
  * 永続化は `@tauri-apps/plugin-store` が未導入のため当面 `localStorage` 経由。
@@ -277,6 +289,8 @@ export const DEFAULT_BACKGROUND_IMAGE: BackgroundImageSettings = {
  */
 export interface AppSettings {
   appearance: AppearanceSettings;
+  /** PM-967: チャット表示設定 */
+  chatDisplay: ChatDisplaySettings;
 }
 
 /** デフォルト値（PRJ-012 DEC-030 のブランド Orange 前提）。 */
@@ -287,6 +301,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     themePreset: "orange",
     fontSize: 14,
     backgroundImage: DEFAULT_BACKGROUND_IMAGE,
+  },
+  chatDisplay: {
+    showToolDetails: false,
   },
 };
 

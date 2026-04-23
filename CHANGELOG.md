@@ -11,6 +11,40 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.4.2] - 2026-04-23
+
+**Readability & Viewer Fixes** — チャット可読性 + PDF / 画像ビューワ対応。
+
+### ✨ Added
+
+- **Tool use 折り畳み表示** (PM-967)。Claude レスポンス中の `Read` / `Edit` /
+  `Bash` / `Grep` 等の tool 呼び出しが数十件並んで本質的な回答が埋もれる問題
+  に対応。連続する tool use を「N 件の tool 操作」の折り畳みカードに集約
+  表示する。チャットヘッダ右上の 👁 toggle ボタンで「詳細表示 ON / OFF」を
+  切替可能。**デフォルトは折り畳み ON**（本修正で即座に可読性改善）。
+  状態は `sumi:settings` に localStorage 永続化。
+- **PDF / 画像 / 動画 / 音声ビューワ** (PM-968)。エディタに PDF を開くと
+  Monaco が text として流し込んで文字化けしていた問題を修正。`FileViewer`
+  が拡張子を見て適切なビューワにディスパッチする:
+  - `.pdf` → WebView2 / WebKit 内蔵 PDF ビューワ（iframe + `asset://` URL）
+  - `.png` / `.jpg` / `.webp` / `.gif` / `.bmp` / `.ico` / `.avif` → `<img>`
+  - `.svg` → `<img>`（ソース編集は拡張子判定外しで Monaco に切替可能）
+  - `.mp4` / `.webm` / `.mov` / `.mkv` → `<video controls>`
+  - `.mp3` / `.wav` / `.ogg` / `.flac` / `.m4a` → `<audio controls>`
+  - その他 → `<FileEditor>`（Monaco、従来通り）
+- **バイナリファイルの上限緩和**: テキストは従来の 1MB 制限のまま、バイナリ
+  ビューワ対応ファイルは 50MB まで（PM-968）。`readTextFile` をスキップする
+  ことで text / UTF-8 破損のリスクも消滅。
+
+### 🔧 Fixed
+
+- PDF をエディタで開くと文字化けする regression (PM-968)
+- チャット画面でツール操作履歴が縦に長く連なり、ユーザー質問と Claude の
+  回答が見つけづらい UX 問題 (PM-967)
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.4.1] - 2026-04-23
 
 **Context Fix** — Claude Code CLI 相当のプロジェクトコンテキスト自動読込を実装。

@@ -2,14 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Loader2 } from "lucide-react";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useChatStore, DEFAULT_PANE_ID } from "@/lib/stores/chat";
 import { useProjectStore } from "@/lib/stores/project";
 import { useSessionStore } from "@/lib/stores/session";
+import { useSettingsStore } from "@/lib/stores/settings";
 import { ChatPaneHeader } from "@/components/chat/ChatPaneHeader";
 import { MessageList } from "@/components/chat/MessageList";
 import { InputArea } from "@/components/chat/InputArea";
 import { ActivityIndicator } from "@/components/chat/ActivityIndicator";
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 /**
  * PM-132 + v5 Chunk C (DEC-030) + v3.3 Chunk B (DEC-033) + v3.5 Chunk B (Split
@@ -218,13 +226,15 @@ export function ChatPanel({
       )}
       {/* 1 pane 時のみ表示する従来ヘッダ（プロジェクト名 + status 表示）。
           複数 pane 時は status bar が冗長になるため省略。
-          PM-965: 旧「Sumi」固定 → activeProject.title（未選択時は「プロジェクト未選択」）。 */}
+          PM-965: 旧「Sumi」固定 → activeProject.title（未選択時は「プロジェクト未選択」）。
+          PM-967: tool use 詳細の表示/折り畳み toggle を追加。 */}
       {!showHeader && (
-        <header className="flex h-12 shrink-0 items-center justify-between border-b px-4">
-          <h1 className="truncate text-sm font-medium">
+        <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4">
+          <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
             {activeProjectTitle ?? "プロジェクト未選択"}
           </h1>
-          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <ToolDetailsToggle />
+          <p className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
             {!ready && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
             {status}
           </p>
@@ -245,6 +255,45 @@ export function ChatPanel({
         </motion.div>
       </AnimatePresence>
     </div>
+  );
+}
+
+/**
+ * PM-967: チャットヘッダ右上の tool 詳細表示 toggle。
+ *
+ * OFF（default）: 連続する tool use を折り畳み表示（N 件の tool 操作）
+ * ON: 各 tool use を個別カードで従来通り表示
+ *
+ * 状態は `useSettingsStore` 経由で localStorage 永続化される（全 pane 共通）。
+ */
+function ToolDetailsToggle() {
+  const show = useSettingsStore((s) => s.settings.chatDisplay.showToolDetails);
+  const setShow = useSettingsStore((s) => s.setShowToolDetails);
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-7 w-7 shrink-0"
+            onClick={() => setShow(!show)}
+            aria-label={show ? "tool 操作を折り畳む" : "tool 操作を展開"}
+            aria-pressed={show}
+          >
+            {show ? (
+              <Eye className="h-3.5 w-3.5" aria-hidden />
+            ) : (
+              <EyeOff className="h-3.5 w-3.5" aria-hidden />
+            )}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="text-xs">
+          {show ? "tool 詳細を隠す" : "tool 詳細を表示"}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 

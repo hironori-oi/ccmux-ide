@@ -42,6 +42,44 @@ export const EDITOR_STORAGE_KEY = "ccmux-editor-open-files";
 export const MAX_OPEN_FILE_BYTES = 1024 * 1024;
 
 /**
+ * PM-968: asset:// プロトコルで直接表示するバイナリ拡張子。
+ * これらは readTextFile をスキップし、1MB 制限の対象外とする
+ * （FileViewer が convertFileSrc で iframe/img/video に渡す）。
+ */
+const BINARY_VIEWER_EXTENSIONS = new Set([
+  "pdf",
+  "png",
+  "jpg",
+  "jpeg",
+  "webp",
+  "gif",
+  "bmp",
+  "ico",
+  "avif",
+  "svg",
+  "mp4",
+  "webm",
+  "mov",
+  "mkv",
+  "mp3",
+  "wav",
+  "ogg",
+  "flac",
+  "m4a",
+]);
+
+/** バイナリビューワで表示する拡張子か（readTextFile をスキップして良いか） */
+function isBinaryViewerFile(path: string): boolean {
+  const idx = path.lastIndexOf(".");
+  if (idx < 0) return false;
+  const ext = path.slice(idx + 1).toLowerCase();
+  return BINARY_VIEWER_EXTENSIONS.has(ext);
+}
+
+/** バイナリビューワ用のより緩い上限（50MB、動画は超えうるが別途判断） */
+const MAX_BINARY_VIEWER_BYTES = 50 * 1024 * 1024;
+
+/**
  * PM-924 (2026-04-20): Editor 分割 pane の既定 id。
  *
  * Chat の DEFAULT_PANE_ID ("main") と同様、最初の 1 pane は固定 id "main" を使用する。
@@ -365,20 +403,25 @@ export const useEditorStore = create<EditorState>()(
         });
 
         try {
-          // size チェック
+          const isBinaryViewer = isBinaryViewerFile(path);
+
+          // size チェック（バイナリは緩い上限、テキストは 1MB）
           try {
             const meta = await stat(path);
             const size = meta.size ?? 0;
-            if (size > MAX_OPEN_FILE_BYTES) {
+            const limit = isBinaryViewer
+              ? MAX_BINARY_VIEWER_BYTES
+              : MAX_OPEN_FILE_BYTES;
+            if (size > limit) {
               set((state) => ({
                 openFiles: state.openFiles.map((f) =>
                   f.id === id
                     ? {
                         ...f,
                         loading: false,
-                        error: `ファイルが大きすぎます（${humanSize(
-                          size
-                        )} / 上限 1MB）`,
+                        error: `ファイルが大きすぎます（${humanSize(size)} / 上限 ${humanSize(
+                          limit
+                        )}）`,
                       }
                     : f
                 ),
@@ -386,7 +429,28 @@ export const useEditorStore = create<EditorState>()(
               return;
             }
           } catch {
-            // stat が失敗しても readTextFile を試す（一部 FS で stat が使えないケース）
+            // stat が失敗しても読込を試す（一部 FS で stat が使えないケース）
+          }
+
+          // PM-968: バイナリ viewer 対応拡張子は readTextFile を呼ばずに
+          // loading:false で終わらせる。FileViewer 側が convertFileSrc(path)
+          // を使って iframe / img / video / audio に直接渡す。
+          if (isBinaryViewer) {
+            set((state) => ({
+              openFiles: state.openFiles.map((f) =>
+                f.id === id
+                  ? {
+                      ...f,
+                      loading: false,
+                      content: "",
+                      savedContent: "",
+                      dirty: false,
+                      error: null,
+                    }
+                  : f
+              ),
+            }));
+            return;
           }
 
           const content = await readTextFile(path);

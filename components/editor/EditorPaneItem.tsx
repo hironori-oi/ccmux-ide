@@ -14,7 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { FileEditor } from "@/components/editor/FileEditor";
+import { FileViewer } from "@/components/editor/FileViewer";
 import { useEditorStore } from "@/lib/stores/editor";
 import { cn } from "@/lib/utils";
 
@@ -198,7 +198,7 @@ export function EditorPaneItem({
           </div>
 
           <div className="min-h-0 flex-1">
-            {activeFile && <FileEditor openFileId={activeFile.id} />}
+            {activeFile && <FileViewer openFileId={activeFile.id} />}
           </div>
         </>
       )}

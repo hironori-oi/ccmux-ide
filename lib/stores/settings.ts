@@ -46,6 +46,8 @@ interface SettingsState {
   setBackgroundImage: (patch: Partial<BackgroundImageSettings>) => void;
   /** Round E2: 背景画像をデフォルト（path=null）に戻す */
   clearBackgroundImage: () => void;
+  /** PM-967: tool use 表示の詳細モード切替 */
+  setShowToolDetails: (show: boolean) => void;
   /** すべてをデフォルトへ戻す（Settings ページのリセットボタン想定） */
   resetSettings: () => void;
 }
@@ -181,14 +183,26 @@ export const useSettingsStore = create<SettingsState>()(
           },
         })),
 
+      setShowToolDetails: (show) =>
+        set((s) => ({
+          settings: {
+            ...s.settings,
+            chatDisplay: {
+              ...s.settings.chatDisplay,
+              showToolDetails: show,
+            },
+          },
+        })),
+
       resetSettings: () => set({ settings: DEFAULT_APP_SETTINGS }),
     }),
     {
       name: SETTINGS_STORAGE_KEY,
       storage: safeStorage,
-      version: 3,
+      version: 4,
       // v1 → v2: Week 7 Chunk 2 / PM-251 で themePreset を追加（デフォルト orange）
       // v2 → v3: Round E2 で backgroundImage を追加（デフォルト path=null）
+      // v3 → v4: PM-967 で chatDisplay を追加（デフォルト showToolDetails=false）
       migrate: (persisted, version) => {
         const state = persisted as { settings?: AppSettings } | undefined;
         if (!state?.settings) return { settings: DEFAULT_APP_SETTINGS };
@@ -212,6 +226,13 @@ export const useSettingsStore = create<SettingsState>()(
               backgroundImage:
                 next.appearance?.backgroundImage ?? DEFAULT_BACKGROUND_IMAGE,
             },
+          };
+        }
+        if (version < 4) {
+          next = {
+            ...next,
+            chatDisplay:
+              next.chatDisplay ?? DEFAULT_APP_SETTINGS.chatDisplay,
           };
         }
         return { settings: next };

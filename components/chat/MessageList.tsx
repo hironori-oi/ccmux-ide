@@ -1,18 +1,58 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Loader2, Sparkles } from "lucide-react";
 import { useChatStore, DEFAULT_PANE_ID, type ChatMessage } from "@/lib/stores/chat";
+import { useSettingsStore } from "@/lib/stores/settings";
 import { UserMessage } from "@/components/chat/UserMessage";
 import { AssistantMessage } from "@/components/chat/AssistantMessage";
 import { ToolUseCard } from "@/components/chat/ToolUseCard";
+import { ToolUseGroup } from "@/components/chat/ToolUseGroup";
 import { parseToolMessageContent } from "@/lib/tool-content-parser";
 
 // React 19 + zustand: selector が新しい配列/オブジェクトを返すと
 // getSnapshot cache が効かず "should be cached to avoid an infinite loop" になる。
 // 固定参照の空配列を返すことで回避。
 const EMPTY_MESSAGES: readonly ChatMessage[] = Object.freeze([]);
+
+/**
+ * PM-967: `showToolDetails === false` のとき連続する tool メッセージを 1 グループに
+ * まとめる。ストリーム中の最新 tool も同じグループに入れる（展開すれば見える）。
+ *
+ * 出力は display 用の「単一メッセージ or tool グループ」のフラット配列。
+ */
+type DisplayItem =
+  | { kind: "single"; message: ChatMessage }
+  | { kind: "tool-group"; id: string; messages: ChatMessage[] };
+
+function groupConsecutiveTools(messages: ChatMessage[]): DisplayItem[] {
+  const out: DisplayItem[] = [];
+  let buffer: ChatMessage[] = [];
+  for (const m of messages) {
+    if (m.role === "tool") {
+      buffer.push(m);
+      continue;
+    }
+    if (buffer.length > 0) {
+      out.push({
+        kind: "tool-group",
+        id: `tg-${buffer[0].id}`,
+        messages: buffer,
+      });
+      buffer = [];
+    }
+    out.push({ kind: "single", message: m });
+  }
+  if (buffer.length > 0) {
+    out.push({
+      kind: "tool-group",
+      id: `tg-${buffer[0].id}`,
+      messages: buffer,
+    });
+  }
+  return out;
+}
 
 /**
  * PM-132: メッセージ一覧。
@@ -35,7 +75,20 @@ export function MessageList({ paneId = DEFAULT_PANE_ID }: { paneId?: string }) {
   );
   const clearScrollTarget = useChatStore((s) => s.clearScrollTarget);
   const clearHighlight = useChatStore((s) => s.clearHighlight);
+  // PM-967: showToolDetails === false のとき tool 連続を折り畳み表示する
+  const showToolDetails = useSettingsStore(
+    (s) => s.settings.chatDisplay.showToolDetails
+  );
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  // PM-967: grouping は純粋関数で memo 化。messages 参照が変わった時だけ再計算。
+  const displayItems = useMemo(
+    () =>
+      showToolDetails
+        ? messages.map<DisplayItem>((m) => ({ kind: "single", message: m }))
+        : groupConsecutiveTools(messages),
+    [messages, showToolDetails]
+  );
 
   // 通常の末尾スクロール（streaming 中 or 新規メッセージ追加時）。
   // 検索ジャンプ中は効かせたくないので scrollTargetMessageId がある間は抑制。
@@ -108,7 +161,23 @@ export function MessageList({ paneId = DEFAULT_PANE_ID }: { paneId?: string }) {
     >
       <div className="mx-auto flex max-w-3xl flex-col gap-4">
         <AnimatePresence initial={false}>
-          {messages.map((m) => {
+          {displayItems.map((item) => {
+            if (item.kind === "tool-group") {
+              return (
+                <motion.div
+                  key={item.id}
+                  layout
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
+                  className="scroll-mt-16"
+                >
+                  <ToolUseGroup messages={item.messages} />
+                </motion.div>
+              );
+            }
+            const m = item.message;
             const isHighlighted = highlightedMessageId === m.id;
             return (
               <motion.div
@@ -131,13 +200,8 @@ export function MessageList({ paneId = DEFAULT_PANE_ID }: { paneId?: string }) {
                 {m.role === "user" ? (
                   <UserMessage message={m} />
                 ) : m.role === "tool" ? (
-                  // PM-880: live event 経路 (useAllProjectsSidecarListener) と
-                  // DB 復元経路 (session.ts toChatMessage) の両方で `toolUse` が
-                  // 付いた状態で届く前提。PM-831 の display 層 parse fallback は
-                  // session.ts 側に統合済だが、万一想定外の content shape
-                  // (古いデータ / 直接 insert 等) で toolUse が欠落していた場合の
-                  // 最終防衛ラインとして parse fallback を残す。
-                  // parse も失敗したら raw JSON が見える AssistantMessage に流す。
+                  // showToolDetails=true のときだけこのパスに来る
+                  // （false のときは groupConsecutiveTools で tool-group に集約）
                   m.toolUse ? (
                     <ToolUseCard tool={m.toolUse} />
                   ) : (() => {
