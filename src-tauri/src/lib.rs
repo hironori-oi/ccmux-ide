@@ -14,8 +14,8 @@ use commands::{
     // `start_agent_sidecar` / `stop_agent_sidecar` は signature が変わり、
     // 新規 `send_agent_interrupt` / `list_active_sidecars` を追加登録する。
     agent::{
-        list_active_sidecars, send_agent_interrupt, send_agent_prompt, start_agent_sidecar,
-        stop_agent_sidecar, AgentState,
+        list_active_sidecars, resolve_permission_request, send_agent_interrupt,
+        send_agent_prompt, start_agent_sidecar, stop_agent_sidecar, AgentState,
     },
     builtin_slash::{
         builtin_init_claude_md, list_builtin_slashes, read_mcp_config, write_mcp_config,
@@ -148,6 +148,10 @@ pub fn run() {
             send_agent_interrupt,
             stop_agent_sidecar,
             list_active_sidecars,
+            // PRJ-012 v1.13.0 / DEC-059 案B: ツール実行承認 UI の応答コマンド。
+            // Frontend の PermissionDialog から呼ばれ、sidecar stdin に
+            // permission_response NDJSON を書き戻す。
+            resolve_permission_request,
             // Conversation history (PM-150 / PM-151)
             create_session,
             append_message,

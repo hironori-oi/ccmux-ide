@@ -609,6 +609,14 @@ pub async fn start_agent_sidecar(
                 CommandEvent::Stdout(line) => {
                     let s = String::from_utf8_lossy(&line).to_string();
                     let _ = app_handle.emit(&raw_evt, s.clone());
+                    // DEC-059 案B (v1.13.0): sidecar が emit する NDJSON のうち
+                    // type === "permission_request" のものを専用 Tauri event
+                    // `sumi://permission-request` として Frontend に転送する。
+                    // 既存 `agent:{projectId}:raw` にも乗るが、Frontend 側は
+                    // PermissionProvider の listen でこちらを購読することで
+                    // 重複描画 / 親 listener (useAllProjectsSidecarListener) に
+                    // 承認ロジックを混ぜない分離が可能になる。
+                    dispatch_permission_request_if_any(&app_handle, &pid_for_task, &s);
                     // monitor 側も同じ NDJSON を見せて state を更新する。
                     dispatch_to_monitor(&app_handle, &pid_for_task, &s).await;
                 }
@@ -822,6 +830,87 @@ pub async fn send_agent_interrupt(
     Ok(())
 }
 
+/// PRJ-012 v1.13.0 (DEC-059 案B): sidecar stdout NDJSON 1 行を検査し、
+/// `type === "permission_request"` なら Frontend 向け `sumi://permission-request`
+/// Tauri event として transit する。
+///
+/// payload は sidecar が emit した envelope (`{type,id,payload}`) 全体を
+/// そのまま渡し、Frontend 側で `payload.payload.{requestId,sessionId,toolName,
+/// toolInput}` を抽出して Dialog に表示する。
+///
+/// - 非 JSON / 非該当 type は no-op
+/// - Frontend 未 mount / listen 未登録でも emit 失敗で sidecar 側の pending
+///   Promise は 60 秒 auto-deny timer で deny に倒れる (=無限ハング防止済)
+fn dispatch_permission_request_if_any(app: &AppHandle, project_id: &str, raw_line: &str) {
+    let trimmed = raw_line.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // 軽い prefilter: "permission_request" を含まない行は parse せず早期 return
+    if !trimmed.contains("permission_request") {
+        return;
+    }
+    let value: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    if value.get("type").and_then(|v| v.as_str()) != Some("permission_request") {
+        return;
+    }
+
+    // Frontend 向け payload を組む。sessionId は sidecar argv `--project-id`
+    // 由来だが、Rust 側でも project_id (= map key) を併記する (多重保険)。
+    let ev_payload = serde_json::json!({
+        "projectId": project_id,
+        "envelope": value,
+    });
+    let _ = app.emit("sumi://permission-request", ev_payload);
+}
+
+/// PRJ-012 v1.13.0 (DEC-059 案B): Frontend から渡された承認/拒否の決定を
+/// 対応する sidecar に書き戻す Tauri command。
+///
+/// # 引数
+/// - `project_id`  : 決定先の sidecar を特定する key (Frontend が Dialog 表示時に保持)
+/// - `request_id`  : sidecar 発行の permission request UUID (sidecar 側の
+///   pendingPermissions map の key)
+/// - `decision`    : 決定 payload。Frontend (PermissionDialog) から渡される
+///   generic JSON。shape は以下のいずれか:
+///   - `{ "behavior": "allow",  "updatedInput": Object? }`
+///   - `{ "behavior": "deny",   "message": String?, "interrupt": Boolean? }`
+///
+/// Rust 側は decision を blindly に sidecar へ pass-through する。shape
+/// validation は sidecar の `handlePermissionResponse` で行い、不正な形なら
+/// sidecar の auto-deny timer (60 秒) に任せる fail-safe 方針。
+#[tauri::command(rename_all = "camelCase")]
+pub async fn resolve_permission_request(
+    state: State<'_, AgentState>,
+    project_id: String,
+    request_id: String,
+    decision: serde_json::Value,
+) -> Result<(), String> {
+    let mut guard = state
+        .sidecars
+        .lock()
+        .map_err(|e| format!("lock poisoned: {e}"))?;
+    let handle = guard.get_mut(&project_id).ok_or_else(|| {
+        format!("sidecar not running for project_id={project_id} (permission response dropped)")
+    })?;
+
+    let req = serde_json::json!({
+        "type": "permission_response",
+        "request_id": request_id,
+        "decision": decision,
+    });
+    let line = req.to_string() + "\n";
+
+    handle
+        .child
+        .write(line.as_bytes())
+        .map_err(|e| format!("sidecar stdin 書込失敗 (project_id={project_id}): {e}"))?;
+    Ok(())
+}
+
 /// ある project の sidecar プロセスを終了させる。
 ///
 /// HashMap に該当 project_id が無ければ **no-op で `Ok(())`** (idempotent)。
@@ -1012,6 +1101,28 @@ mod tests {
     fn build_sidecar_args_empty_model_is_skipped() {
         let args = build_sidecar_args(SidecarMode::Bundled, "pid", Some(""), None);
         assert!(!args.iter().any(|a| a.starts_with("--model=")));
+    }
+
+    /// PRJ-012 v1.13.0 (DEC-059 案B): permission_response NDJSON の shape 検査。
+    ///
+    /// Rust 側で組み立てた stdin line (`send` するもの) が sidecar の
+    /// `handlePermissionResponse` が期待する shape (type / request_id / decision)
+    /// に合致することを確認する。API 契約の lock in。
+    #[test]
+    fn permission_response_ndjson_shape_is_stable() {
+        let decision = serde_json::json!({
+            "behavior": "allow",
+            "updatedInput": { "query": "anthropic news" }
+        });
+        let req = serde_json::json!({
+            "type": "permission_response",
+            "request_id": "abc-123",
+            "decision": decision,
+        });
+        let s = req.to_string();
+        assert!(s.contains("\"type\":\"permission_response\""));
+        assert!(s.contains("\"request_id\":\"abc-123\""));
+        assert!(s.contains("\"behavior\":\"allow\""));
     }
 
     /// Windows: JobObject 作成は `Default::default()` 内で best-effort。

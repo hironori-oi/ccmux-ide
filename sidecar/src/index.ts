@@ -36,7 +36,13 @@
  */
 
 import { runAgentQuery, type AgentQueryOptions } from "./agent.js";
-import { AbortError, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  AbortError,
+  type CanUseTool,
+  type PermissionResult,
+  type SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
+import { randomUUID } from "node:crypto";
 
 /**
  * v3.3 DEC-033: argv から `--project-id=<uuid>` を抽出する。
@@ -163,7 +169,34 @@ interface InterruptRequest {
   requestId?: string;
 }
 
-type InboundMessage = PromptRequest | InterruptRequest;
+/**
+ * PRJ-012 v1.13.0 (DEC-059 案B): Rust → sidecar のツール承認応答。
+ *
+ * sidecar が発した `permission_request` (outbound) の返答として、Rust 側
+ * `resolve_permission_request` command が NDJSON 1 行 `permission_response`
+ * を sidecar stdin に書き込む。`canUseTool` callback は request_id に紐づく
+ * Promise を resolve して SDK に `PermissionResult` を返す。
+ */
+interface PermissionResponseMessage {
+  type: "permission_response";
+  /** canUseTool 側が UUID で発行し、request 時に付与した識別子。 */
+  request_id: string;
+  decision:
+    | {
+        behavior: "allow";
+        updatedInput?: Record<string, unknown>;
+      }
+    | {
+        behavior: "deny";
+        message?: string;
+        interrupt?: boolean;
+      };
+}
+
+type InboundMessage =
+  | PromptRequest
+  | InterruptRequest
+  | PermissionResponseMessage;
 
 type OutboundType =
   | "ready"
@@ -191,7 +224,25 @@ type OutboundType =
    * UI 層 (useAllProjectsSidecarListener) がこの専用 event を listen するだけで
    * sdk_session_id を抽出できるよう、shape を絞った専用 outbound として独立させる。
    */
-  | "sdk_session_ready";
+  | "sdk_session_ready"
+  /**
+   * PRJ-012 v1.13.0 (DEC-059 案B): ツール実行の承認要求。
+   *
+   * SDK の `canUseTool` callback が呼ばれた際、sidecar は request_id を発行し
+   * この outbound を emit する。Rust は payload を `sumi://permission-request`
+   * Tauri event として Frontend に転送、Frontend が PermissionDialog を表示し
+   * 4 択ボタン (許可/拒否 × 今回のみ/セッション常時) を presenting する。
+   * Frontend は `resolve_permission_request` Tauri command で Rust に決定値を
+   * 返し、Rust は sidecar stdin に `permission_response` を書き戻す。
+   *
+   * payload shape: { requestId, sessionId, toolName, toolInput }
+   *  - requestId : sidecar 発行 UUID (permission_response の request_id と対応)
+   *  - sessionId : 起動時 argv `--project-id=<uuid>` の値 (project 単位、厳密には
+   *                SDK session ではないが frontend 側の display / scope 判定用)
+   *  - toolName  : SDK が呼び出そうとした tool 名 (例: "WebSearch", "Bash")
+   *  - toolInput : tool に渡される引数 object
+   */
+  | "permission_request";
 
 interface Outbound {
   type: OutboundType;
@@ -243,6 +294,26 @@ function sendWithReqId(
 const inFlightControllers = new Map<string, AbortController>();
 
 /**
+ * PRJ-012 v1.13.0 (DEC-059 案B): 保留中の permission_request を resolve する
+ * Promise handle の map。
+ *
+ * key = sidecar 発行の UUID (outbound permission_request の requestId)。
+ *
+ * - canUseTool callback 入口で `{resolve, reject}` を map に登録
+ * - Rust から permission_response 受信時に `map.get(request_id).resolve(decision)`
+ *   → canUseTool が `PermissionResult` を return して SDK に返す
+ * - interrupt 時は全 pending を reject して canUseTool 側から抜ける
+ *   (SDK は AbortController と合わせて query を中断する)
+ * - 60 秒 timeout で auto-deny (Rust/Frontend emit 失敗時の無限ハング防止)
+ */
+interface PendingPermission {
+  resolve: (result: PermissionResult) => void;
+  reject: (err: unknown) => void;
+  timer: NodeJS.Timeout;
+}
+const pendingPermissions = new Map<string, PendingPermission>();
+
+/**
  * v3.3.1 (Chunk C): エラーが SDK の AbortError 由来かを判定する。
  *
  * SDK が export している `AbortError` クラスのインスタンスチェックを第一義、
@@ -279,6 +350,102 @@ function emitToolUseBlocks(id: string, msg: SDKMessage): void {
       });
     }
   }
+}
+
+/**
+ * PRJ-012 v1.13.0 (DEC-059 案B): SDK の `canUseTool` callback を生成する。
+ *
+ * SDK は allowedTools に列挙されていないツール (例: MCP tools `mcp__*`) の
+ * 実行前に本 callback を呼び、戻り値の `PermissionResult` で allow/deny を判断する。
+ *
+ * ## フロー
+ * 1. 新しい request_id (UUID) を発行
+ * 2. `permission_request` outbound event を emit (Rust 経由で Frontend へ)
+ * 3. `pendingPermissions` に `{resolve, reject, timer}` を登録
+ * 4. Frontend が PermissionDialog で決定 → Rust → sidecar stdin に
+ *    `permission_response` を書き込む → main loop が resolve
+ * 5. SDK に `PermissionResult` を return
+ *
+ * ## 安全装置
+ * - 60 秒 timeout: Rust / Frontend 側 emit 失敗で permission_response が
+ *   永久に来ないケースで無限ハングしないよう、timer で deny 応答に倒す
+ * - AbortSignal: SDK が外部から abort した場合、Promise を reject
+ * - 二重応答 guard: pendingPermissions から削除済の request_id に対する
+ *   再 resolve は no-op (重複を無視)
+ *
+ * @param reqId prompt 側の req.id (outbound payload に echo する識別子)
+ */
+function makeCanUseTool(reqId: string): CanUseTool {
+  return async (toolName, input, options) => {
+    const permId = randomUUID();
+
+    // emit するための payload を先に組む
+    const payload: Record<string, unknown> = {
+      requestId: permId,
+      sessionId: SIDECAR_PROJECT_ID,
+      promptRequestId: reqId,
+      toolName,
+      toolInput: input,
+    };
+
+    return new Promise<PermissionResult>((resolve, reject) => {
+      // 60 秒 auto-deny timer (Rust / Frontend の emit 失敗時のハング防止)
+      const timer = setTimeout(() => {
+        if (pendingPermissions.has(permId)) {
+          pendingPermissions.delete(permId);
+          process.stderr.write(
+            `[permission] auto-deny after 60s (permId=${permId}, tool=${toolName})\n`,
+          );
+          resolve({
+            behavior: "deny",
+            message:
+              "ツール承認がタイムアウトしました (60 秒応答なし)。再送信してください。",
+            interrupt: false,
+          });
+        }
+      }, 60_000);
+
+      // AbortSignal ハンドリング: SDK 側 abort で Promise を reject
+      const onAbort = () => {
+        if (pendingPermissions.has(permId)) {
+          clearTimeout(timer);
+          pendingPermissions.delete(permId);
+          reject(
+            options.signal.reason instanceof Error
+              ? options.signal.reason
+              : new Error("aborted"),
+          );
+        }
+      };
+      if (options.signal.aborted) {
+        clearTimeout(timer);
+        reject(new Error("aborted"));
+        return;
+      }
+      options.signal.addEventListener("abort", onAbort, { once: true });
+
+      pendingPermissions.set(permId, {
+        resolve: (r) => {
+          clearTimeout(timer);
+          options.signal.removeEventListener("abort", onAbort);
+          resolve(r);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          options.signal.removeEventListener("abort", onAbort);
+          reject(e);
+        },
+        timer,
+      });
+
+      // outbound emit (Rust 経由で Frontend へ)
+      // prompt に紐づく req.id を echo するため sendWithReqId を使う。
+      sendWithReqId("permission_request", reqId, payload);
+      process.stderr.write(
+        `[permission] request emitted (permId=${permId}, tool=${toolName}, reqId=${reqId})\n`,
+      );
+    });
+  };
 }
 
 async function handlePrompt(req: PromptRequest): Promise<void> {
@@ -333,6 +500,10 @@ async function handlePrompt(req: PromptRequest): Promise<void> {
     const opts: AgentQueryOptions = {
       cwd: req.options?.cwd ?? process.cwd(),
       permissionMode: req.options?.permissionMode ?? "default",
+      // DEC-059 案A (v1.13.0): デフォルト allowedTools に WebSearch / WebFetch /
+      // TodoWrite / NotebookEdit を追加。これらは destructive でない or 既存
+      // Edit/Write と同レベルの破壊性に留まるため、無確認許可で UX を改善する。
+      // MCP tools (`mcp__*`) は含めない（明示承認 = 案B の dialog 経由）。
       allowedTools: req.options?.allowedTools ?? [
         "Read",
         "Edit",
@@ -340,6 +511,10 @@ async function handlePrompt(req: PromptRequest): Promise<void> {
         "Bash",
         "Glob",
         "Grep",
+        "WebSearch",
+        "WebFetch",
+        "TodoWrite",
+        "NotebookEdit",
       ],
       settingSources: req.options?.settingSources ?? [
         "user",
@@ -352,6 +527,11 @@ async function handlePrompt(req: PromptRequest): Promise<void> {
       // 呼び出し側の options で abortController が指定されていても、sidecar が
       // interrupt を受けて中断できる必要があるため、こちらで上書きする。
       abortController: controller,
+      // DEC-059 案B (v1.13.0): 未許可ツール実行時の承認コールバック。
+      // allowedTools に未列挙の tool (例: MCP tools `mcp__*`) を SDK が呼び出す
+      // 前に本 callback が呼ばれる。sidecar は Frontend に permission_request を
+      // emit し、ユーザー応答を待って `PermissionResult` を返す。
+      canUseTool: makeCanUseTool(req.id),
     };
 
     // maxThinkingTokens は「指定があれば渡す、無ければキー自体を付けない」
@@ -482,20 +662,86 @@ function handleInterrupt(req: InterruptRequest): void {
         `sidecar: interrupt no-op (requestId=${req.requestId} not in flight)\n`
       );
     }
+    // DEC-059 案B: interrupt 対象 prompt に紐づく pending permission を reject。
+    // pendingPermissions は request_id が prompt id と別管理のため、全体 drain
+    // が安全 (1 prompt しか許可依頼を出せない原則のため実害は小)。
+    rejectAllPendingPermissions("interrupted");
     return;
   }
 
   // requestId 未指定: 全 in-flight を abort
   if (inFlightControllers.size === 0) {
     process.stderr.write("sidecar: interrupt no-op (no in-flight queries)\n");
+    // pending permission も同時に drain (fail-safe)
+    rejectAllPendingPermissions("interrupted");
     return;
   }
   const ids = Array.from(inFlightControllers.keys());
   for (const controller of inFlightControllers.values()) {
     controller.abort();
   }
+  // DEC-059 案B: 全 pending permission も reject してハングを防ぐ
+  rejectAllPendingPermissions("interrupted");
   process.stderr.write(
     `sidecar: interrupt sent to all in-flight queries (ids=${ids.join(",")})\n`
+  );
+}
+
+/**
+ * PRJ-012 v1.13.0 (DEC-059 案B): Rust → sidecar の permission_response を処理する。
+ *
+ * `pendingPermissions` map から request_id を引き、canUseTool の Promise を
+ * resolve する。該当 id が無い (= すでに resolve 済 or auto-deny 済) 場合は
+ * 多重 resolve guard として no-op。
+ */
+function handlePermissionResponse(msg: PermissionResponseMessage): void {
+  const pending = pendingPermissions.get(msg.request_id);
+  if (!pending) {
+    process.stderr.write(
+      `[permission] response for unknown / stale request_id=${msg.request_id} (ignored)\n`,
+    );
+    return;
+  }
+  pendingPermissions.delete(msg.request_id);
+
+  if (msg.decision.behavior === "allow") {
+    pending.resolve({
+      behavior: "allow",
+      // SDK 契約: updatedInput を必ず返す。指定が無い場合、SDK は原 input を
+      // そのまま tool に渡す (permission 要求時の input 変更なし)。
+      updatedInput: msg.decision.updatedInput ?? {},
+      decisionClassification: "user_temporary",
+    });
+  } else {
+    pending.resolve({
+      behavior: "deny",
+      message: msg.decision.message ?? "ユーザーが拒否しました",
+      interrupt: msg.decision.interrupt ?? false,
+      decisionClassification: "user_reject",
+    });
+  }
+}
+
+/**
+ * DEC-059 案B: interrupt / session 削除等で全 pending permission を一括 reject。
+ *
+ * canUseTool Promise が reject されると SDK query は内部で error を throw するが、
+ * その後すぐ AbortController で abort されるので `interrupted` event で
+ * handlePrompt catch 節に着地する。
+ */
+function rejectAllPendingPermissions(reason: string): void {
+  if (pendingPermissions.size === 0) return;
+  const ids = Array.from(pendingPermissions.keys());
+  for (const pending of pendingPermissions.values()) {
+    try {
+      pending.reject(new Error(reason));
+    } catch {
+      // reject 自身が throw する経路は現実には無いが保険
+    }
+  }
+  pendingPermissions.clear();
+  process.stderr.write(
+    `[permission] rejected all pending (${ids.length} id(s)) reason=${reason}\n`,
   );
 }
 
@@ -518,6 +764,9 @@ function main(): void {
           // v3.3.1 (Chunk C / /review v6 Should Fix S-2):
           // 進行中の query を AbortController 経由で中断する。
           handleInterrupt(msg);
+        } else if (msg.type === "permission_response") {
+          // DEC-059 案B (v1.13.0): Frontend ダイアログでの承認/拒否応答を受領。
+          handlePermissionResponse(msg);
         } else {
           process.stderr.write(
             `sidecar: unknown inbound type: ${JSON.stringify(msg)}\n`

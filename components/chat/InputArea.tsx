@@ -377,6 +377,10 @@ export function InputArea({
         effort: projectPref?.effort ?? null,
         permissionMode:
           projectPref?.permissionMode ?? DEFAULT_PERMISSION_MODE,
+        // DEC-059 案B (v1.13.0): permission 承認の sticky 値は project sticky
+        // を直接継承する（空配列 fallback で後方互換）。
+        allowedTools: projectPref?.allowedTools ?? [],
+        deniedTools: projectPref?.deniedTools ?? [],
       };
       const resolvedPrefs = resolveSessionPreferences(
         prefState,

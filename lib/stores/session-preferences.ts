@@ -63,6 +63,21 @@ export interface SessionPreferences {
   effort: EffortLevel | null;
   /** "default" が実質的な初期値。null を許容しないのは UI を常に特定モード固定にしたいため。 */
   permissionMode: PermissionMode;
+  /**
+   * PRJ-012 v1.13.0 (DEC-059 案B): 当 session で「常に許可」と記録された tool 名。
+   *
+   * PermissionDialog で「このセッションで常に許可」を選んだ tool 名を蓄積する。
+   * Permission request 受信時に本配列を先にチェックし、該当する tool は dialog
+   * を出さず即 allow で resolve する（auto-resolve 経路）。
+   *
+   * DEC-057 の sticky 設計と整合: setPreference 経由で perProject にも伝播する。
+   */
+  allowedTools: string[];
+  /**
+   * PRJ-012 v1.13.0 (DEC-059 案B): 当 session で「常に拒否」と記録された tool 名。
+   * 処理方針は allowedTools と対称 (= 該当 tool は dialog なしで deny)。
+   */
+  deniedTools: string[];
 }
 
 /**
@@ -73,6 +88,9 @@ export const HARD_DEFAULT_PREFERENCES: SessionPreferences = Object.freeze({
   model: null,
   effort: null,
   permissionMode: DEFAULT_PERMISSION_MODE,
+  /** DEC-059 案B: 初期値は空配列（全ての未許可 tool は dialog 経由で確認）。 */
+  allowedTools: [],
+  deniedTools: [],
 }) as SessionPreferences;
 
 export interface SessionPreferencesState {
@@ -125,6 +143,24 @@ export interface SessionPreferencesState {
   ) => void;
 
   /**
+   * PRJ-012 v1.13.0 (DEC-059 案B): 「このセッションで常に許可/拒否」を記録する。
+   *
+   * allow=true なら allowedTools に tool 名を append (重複除去)、
+   * かつ deniedTools からは remove する (対称反転の安全策)。
+   * allow=false なら deniedTools に append、allowedTools からは remove。
+   *
+   * DEC-057 sticky 挙動と整合: perSession と **perProject の両方**を同時に更新し、
+   * 同 project の次回 session にも継承される。projectId が null (未分類) 時は
+   * perSession のみ更新。
+   */
+  rememberToolPermission: (
+    sessionId: string,
+    projectId: string | null,
+    toolName: string,
+    allow: boolean,
+  ) => void;
+
+  /**
    * session 削除時に呼ぶ。perSession のみ削除し、perProject はそのまま保持
    * （同 project の次回 session に sticky で継承されるべきため）。
    */
@@ -156,8 +192,15 @@ const safeStorage = createJSONStorage(() => {
   return window.localStorage;
 });
 
-/** DEC-057 v1.11.0: perProject 追加に伴う schema bump。 */
-const PERSIST_VERSION = 2;
+/**
+ * Persist schema version.
+ *
+ *  - v0/v1: perSession のみ
+ *  - v2 (DEC-057 v1.11.0): perProject 追加
+ *  - v3 (DEC-059 v1.13.0): SessionPreferences に `allowedTools` / `deniedTools`
+ *    を追加。旧データは空配列で補完する。
+ */
+const PERSIST_VERSION = 3;
 
 function mergePatch(
   base: SessionPreferences,
@@ -170,6 +213,14 @@ function mergePatch(
       patch.permissionMode !== undefined
         ? patch.permissionMode
         : base.permissionMode,
+    allowedTools:
+      patch.allowedTools !== undefined
+        ? patch.allowedTools
+        : (base.allowedTools ?? []),
+    deniedTools:
+      patch.deniedTools !== undefined
+        ? patch.deniedTools
+        : (base.deniedTools ?? []),
   };
 }
 
@@ -196,6 +247,10 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
                 model: seed.model,
                 effort: seed.effort,
                 permissionMode: seed.permissionMode,
+                // DEC-059 案B (v1.13.0): allowedTools / deniedTools も sticky 継承。
+                // 旧形 (v1.12.x 以前) データから seed される場合は空配列で補完。
+                allowedTools: seed.allowedTools ?? [],
+                deniedTools: seed.deniedTools ?? [],
               },
             },
           };
@@ -215,6 +270,10 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
                 model: seed.model,
                 effort: seed.effort,
                 permissionMode: seed.permissionMode,
+                // DEC-059 案B (v1.13.0): allowedTools / deniedTools も sticky 継承。
+                // 旧形 (v1.12.x 以前) データから seed される場合は空配列で補完。
+                allowedTools: seed.allowedTools ?? [],
+                deniedTools: seed.deniedTools ?? [],
               },
             },
           };
@@ -240,6 +299,70 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
             state.perProject[projectId] ?? HARD_DEFAULT_PREFERENCES;
           const nextProject = mergePatch(prevProject, patch);
 
+          return {
+            perSession: nextPerSession,
+            perProject: {
+              ...state.perProject,
+              [projectId]: nextProject,
+            },
+          };
+        }),
+
+      rememberToolPermission: (sessionId, projectId, toolName, allow) =>
+        set((state) => {
+          const prevSession =
+            state.perSession[sessionId] ?? HARD_DEFAULT_PREFERENCES;
+
+          const prevAllowed = prevSession.allowedTools ?? [];
+          const prevDenied = prevSession.deniedTools ?? [];
+          const withoutTool = (arr: readonly string[]): string[] =>
+            arr.filter((t) => t !== toolName);
+
+          const nextSessionPatch: Partial<SessionPreferences> = allow
+            ? {
+                allowedTools: prevAllowed.includes(toolName)
+                  ? [...prevAllowed]
+                  : [...prevAllowed, toolName],
+                deniedTools: withoutTool(prevDenied),
+              }
+            : {
+                allowedTools: withoutTool(prevAllowed),
+                deniedTools: prevDenied.includes(toolName)
+                  ? [...prevDenied]
+                  : [...prevDenied, toolName],
+              };
+
+          const nextSession = mergePatch(prevSession, nextSessionPatch);
+          const nextPerSession = {
+            ...state.perSession,
+            [sessionId]: nextSession,
+          };
+
+          if (projectId === null) {
+            return { perSession: nextPerSession };
+          }
+
+          const prevProject =
+            state.perProject[projectId] ?? HARD_DEFAULT_PREFERENCES;
+          const prevProjectAllowed = prevProject.allowedTools ?? [];
+          const prevProjectDenied = prevProject.deniedTools ?? [];
+          const withoutToolProj = (arr: readonly string[]): string[] =>
+            arr.filter((t) => t !== toolName);
+
+          const nextProjectPatch: Partial<SessionPreferences> = allow
+            ? {
+                allowedTools: prevProjectAllowed.includes(toolName)
+                  ? [...prevProjectAllowed]
+                  : [...prevProjectAllowed, toolName],
+                deniedTools: withoutToolProj(prevProjectDenied),
+              }
+            : {
+                allowedTools: withoutToolProj(prevProjectAllowed),
+                deniedTools: prevProjectDenied.includes(toolName)
+                  ? [...prevProjectDenied]
+                  : [...prevProjectDenied, toolName],
+              };
+          const nextProject = mergePatch(prevProject, nextProjectPatch);
           return {
             perSession: nextPerSession,
             perProject: {
@@ -306,10 +429,14 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
         perProject: state.perProject,
       }),
       /**
-       * DEC-057: 旧形 (version 0/1 相当、perProject 無し) → 新形への変換。
-       * perSession はそのまま保持、perProject は空オブジェクトで初期化する。
-       * 各 project の sticky 値は「次回そのプロジェクトで setPreference するまで」
-       * は empty → HARD_DEFAULT fallback となる（=破壊的な値の消失は無い）。
+       * 旧形データの migration:
+       *  - v0/v1 (perProject 無し) → v2: perProject を空 object で補完 (DEC-057)
+       *  - v2 (allowedTools/deniedTools 無し) → v3: 各 SessionPreferences エントリに
+       *    空配列で補完 (DEC-059 案B / v1.13.0)。既存の model / effort /
+       *    permissionMode はそのまま保持。
+       *
+       * いずれの経路も破壊的な値の消失は無い（空配列 default は「未記録 = dialog で
+       * 確認」と等価）。
        */
       migrate: (persisted) => {
         if (!persisted || typeof persisted !== "object") {
@@ -319,9 +446,28 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
           } as Partial<SessionPreferencesState>;
         }
         const p = persisted as Partial<SessionPreferencesState>;
+        const backfill = (
+          entries: Record<string, SessionPreferences> | undefined,
+        ): Record<string, SessionPreferences> => {
+          if (!entries) return {};
+          const out: Record<string, SessionPreferences> = {};
+          for (const [k, v] of Object.entries(entries)) {
+            out[k] = {
+              model: v?.model ?? null,
+              effort: v?.effort ?? null,
+              permissionMode:
+                v?.permissionMode ?? HARD_DEFAULT_PREFERENCES.permissionMode,
+              allowedTools: Array.isArray(v?.allowedTools)
+                ? v.allowedTools
+                : [],
+              deniedTools: Array.isArray(v?.deniedTools) ? v.deniedTools : [],
+            };
+          }
+          return out;
+        };
         return {
-          perSession: p.perSession ?? {},
-          perProject: p.perProject ?? {},
+          perSession: backfill(p.perSession),
+          perProject: backfill(p.perProject),
         } as Partial<SessionPreferencesState>;
       },
     },
@@ -375,5 +521,10 @@ export function resolveSessionPreferences(
     model: p.model ?? globalDefaults.model,
     effort: p.effort ?? globalDefaults.effort,
     permissionMode: p.permissionMode ?? globalDefaults.permissionMode,
+    // DEC-059 案B (v1.13.0): allowedTools / deniedTools は session 側を
+    // 優先 (globalDefaults は fallback)。空配列 merge は行わず session 値が
+    // 無い場合のみ globalDefaults を採用する (sticky 上書き防止)。
+    allowedTools: p.allowedTools ?? globalDefaults.allowedTools ?? [],
+    deniedTools: p.deniedTools ?? globalDefaults.deniedTools ?? [],
   };
 }

@@ -11,6 +11,34 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.13.0] - 2026-04-24
+
+**ツール実行の承認 UI + デフォルト allowedTools 拡張** — Claude が未許可ツール
+を呼ぼうとした際、Sumi 側に承認ダイアログが無かったため `canUseTool` 未実装で
+SDK が無限待機し、リサーチ系 (WebSearch / WebFetch) や MCP tools が事実上使え
+ない状態だった。本リリースで sidecar に `canUseTool` callback を実装し、
+Rust 経由で Frontend モーダル承認ダイアログを出す経路を追加する。併せて
+destructive でないリサーチ / タスク管理 / Notebook 系 4 tool を allowedTools
+デフォルトに追加して UX を底上げする（DEC-059 案A/案B）。
+
+### Added
+
+- ツール実行の承認ダイアログを追加。Claude が未許可ツールを要求した際、
+  ユーザーがモーダルで許可/拒否できる (DEC-059 案B)
+- session-preferences に `allowedTools` / `deniedTools` を追加し、
+  「このセッションで常に許可/拒否」を記憶する auto-resolve 経路を追加
+- デフォルト `allowedTools` に `WebSearch` / `WebFetch` / `TodoWrite` /
+  `NotebookEdit` を追加 (DEC-059 案A)
+- Rust command `resolve_permission_request(projectId, requestId, decision)`
+  を追加。Frontend の決定を sidecar stdin に書き戻す
+
+### Changed
+
+- sidecar が `canUseTool` callback を登録し、未許可ツールの実行要求を Rust
+  経由で Frontend に通知するようになった
+- sidecar stdout parser が `permission_request` 型の NDJSON を
+  `sumi://permission-request` Tauri event に転送するようになった
+
 ## [v1.12.0] - 2026-04-24
 
 **プロジェクト削除時のセッション cascade 削除と store cleanup** — 従来、

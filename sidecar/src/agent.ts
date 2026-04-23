@@ -186,6 +186,14 @@ export type AgentQueryOptions = Pick<
    * 通知し、frontend は次回送信時に sdk_session_id を null にして fallback する。
    */
   | "resume"
+  /**
+   * PRJ-012 v1.13.0 (DEC-059 案B): 未許可ツールの実行前に呼ばれる承認 callback。
+   *
+   * sidecar が canUseTool を登録することで、allowedTools に列挙されていない
+   * tool (例: MCP tools `mcp__*`) を SDK が実行しようとする前にユーザー承認を
+   * 取ることが可能になる。詳細は `sidecar/src/index.ts:makeCanUseTool`。
+   */
+  | "canUseTool"
 >;
 
 /**
