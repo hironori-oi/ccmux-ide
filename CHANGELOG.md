@@ -11,6 +11,26 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.8.2] - 2026-04-24
+
+**Tray Context Bar** — session 別のコンテキスト使用量を Tray Bar に表示。
+
+### ✨ Added
+
+- **Session 別コンテキスト使用量バッジ** (PM-984)。Tray Bar の LayoutSwitcher
+  左側に横 1 行のコンパクトバッジ `[⚠ ctx ■■■░░ 38%]` を追加:
+  - 色段階は ContextGauge と統一（<60% emerald / <85% yellow / >=85% red + ⚠）
+  - 60px thin progress bar + percent 数値
+  - tooltip に tokens used/max、model 名を表示
+  - **session 切替で該当 session の snapshot を表示**（前回 tick 時の値を保持）
+- `useMonitorStore` に `perSession: Record<sessionId, MonitorState>` を追加。
+  `monitor:tick` 受信時に currentSessionId をキーに snapshot 保存
+- `selectMonitorForSession(sessionId)` helper: 該当 session の snapshot、無ければ
+  global 最新値を fallback
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.8.1] - 2026-04-24
 
 **Session Order Toggle + Drag Reorder** — セッション並び順を更新時刻 / 手動で切替。

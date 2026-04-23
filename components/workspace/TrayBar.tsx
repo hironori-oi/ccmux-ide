@@ -22,6 +22,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { TrayContextBar } from "@/components/workspace/TrayContextBar";
 import { DEFAULT_PANE_ID } from "@/lib/stores/chat";
 import { useEditorStore } from "@/lib/stores/editor";
 import { usePreviewInstances } from "@/lib/stores/preview-instances";
@@ -63,7 +64,10 @@ export function TrayBar() {
   return (
     <div className="flex h-11 shrink-0 items-center gap-2 border-b bg-muted/10 px-2">
       <TrayChips />
-      <div className="ml-auto flex shrink-0 items-center gap-1">
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        {/* PM-984: 画面分割切替ボタンの左側にコンテキスト使用量を表示 */}
+        <TrayContextBar />
+        <div className="h-5 w-px bg-border/60" aria-hidden />
         <LayoutSwitcher />
       </div>
     </div>

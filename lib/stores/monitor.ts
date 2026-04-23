@@ -48,16 +48,33 @@ export interface MonitorState {
 }
 
 interface MonitorStore {
-  /** 直近の push 値。初期値は null（UI 側は placeholder を出す）。 */
+  /** 直近の push 値（全 session 共通の "latest"）。初期値は null。 */
   monitor: MonitorState | null;
-  setMonitor: (state: MonitorState) => void;
+  /**
+   * PM-984: session 別の直近 monitor snapshot。
+   * `monitor:tick` を受けた時点の currentSessionId をキーに保存する。
+   * session 切替時はその snapshot を参照して「その session のコンテキスト
+   * 使用量」を表示する。
+   */
+  perSession: Record<string, MonitorState>;
+  setMonitor: (state: MonitorState, sessionId?: string | null) => void;
   reset: () => void;
 }
 
 export const useMonitorStore = create<MonitorStore>((set) => ({
   monitor: null,
-  setMonitor: (monitor) => set({ monitor }),
-  reset: () => set({ monitor: null }),
+  perSession: {},
+  setMonitor: (monitor, sessionId) =>
+    set((s) => {
+      // global monitor は常に最新値で上書き
+      const next: Partial<MonitorStore> = { monitor };
+      // PM-984: sessionId があれば perSession にも保存
+      if (sessionId) {
+        next.perSession = { ...s.perSession, [sessionId]: monitor };
+      }
+      return next;
+    }),
+  reset: () => set({ monitor: null, perSession: {} }),
 }));
 
 /** コンテキスト使用率（0..1）。monitor 未ロード時は 0。 */
@@ -76,3 +93,18 @@ export function selectContextPercent(s: MonitorStore): number {
 export function selectIsNearLimit(s: MonitorStore): boolean {
   return selectContextPercent(s) >= 85;
 }
+
+/**
+ * PM-984: 指定 session の monitor snapshot を取得するヘルパ。
+ * - session id が null の場合は global monitor を返す
+ * - snapshot が無い session（まだ tick を受けていない）も global monitor を fallback
+ *   として返す（「session 選んだ直後は currentlyrunning の値で OK」）
+ */
+export function selectMonitorForSession(
+  s: MonitorStore,
+  sessionId: string | null
+): MonitorState | null {
+  if (!sessionId) return s.monitor;
+  return s.perSession[sessionId] ?? s.monitor;
+}
+

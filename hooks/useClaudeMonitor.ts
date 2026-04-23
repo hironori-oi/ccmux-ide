@@ -4,6 +4,7 @@ import { useEffect } from "react";
 
 import { onTauriEvent } from "@/lib/tauri-api";
 import { useMonitorStore, type MonitorState } from "@/lib/stores/monitor";
+import { useSessionStore } from "@/lib/stores/session";
 
 /**
  * `monitor:tick` を listen して Zustand store に同期するグローバル hook
@@ -31,7 +32,11 @@ export function useClaudeMonitor(): void {
     void (async () => {
       unlistenFn = await onTauriEvent<MonitorState>("monitor:tick", (payload) => {
         // payload は Rust 側 serde で JSON 化されたもの。field 名は snake_case。
-        setMonitor(payload);
+        // PM-984: tick 時点の currentSessionId を snapshot key に使い、
+        // session 別の直近値を保持する。TrayContextBar が session 切替時に
+        // その session の snapshot を引くのに使う。
+        const sid = useSessionStore.getState().currentSessionId;
+        setMonitor(payload, sid);
       });
     })();
 
