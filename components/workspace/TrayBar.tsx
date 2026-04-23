@@ -86,12 +86,17 @@ function TrayChips() {
 
   // PM-975: session フィルタ。currentSessionId がある → pane.currentSessionId が
   // 一致する chat pane のみ表示。currentSessionId 無しの時は全 pane 表示。
-  // main pane は「常時存在」が前提のため session 関係なく表示する（他 pane 作成の
-  // 起点として残す）。
+  // main pane は「常時存在」が前提のため session 関係なく表示する。
+  //
+  // PM-976 hotfix: 新規追加された chat pane は currentSessionId が null で
+  // 始まる（未だ session を load していない状態）。これらを filter で弾くと
+  // 「チャット追加」ボタンを押しても chip が出ない regression を起こすため、
+  // null pane は常時表示する（legacy 等のタグ無しと同じ扱い）。
   const chatItems = useMemo(() => {
     const paneEntries = Object.entries(chatPanes);
     const filtered = paneEntries.filter(([paneId, pane]) => {
       if (paneId === "main") return true; // main は常時表示
+      if (!pane.currentSessionId) return true; // session 未 attach pane は常時表示
       if (!currentSessionId) return true; // session 未選択時は全表示
       return pane.currentSessionId === currentSessionId;
     });
@@ -335,7 +340,10 @@ function DeleteChipButton({
   label: string;
 }) {
   const removeChatPane = useChatStore((s) => s.removePane);
-  const closeFile = useEditorStore((s) => s.closeFile);
+  // PM-976: closeFile は active pane からしか消さず、他 pane で参照中だと
+  // openFiles pool に残ってチップも消えない問題があった。Tray の ✕ では
+  // 常に purgeFile で全 pane + pool から完全削除する。
+  const purgeFile = useEditorStore((s) => s.purgeFile);
   const closeTerminal = useTerminalStore((s) => s.closeTerminal);
   const removePreviewInstance = usePreviewInstances((s) => s.removeInstance);
   const removeByRefId = useWorkspaceLayoutStore((s) => s.removeByRefId);
@@ -347,7 +355,7 @@ function DeleteChipButton({
       if (kind === "chat") {
         removeChatPane(refId);
       } else if (kind === "editor") {
-        closeFile(refId);
+        purgeFile(refId);
       } else if (kind === "terminal") {
         await closeTerminal(refId);
       } else if (kind === "preview") {

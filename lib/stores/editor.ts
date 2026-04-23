@@ -200,6 +200,12 @@ interface EditorState {
    * - `paneId` 省略時は `activeEditorPaneId`。
    */
   closeFile: (id: string, paneId?: string) => void;
+  /**
+   * PM-976: 指定 file を全 pane + openFiles pool から完全削除する。
+   * closeFile は activeEditorPaneId のみから remove するため、他 pane で
+   * 開いている file は pool に残り続け、Tray chip から削除できない問題への対応。
+   */
+  purgeFile: (id: string) => void;
 
   /** 他のタブを全て閉じる（指定 id のみ残す）。dirty チェックは呼出側。 */
   closeOtherFiles: (id: string, paneId?: string) => void;
@@ -496,6 +502,38 @@ export const useEditorStore = create<EditorState>()(
             ),
           }));
         }
+      },
+
+      /**
+       * PM-976: 全 pane から id を除去 + openFiles pool からも削除する。
+       * Tray の ✕ ボタンなど「完全削除」が期待される場面で使う。
+       */
+      purgeFile: (id) => {
+        set((state) => {
+          const nextPanes: typeof state.editorPanes = {};
+          for (const [pid, pane] of Object.entries(state.editorPanes)) {
+            const nextIds = pane.openFileIds.filter((x) => x !== id);
+            const nextActive =
+              pane.activeFileId === id
+                ? (nextIds[0] ?? null)
+                : pane.activeFileId;
+            nextPanes[pid] = {
+              openFileIds: nextIds,
+              activeFileId: nextActive,
+            };
+          }
+          const nextFiles = state.openFiles.filter((f) => f.id !== id);
+          // activeFileId が消す対象と同一なら新 active（active pane の先頭）に差替
+          const nextActiveGlobal =
+            state.activeFileId === id
+              ? (nextPanes[state.activeEditorPaneId]?.activeFileId ?? null)
+              : state.activeFileId;
+          return {
+            openFiles: nextFiles,
+            editorPanes: nextPanes,
+            activeFileId: nextActiveGlobal,
+          };
+        });
       },
 
       closeFile: (id, paneId) => {

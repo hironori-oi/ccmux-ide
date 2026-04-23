@@ -11,6 +11,29 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.7.1] - 2026-04-24
+
+**Tray Hotfixes** — エディタチップの完全削除 + 新規チャットチップの表示 regression 修正。
+
+### 🔧 Fixed
+
+- **エディタチップが ✕ を押しても消えない regression** (PM-976)。`closeFile`
+  は active editor pane からのみ file を除去する設計で、他 pane でも参照されて
+  いた legacy file（v1.6.x 以前の「全セッション表示」される CLAUDE.md 等）は
+  `openFiles` プールに残り続け、tray のチップも消えなかった。
+  - 新規 action `useEditorStore.purgeFile(id)` を追加: 全 pane の openFileIds
+    から除去 + openFiles プールからも削除する完全消去版
+  - Tray の ✕ ボタン（`DeleteChipButton`）から `closeFile` → `purgeFile` に
+    切替
+- **「チャットを追加」でチップが表示されない regression** (PM-976)。新規
+  `addPane()` は `currentSessionId: null` の状態で pane を作り、セッション
+  フィルタ `pane.currentSessionId === currentSessionId` で弾かれていた。
+  - `currentSessionId === null` の pane（session 未 attach、新規追加直後）は
+    常時表示扱いに変更（legacy 未タグと同じ扱い）
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.7.0] - 2026-04-24
 
 **Session-Scoped Tray + Auth Announce Dialog** — セッション別の Tray チップ管理と認証案内 UX 強化。
