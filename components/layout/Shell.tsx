@@ -390,178 +390,22 @@ export function Shell({ children }: { children?: ReactNode }) {
             exit={reduceMotion ? undefined : { opacity: 0, y: -6 }}
             transition={transitionConfig}
           >
-            {/* Chat / Editor 切替タブ + v3.5 分割ボタン */}
-            <div
-              role="tablist"
-              aria-label="メインビュー切替"
-              className="flex h-9 shrink-0 items-center gap-0 border-b bg-muted/10 px-2"
-            >
-              <ViewModeTab
-                active={viewMode === "chat"}
-                onClick={() => setViewMode("chat")}
-                icon={<MessageSquare className="h-3.5 w-3.5" aria-hidden />}
-                label="チャット"
-              />
-              <ViewModeTab
-                active={viewMode === "editor"}
-                onClick={() => setViewMode("editor")}
-                icon={<FileCode2 className="h-3.5 w-3.5" aria-hidden />}
-                label="エディタ"
-                badge={openFileCount > 0 ? String(openFileCount) : undefined}
-              />
-              {/* PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナルタブ。 */}
-              <ViewModeTab
-                active={viewMode === "terminal"}
-                onClick={() => setViewMode("terminal")}
-                icon={<TerminalIcon className="h-3.5 w-3.5" aria-hidden />}
-                label="ターミナル"
-              />
-              {/* PRJ-012 v1.0 / PM-925 (2026-04-20): ブラウザプレビュータブ。
-                  iframe + 外部ブラウザ fallback ハイブリッド (Phase 1 MVP)。 */}
-              <ViewModeTab
-                active={viewMode === "preview"}
-                onClick={() => setViewMode("preview")}
-                icon={<Monitor className="h-3.5 w-3.5" aria-hidden />}
-                label="プレビュー"
-              />
-              {/* PM-969: ヘテロ分割ワークスペース。Tray Bar から DnD で任意の項目を
-                  任意の slot に配置できる。チャット + エディタ + ターミナル + プレビュー
-                  を任意の組み合わせで同時表示可能。 */}
-              <ViewModeTab
-                active={viewMode === "workspace"}
-                onClick={() => setViewMode("workspace")}
-                icon={<LayoutGrid className="h-3.5 w-3.5" aria-hidden />}
-                label="ワークスペース"
-              />
-
-              {/*
-               * v3.5 Chunk B (Split Sessions) / PM-924 / PM-937 (2026-04-20):
-               * 分割モード選択 dropdown。chat / editor / terminal の 3 view mode で共通化。
-               * 1 pane / 2 pane / 4 pane (2x2 grid) から選択可能で、現在の pane 数との
-               * 差分を addPane / removePane で埋める。
-               */}
-              {paneModeInfo && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="ml-auto h-7 gap-1 px-2 text-[12px]"
-                      aria-label={`${paneModeInfo.target}の分割モードを選択`}
-                      title={`分割モード (現在 ${paneModeInfo.current} pane)`}
-                    >
-                      {paneModeInfo.current >= 4 ? (
-                        <LayoutGrid className="h-3.5 w-3.5" aria-hidden />
-                      ) : paneModeInfo.current === 2 ? (
-                        <Columns2 className="h-3.5 w-3.5" aria-hidden />
-                      ) : (
-                        <Square className="h-3.5 w-3.5" aria-hidden />
-                      )}
-                      <span className="hidden sm:inline">分割</span>
-                      <ChevronDown className="h-3 w-3 opacity-60" aria-hidden />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-44">
-                    <DropdownMenuLabel className="text-[11px] font-normal text-muted-foreground">
-                      {paneModeInfo.target}の分割
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                    <PaneModeItem
-                      icon={<Square className="h-3.5 w-3.5" aria-hidden />}
-                      label="1 pane"
-                      active={paneModeInfo.current === 1}
-                      disabled={1 > paneModeInfo.max}
-                      onSelect={() => applyPaneMode(1)}
-                    />
-                    <PaneModeItem
-                      icon={<Columns2 className="h-3.5 w-3.5" aria-hidden />}
-                      label="2 pane (左右)"
-                      active={paneModeInfo.current === 2}
-                      disabled={2 > paneModeInfo.max}
-                      onSelect={() => applyPaneMode(2)}
-                    />
-                    <PaneModeItem
-                      icon={<LayoutGrid className="h-3.5 w-3.5" aria-hidden />}
-                      label="4 pane (2x2)"
-                      active={paneModeInfo.current >= 4}
-                      disabled={4 > paneModeInfo.max}
-                      onSelect={() => applyPaneMode(4)}
-                    />
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              )}
-            </div>
-
-            {/* Chat / Editor を両方 mount し display 切替で保持 */}
-            <div
-              className={cn(
-                "min-h-0 flex-1 flex-col",
-                viewMode === "chat" ? "flex" : "hidden"
-              )}
-              aria-hidden={viewMode !== "chat"}
-            >
-              <SplitView panes={paneItems} />
-            </div>
-            <div
-              className={cn(
-                "min-h-0 flex-1 flex-col",
-                viewMode === "editor" ? "flex" : "hidden"
-              )}
-              aria-hidden={viewMode !== "editor"}
-            >
-              <EditorPane />
-            </div>
             {/*
-             * PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル (xterm.js + Rust PTY)。
+             * PM-970: ViewModeTab / 分割 dropdown を完全撤去、ワークスペース単独 UI に。
              *
-             * PM-935 (2026-04-20): mount 戦略変更 — **conditional mount 化**。
-             * 従来は display:none で常時 mount していたが、xterm.js の `term.open()`
-             * は container rect が 0x0 の間に呼ぶと canvas の font metric 測定が
-             * 破損し、以降 display:block に戻しても復旧しないケースがあった
-             * (PM-920〜934 で 9 回 hotfix したが完全解消に至らず)。
-             * `viewMode === "terminal"` の時のみ TerminalView を mount することで、
-             * xterm は必ず非 0 サイズの container に対して open される。
+             * 旧構成:
+             *   [チャット][エディタ][ターミナル][プレビュー][ワークスペース] [分割▾]
+             *   → 各 view は独立 SplitView で分割され、同時表示不可
              *
-             * tradeoff:
-             * - pty process: Rust 側の `useTerminalStore.terminals` で一元管理され、
-             *   frontend unmount でも sidecar process は生存するため情報は失われない。
-             *   `useTerminalListener` は Shell singleton で exit event を継続購読。
-             * - xterm scrollback: tab 切替で reset される (初期化コスト ≈100-200ms)。
-             *   scrollback の永続化は Phase 2 以降で検討。
+             * 新構成:
+             *   Tray Bar (chat/editor/terminal/preview チップ + 新規ボタン + Layout 切替)
+             *   + Slot Grid (Tray からの DnD + Sidebar からの file drop を受ける)
+             *
+             * viewMode は store に残存させるが、Shell 描画では参照しない。ファイル
+             * open 時の `setViewMode("editor")` 等の副作用もワークスペース側で無視
+             * されるだけで害なし（将来整理）。
              */}
-            {viewMode === "terminal" && (
-              <div
-                className="flex min-h-0 flex-1 flex-col"
-                aria-hidden={false}
-              >
-                <TerminalView />
-              </div>
-            )}
-            {/*
-             * PRJ-012 v1.0 / PM-925 (2026-04-20): ブラウザプレビュー (iframe)。
-             * 非表示時も display:none で mount 維持し iframe state を保つ
-             * （タブ切替で dev server への再接続を回避）。
-             */}
-            <div
-              className={cn(
-                "min-h-0 flex-1 flex-col",
-                viewMode === "preview" ? "flex" : "hidden"
-              )}
-              aria-hidden={viewMode !== "preview"}
-            >
-              <PreviewPane />
-            </div>
-            {/*
-             * PM-969: ヘテロ分割ワークスペース。viewMode === "workspace" のとき
-             * のみ mount（DnDContext + TrayBar + Slot grid）。inactive 時は unmount
-             * して既存 view の DOM / listener と競合しないようにする。
-             */}
-            {viewMode === "workspace" && (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <WorkspaceView />
-              </div>
-            )}
+            <WorkspaceView />
           </motion.main>
         </AnimatePresence>
         {/* v3.5.3: 右 Inspector 完全撤去（Git / Status / Worktree / CLAUDE.md 全機能を

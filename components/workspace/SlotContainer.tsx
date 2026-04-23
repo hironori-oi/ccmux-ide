@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import {
   FileText,
@@ -15,6 +16,7 @@ import { FileViewer } from "@/components/editor/FileViewer";
 import { PreviewPane } from "@/components/preview/PreviewPane";
 import { TerminalPane } from "@/components/terminal/TerminalPane";
 import { Button } from "@/components/ui/button";
+import { CCMUX_FILE_PATH_MIME } from "@/lib/file-drag";
 import { useEditorStore } from "@/lib/stores/editor";
 import { useTerminalStore } from "@/lib/stores/terminal";
 import {
@@ -40,31 +42,69 @@ export function SlotContainer({
   slotLabel: string;
 }) {
   const content = useWorkspaceLayoutStore((s) => s.slots[slotIndex]);
-  const clearSlot = useWorkspaceLayoutStore((s) => s.setSlot);
+  const setSlot = useWorkspaceLayoutStore((s) => s.setSlot);
+  const openFile = useEditorStore((s) => s.openFile);
 
+  // @dnd-kit (Tray チップ ドロップ用)
   const { setNodeRef, isOver, active } = useDroppable({
     id: `slot-${slotIndex}`,
     data: { slotIndex },
   });
 
+  // HTML5 native drop (Sidebar ProjectTree ファイル用)
+  const [isFileDragOver, setIsFileDragOver] = useState(false);
+
+  function handleDragOver(e: React.DragEvent<HTMLDivElement>) {
+    // CCMUX_FILE_PATH_MIME が含まれているときだけ accept
+    if (e.dataTransfer.types.includes(CCMUX_FILE_PATH_MIME)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      if (!isFileDragOver) setIsFileDragOver(true);
+    }
+  }
+
+  function handleDragLeave() {
+    setIsFileDragOver(false);
+  }
+
+  async function handleDrop(e: React.DragEvent<HTMLDivElement>) {
+    const path = e.dataTransfer.getData(CCMUX_FILE_PATH_MIME);
+    setIsFileDragOver(false);
+    if (!path) return;
+    e.preventDefault();
+    // openFile は void Promise なので、完了後に state から id を拾う
+    await openFile(path);
+    const file = useEditorStore
+      .getState()
+      .openFiles.find((f) => f.path === path);
+    if (file) {
+      setSlot(slotIndex, { kind: "editor", refId: file.id });
+    }
+  }
+
+  const isDragTarget = (isOver && !!active) || isFileDragOver;
+
   return (
     <div
       ref={setNodeRef}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={(e) => void handleDrop(e)}
       className={cn(
         "flex min-h-0 flex-1 flex-col border border-border/40 transition-colors",
-        isOver && active && "border-primary/60 bg-primary/5"
+        isDragTarget && "border-primary/60 bg-primary/5"
       )}
     >
       <SlotHeader
         slotLabel={slotLabel}
         content={content ?? null}
-        onClear={() => clearSlot(slotIndex, null)}
+        onClear={() => setSlot(slotIndex, null)}
       />
       <div className="min-h-0 flex-1">
         {content ? (
           <SlotContentRenderer content={content} />
         ) : (
-          <SlotEmptyPlaceholder isDropTarget={isOver && !!active} />
+          <SlotEmptyPlaceholder isDropTarget={isDragTarget} />
         )}
       </div>
     </div>
@@ -168,11 +208,14 @@ function SlotEmptyPlaceholder({ isDropTarget }: { isDropTarget: boolean }) {
         )}
         aria-hidden
       />
-      <span>
-        {isDropTarget
-          ? "ここにドロップして表示"
-          : "トレイから項目をドラッグして配置"}
+      <span className="font-medium">
+        {isDropTarget ? "ここにドロップして表示" : "ドラッグして配置"}
       </span>
+      {!isDropTarget && (
+        <span className="max-w-[320px] text-[10px] leading-relaxed text-muted-foreground/70">
+          上のトレイからチップをドラッグ、またはサイドバーのファイルを直接ここへドロップ
+        </span>
+      )}
     </div>
   );
 }

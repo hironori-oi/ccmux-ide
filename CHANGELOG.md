@@ -11,6 +11,44 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.6.0] - 2026-04-23
+
+**Workspace-First UI** — タブ廃止、ワークスペースがアプリそのものに。Tray Bar を
+icon-first の超コンパクト設計に全面刷新。
+
+### 💎 Changed (Breaking UI)
+
+- **タブ全廃** (PM-970)。旧「チャット / エディタ / ターミナル / プレビュー /
+  ワークスペース」の 5 タブを撤去。起動時から常にワークスペース UI を表示。
+  チャット / エディタ / ターミナル / プレビューは **slot へドラッグ** して
+  初めて表示される設計へ統一。
+- **Tray Bar を 1 行コンパクト化** (PM-970)。旧 2 段 (トレイ + レイアウト) を
+  1 行に集約、高さ 44px。チップは icon-first で label は 12 文字 truncate +
+  tooltip で full name 表示。チャットチップは Main のみ表示で不要な "Chat (main)"
+  を削除。
+
+### ✨ Added
+
+- **Tray Bar 内の新規作成ボタン** (PM-970):
+  - 💬+ チャット追加（青）
+  - 🖥+ ターミナル追加（緑、project cwd で pty_spawn）
+  - 🌐 プレビューは project 単位 1 つで常時チップ表示（ボタン不要）
+  - 📝 エディタは sidebar ファイル D&D で開く（ボタン不要）
+- **Sidebar ファイル → Slot 直接 D&D** (PM-970)。ProjectTree の HTML5 ネイティブ
+  ドラッグ（`CCMUX_FILE_PATH_MIME`）を Slot 側で受け、`openFile` + `setSlot`
+  を自動実行。`@dnd-kit` と HTML5 のハイブリッドドロップで共存。
+- **LayoutSwitcher を Tray Bar 右端に inline 配置** (PM-970)。1 / 2 横 / 2 縦 /
+  2x2 をアイコンボタン 4 つで切替。旧 WorkspaceView の独立行は撤去。
+- **DragOverlay ghost chip** (PM-970)。ドラッグ中に浮遊するチップを表示、
+  視覚フィードバック向上。
+
+### 🔧 Fixed
+
+- (Minor) TrayBar の幅が横に膨れて後続コントロールを押し出す regression
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.5.0] - 2026-04-23
 
 **Workspace Mode** — チャット / エディタ / ターミナル / プレビューをドラッグ&ドロップで自由に組み合わせ表示できるヘテロ分割ワークスペース追加。
