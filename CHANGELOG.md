@@ -11,6 +11,25 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.5.0] - 2026-04-23
+
+**Workspace Mode** — チャット / エディタ / ターミナル / プレビューをドラッグ&ドロップで自由に組み合わせ表示できるヘテロ分割ワークスペース追加。
+
+### ✨ Added
+
+- **Workspace モード** (PM-969)。画面上部の新タブ「ワークスペース」から起動。
+  画面上部に **Tray Bar**（開いている項目のドラッグソース）、下部に **1 / 2 横 / 2 縦 / 4 (2x2)** から選べる slot grid。各 slot にトレイのチップをドロップすると、その項目（chat / editor / terminal / preview）が表示される:
+  - 💬 Chat セッション
+  - 📝 開いているエディタファイル（PDF / 画像含む）
+  - 🖥 ターミナル (pty)
+  - 🌐 プレビュー
+  - 任意の組み合わせ可能（例: A=Chat / B=Editor、A=Terminal / B=Preview、2x2 で全部入り）
+- レイアウト配置は `sumi:workspace-layout` に localStorage 永続化（アプリ再起動後も復元）
+- 依存追加: `@dnd-kit/core@^6.3.1` (~30KB、キーボード a11y 込み)
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.4.2] - 2026-04-23
 
 **Readability & Viewer Fixes** — チャット可読性 + PDF / 画像ビューワ対応。

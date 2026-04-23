@@ -129,7 +129,13 @@ export type { OpenFile } from "@/lib/types";
  * ProjectTree でのファイルクリック時に `openFile` 内部で `setViewMode("editor")`
  * を呼ぶことで Editor に自動切替。Shell の TitleBar 直下 Tabs で手動切替も可能。
  */
-export type EditorViewMode = "chat" | "editor" | "terminal" | "preview";
+export type EditorViewMode =
+  | "chat"
+  | "editor"
+  | "terminal"
+  | "preview"
+  /** PM-969: ヘテロ分割モード。Tray Bar から任意の項目を任意の slot に DnD で配置可能。 */
+  | "workspace";
 
 interface EditorState {
   /**

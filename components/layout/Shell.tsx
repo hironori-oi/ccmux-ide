@@ -31,6 +31,7 @@ import { TitleBar } from "@/components/layout/TitleBar";
 import { PreviewPane } from "@/components/preview/PreviewPane";
 import { Sidebar } from "@/components/sidebar/Sidebar";
 import { TerminalView } from "@/components/terminal/TerminalView";
+import { WorkspaceView } from "@/components/workspace/WorkspaceView";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -423,6 +424,15 @@ export function Shell({ children }: { children?: ReactNode }) {
                 icon={<Monitor className="h-3.5 w-3.5" aria-hidden />}
                 label="プレビュー"
               />
+              {/* PM-969: ヘテロ分割ワークスペース。Tray Bar から DnD で任意の項目を
+                  任意の slot に配置できる。チャット + エディタ + ターミナル + プレビュー
+                  を任意の組み合わせで同時表示可能。 */}
+              <ViewModeTab
+                active={viewMode === "workspace"}
+                onClick={() => setViewMode("workspace")}
+                icon={<LayoutGrid className="h-3.5 w-3.5" aria-hidden />}
+                label="ワークスペース"
+              />
 
               {/*
                * v3.5 Chunk B (Split Sessions) / PM-924 / PM-937 (2026-04-20):
@@ -542,6 +552,16 @@ export function Shell({ children }: { children?: ReactNode }) {
             >
               <PreviewPane />
             </div>
+            {/*
+             * PM-969: ヘテロ分割ワークスペース。viewMode === "workspace" のとき
+             * のみ mount（DnDContext + TrayBar + Slot grid）。inactive 時は unmount
+             * して既存 view の DOM / listener と競合しないようにする。
+             */}
+            {viewMode === "workspace" && (
+              <div className="flex min-h-0 flex-1 flex-col">
+                <WorkspaceView />
+              </div>
+            )}
           </motion.main>
         </AnimatePresence>
         {/* v3.5.3: 右 Inspector 完全撤去（Git / Status / Worktree / CLAUDE.md 全機能を
