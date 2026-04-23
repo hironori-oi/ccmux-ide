@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 
 import { ChatPanel } from "@/components/chat/ChatPanel";
+import { ChatStatusIndicator } from "@/components/chat/ChatStatusIndicator";
+import { ToolDetailsToggle } from "@/components/chat/ToolDetailsToggle";
 import { FileViewer } from "@/components/editor/FileViewer";
 import { PreviewPane } from "@/components/preview/PreviewPane";
 import { TerminalPane } from "@/components/terminal/TerminalPane";
@@ -129,16 +131,25 @@ function SlotHeader({
         {content && <SlotContentLabel content={content} />}
       </div>
       {content && (
-        <Button
-          size="icon"
-          variant="ghost"
-          className="h-4 w-4 shrink-0"
-          onClick={onClear}
-          aria-label={`Slot ${slotLabel} を空にする`}
-          title="この slot を空にする"
-        >
-          <X className="h-3 w-3" aria-hidden />
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          {/* PM-978: chat slot のときだけ tool toggle + 接続状態を inline 表示 */}
+          {content.kind === "chat" && (
+            <>
+              <ToolDetailsToggle size="small" />
+              <ChatStatusIndicator compact />
+            </>
+          )}
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-4 w-4 shrink-0"
+            onClick={onClear}
+            aria-label={`Slot ${slotLabel} を空にする`}
+            title="この slot を空にする"
+          >
+            <X className="h-3 w-3" aria-hidden />
+          </Button>
+        </div>
       )}
     </div>
   );

@@ -2,22 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useChatStore, DEFAULT_PANE_ID } from "@/lib/stores/chat";
 import { useProjectStore } from "@/lib/stores/project";
 import { useSessionStore } from "@/lib/stores/session";
-import { useSettingsStore } from "@/lib/stores/settings";
 import { ChatPaneHeader } from "@/components/chat/ChatPaneHeader";
 import { MessageList } from "@/components/chat/MessageList";
 import { InputArea } from "@/components/chat/InputArea";
 import { ActivityIndicator } from "@/components/chat/ActivityIndicator";
-import { Button } from "@/components/ui/button";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
 /**
  * PM-132 + v5 Chunk C (DEC-030) + v3.3 Chunk B (DEC-033) + v3.5 Chunk B (Split
@@ -74,20 +65,8 @@ export function ChatPanel({
 
   const isActivePane = activePaneId === paneId;
 
-  const [ready, setReady] = useState(false);
-  const [status, setStatus] = useState("プロジェクト未選択");
-
   // v5 Chunk C: activeProjectId の変化を購読し、chat / session のスワップを行う。
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
-  // PM-965: 1 pane モードの header に activeProject の title を表示する
-  // （旧 "Sumi" 固定からプロジェクト名に変更）。
-  const activeProjectTitle = useProjectStore((s) => {
-    if (!s.activeProjectId) return null;
-    return s.projects.find((p) => p.id === s.activeProjectId)?.title ?? null;
-  });
-  const sidecarStatusForActive = useProjectStore((s) =>
-    s.activeProjectId ? s.sidecarStatus[s.activeProjectId] ?? "stopped" : "stopped"
-  );
   const reduceMotion = useReducedMotion();
 
   // ref 版 isActivePane（listener 内でも最新値を参照するため）
@@ -99,41 +78,11 @@ export function ChatPanel({
   // -------------------------------------------------------------------------
   // v3.5.11 Chunk E: sidecar event listener は Shell の
   // useAllProjectsSidecarListener() に集約済。本 component には listener が無い。
+  //
+  // PM-978: sidecar status 表示は SlotHeader 側の ChatStatusIndicator に移管。
+  // 本 component は fallback header を持たなくなり、message list + input area
+  // だけに特化する。
   // -------------------------------------------------------------------------
-
-  // -------------------------------------------------------------------------
-  // sidecar status 表示（共有 status なので pane 全部で同じ見た目にする）
-  // -------------------------------------------------------------------------
-  useEffect(() => {
-    if (!activeProjectId) {
-      setReady(false);
-      setStatus("プロジェクト未選択");
-      return;
-    }
-    switch (sidecarStatusForActive) {
-      case "running":
-        setReady(true);
-        setStatus("Claude と接続中");
-        break;
-      case "starting":
-        setReady(false);
-        setStatus("Claude を起動中...");
-        break;
-      case "stopping":
-        setReady(false);
-        setStatus("Claude を停止中...");
-        break;
-      case "error":
-        setReady(false);
-        setStatus("sidecar 起動失敗（プロジェクトを選び直してください）");
-        break;
-      case "stopped":
-      default:
-        setReady(false);
-        setStatus("Claude 未起動");
-        break;
-    }
-  }, [activeProjectId, sidecarStatusForActive]);
 
   // ---------------------------------------------------------------------------
   // v5 Chunk C (DEC-030) + v3.5 Chunk B + v3.5.9 Chunk D (Project Switch History)
@@ -224,22 +173,10 @@ export function ChatPanel({
           canClose={canClose}
         />
       )}
-      {/* 1 pane 時のみ表示する従来ヘッダ（プロジェクト名 + status 表示）。
-          複数 pane 時は status bar が冗長になるため省略。
-          PM-965: 旧「Sumi」固定 → activeProject.title（未選択時は「プロジェクト未選択」）。
-          PM-967: tool use 詳細の表示/折り畳み toggle を追加。 */}
-      {!showHeader && (
-        <header className="flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4">
-          <h1 className="min-w-0 flex-1 truncate text-sm font-medium">
-            {activeProjectTitle ?? "プロジェクト未選択"}
-          </h1>
-          <ToolDetailsToggle />
-          <p className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-            {!ready && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
-            {status}
-          </p>
-        </header>
-      )}
+      {/* PM-978: 従来の 1 pane fallback header を撤去。
+          プロジェクト名は上部 TitleBar + ProjectSwitcher で既に表示されており
+          重複。tool toggle / status 表示は SlotHeader 側に移管して垂直スペース
+          を最大化し、チャット画面をより広く使えるようにした。 */}
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={activeProjectId ?? "__none__"}
@@ -258,44 +195,8 @@ export function ChatPanel({
   );
 }
 
-/**
- * PM-967: チャットヘッダ右上の tool 詳細表示 toggle。
- *
- * OFF（default）: 連続する tool use を折り畳み表示（N 件の tool 操作）
- * ON: 各 tool use を個別カードで従来通り表示
- *
- * 状態は `useSettingsStore` 経由で localStorage 永続化される（全 pane 共通）。
- */
-function ToolDetailsToggle() {
-  const show = useSettingsStore((s) => s.settings.chatDisplay.showToolDetails);
-  const setShow = useSettingsStore((s) => s.setShowToolDetails);
-  return (
-    <TooltipProvider delayDuration={200}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            className="h-7 w-7 shrink-0"
-            onClick={() => setShow(!show)}
-            aria-label={show ? "tool 操作を折り畳む" : "tool 操作を展開"}
-            aria-pressed={show}
-          >
-            {show ? (
-              <Eye className="h-3.5 w-3.5" aria-hidden />
-            ) : (
-              <EyeOff className="h-3.5 w-3.5" aria-hidden />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="text-xs">
-          {show ? "tool 詳細を隠す" : "tool 詳細を表示"}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
+// PM-978: ToolDetailsToggle は components/chat/ToolDetailsToggle.tsx へ分離。
+// SlotHeader でも同じ toggle を使うため共通化した。
 
 // v3.5.11 Chunk E: SidecarEvent 型定義 / extract helpers は
 // hooks/useAllProjectsSidecarListener.ts に移植済。本ファイルからは削除。

@@ -84,21 +84,24 @@ function TrayChips() {
     return m;
   }, [slots, visibleSlotIndexes]);
 
-  // PM-975: session フィルタ。currentSessionId がある → pane.currentSessionId が
-  // 一致する chat pane のみ表示。currentSessionId 無しの時は全 pane 表示。
-  // main pane は「常時存在」が前提のため session 関係なく表示する。
+  // PM-979: chat pane の session filter を creatingSessionId 基準に変更。
   //
-  // PM-976 hotfix: 新規追加された chat pane は currentSessionId が null で
-  // 始まる（未だ session を load していない状態）。これらを filter で弾くと
-  // 「チャット追加」ボタンを押しても chip が出ない regression を起こすため、
-  // null pane は常時表示する（legacy 等のタグ無しと同じ扱い）。
+  // 旧実装 (PM-975/976): pane.currentSessionId (mutable な "load 中 session") で
+  // filter していたため、session 切替で pane.currentSessionId が書き換わり
+  // 「Session A で作った Chat 2 が Session B でも見える」という session 共通状態
+  // になっていた。
+  //
+  // 新実装: pane 作成時に session を tag 付け (immutable)、その tag で filter。
+  // - main pane: 常時表示（全 session 共通のメインチャット、削除不可）
+  // - creatingSessionId === null (legacy / 未 attach): 常時表示（後方互換）
+  // - currentSessionId === null (session 未選択): 全 pane 表示（fallback）
   const chatItems = useMemo(() => {
     const paneEntries = Object.entries(chatPanes);
     const filtered = paneEntries.filter(([paneId, pane]) => {
-      if (paneId === "main") return true; // main は常時表示
-      if (!pane.currentSessionId) return true; // session 未 attach pane は常時表示
-      if (!currentSessionId) return true; // session 未選択時は全表示
-      return pane.currentSessionId === currentSessionId;
+      if (paneId === "main") return true;
+      if (!pane.creatingSessionId) return true;
+      if (!currentSessionId) return true;
+      return pane.creatingSessionId === currentSessionId;
     });
     return filtered.map(([paneId], idx) => ({
       kind: "chat" as const,
@@ -106,7 +109,7 @@ function TrayChips() {
       label: `Chat ${idx + 1}`,
       tooltip:
         paneId === "main"
-          ? `Chat ${idx + 1}（メインチャット）`
+          ? `Chat ${idx + 1}（メインチャット・全 session 共通）`
           : `Chat ${idx + 1}（pane-id: ${paneId}）`,
       deletable: paneId !== "main",
     }));

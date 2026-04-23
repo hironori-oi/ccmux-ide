@@ -118,12 +118,19 @@ export interface ChatPaneState {
   activity: ChatActivity;
   /** 現在の入力欄に添付されている画像（送信でクリア） */
   attachments: Attachment[];
-  /** SQLite セッション ID */
+  /** SQLite セッション ID（load 中の session、mutable） */
   currentSessionId: string | null;
   /** SearchPalette 等からスクロール要求された message id */
   scrollTargetMessageId: string | null;
   /** 4 秒間ハイライト表示する message id */
   highlightedMessageId: string | null;
+  /**
+   * PM-979: 作成時にアクティブだった session id（immutable、Tray フィルタ用）。
+   * `currentSessionId` は session 切替で変化するため「pane がどの session に
+   * 属するか」判定には使えない。pane 作成時の session を tag として保持する。
+   * null は「session なし時 / main pane / legacy」で、filter で弾かれない。
+   */
+  creatingSessionId?: string | null;
 }
 
 /** 最初の pane id（必ず存在する = 互換のための固定 id） */
@@ -473,8 +480,26 @@ export const useChatStore = create<ChatState>()(
           return state.activePaneId;
         }
         const id = newPaneId();
+        // PM-979: 新規 chat pane に作成時 session を tag 付け（tray session filter 用）
+        // session store から現在 session id を取得、なければ null で legacy 扱い
+        let creatingSessionId: string | null = null;
+        try {
+          // 循環依存回避のため getState() を dynamic require
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const sessionModule = require("@/lib/stores/session") as {
+            useSessionStore: {
+              getState: () => { currentSessionId: string | null };
+            };
+          };
+          creatingSessionId =
+            sessionModule.useSessionStore.getState().currentSessionId;
+        } catch {
+          // session store 未 init 等は null で許容
+        }
+        const newPane = makeEmptyPane();
+        newPane.creatingSessionId = creatingSessionId;
         set({
-          panes: { ...state.panes, [id]: makeEmptyPane() },
+          panes: { ...state.panes, [id]: newPane },
           activePaneId: id,
         });
         return id;

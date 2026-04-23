@@ -11,6 +11,35 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.7.2] - 2026-04-24
+
+**Slim Chat Header + Session-Scoped Chat** — チャット画面を縦方向にさらに拡大、chat も session 別管理へ。
+
+### 💎 Changed (UX)
+
+- **ChatPanel の 1 pane fallback header を撤去** (PM-978)。旧版は
+  「プロジェクト名 + 👁 tool toggle + Claude 接続中」を独立行 48px で表示して
+  チャット面積を圧迫していた。プロジェクト名は上部 TitleBar と重複で冗長だった
+  ため削除、**tool toggle + 接続状態は SlotHeader (28px) に inline 統合**。
+  垂直スペースが 48px 開放されチャット画面を実質 1.5 行分拡大。
+- `ChatStatusIndicator` / `ToolDetailsToggle` を再利用可能コンポーネントに
+  切り出し（`components/chat/`）。
+
+### ✨ Added
+
+- **Chat pane の session 別管理** (PM-979)。v1.7.0 PM-975 では chat pane を
+  `pane.currentSessionId` (mutable な "load 中" session) で filter していたため、
+  session 切替で pane.currentSessionId が書き換わり「Session A で作った Chat 2 が
+  Session B でも見える」共通状態になっていた。
+  - 新規フィールド `ChatPaneState.creatingSessionId?: string | null` (immutable)
+  - `addPane()` 時点で `useSessionStore.currentSessionId` をタグ付け
+  - Tray フィルタ: `pane.creatingSessionId === currentSessionId` で判定
+  - main pane は削除不可 + 全 session 共通（不変の「メインチャット」）
+  - legacy (未タグ、creatingSessionId === null) は常時表示で後方互換
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.7.1] - 2026-04-24
 
 **Tray Hotfixes** — エディタチップの完全削除 + 新規チャットチップの表示 regression 修正。
