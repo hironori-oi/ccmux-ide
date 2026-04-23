@@ -757,3 +757,54 @@ export const EFFORT_CHOICES: Array<{
   { id: "xhigh", label: "超高", description: "高難度のリファクタ / デバッグ向け", thinkingTokens: 32768 },
   { id: "max", label: "最大", description: "最長推論、時間・コスト増", thinkingTokens: 65536 },
 ];
+
+// ---------------------------------------------------------------------------
+// v1.9.0 (DEC-053) PermissionMode — session 別権限モード切替（TrayPermissionModePicker 用）
+//
+// Claude Agent SDK の `query({ permissionMode })` に渡す値と 1:1。
+//   - "default"           : 編集・危険操作を都度確認（従来の既定挙動）
+//   - "acceptEdits"       : ファイル編集系 tool (Edit / Write) を自動承認、Bash 等は確認
+//   - "bypassPermissions" : 全 tool を自動承認（リスク高、明示選択のみ推奨）
+//   - "plan"              : 計画モード。提案のみで実ファイル変更 / 危険操作は行わない
+//
+// SDK 型は `sidecar/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts` の
+// `PermissionMode` と同一。UI 層ではこの literal union に揃えている。
+// ---------------------------------------------------------------------------
+
+/** `query({ permissionMode })` に渡す権限モード。 */
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypassPermissions"
+  | "plan";
+
+/** TrayPermissionModePicker が radiogroup で並べるための表示メタ。 */
+export const PERMISSION_MODE_CHOICES: Array<{
+  value: PermissionMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "default",
+    label: "標準",
+    description: "編集ごとに確認を求める",
+  },
+  {
+    value: "acceptEdits",
+    label: "自動承認",
+    description: "編集を自動で承認",
+  },
+  {
+    value: "bypassPermissions",
+    label: "全許可",
+    description: "全操作を許可（要注意）",
+  },
+  {
+    value: "plan",
+    label: "計画モード",
+    description: "提案のみ、ファイル変更なし",
+  },
+];
+
+/** 既定 PermissionMode（初回セッション作成時の seed 値）。 */
+export const DEFAULT_PERMISSION_MODE: PermissionMode = "default";

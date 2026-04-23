@@ -11,6 +11,43 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.9.0] - 2026-04-24
+
+**Session-Scoped Model / Effort / Permission-Mode** — StatusBar の model/effort picker を TrayBar に移設し、session 単位で切替できるようにする。新規に permission-mode picker を追加（DEC-053）。
+
+### ✨ Added
+
+- **TrayPermissionModePicker (新規)** — TrayBar に `default` / `acceptEdits` /
+  `bypassPermissions` / `plan` の 4 モードを切替できる Popover を追加。選択値は
+  `send_agent_prompt` の options に per-query で同梱され、sidecar 側
+  (`handlePrompt`) が SDK `query({ permissionMode })` に渡す。
+- **`lib/stores/session-preferences.ts` (新規 store)** — session 別の
+  `{ model, effort, permissionMode }` を保持する zustand store。localStorage
+  (`sumi:session-preferences`) に永続化。新規 session 作成時は
+  `useDialogStore` の `selectedModel` / `selectedEffort` を global default として
+  seed（sticky 挙動）。
+
+### 💎 Changed
+
+- **StatusBar の ModelPickerPopover / EffortPickerPopover を TrayBar に移設**
+  (DEC-053)。StatusBar はシステム指標（OAuth gauge / ClaudeActivitySummary /
+  sidecar count / git branch）に専念。TrayBar には `TrayModelPicker` /
+  `TrayEffortPicker` / `TrayPermissionModePicker` が LayoutSwitcher の左に並ぶ。
+- **`send_agent_prompt` は per-query で model / effort / permissionMode を渡す**
+  — argv 経由の sidecar 再起動を伴わず、Rust `send_agent_prompt` に `options`
+  引数を追加して透過し、sidecar 側の既存 `req.options` 分岐で SDK query
+  options を上書きする経路を採用。
+
+### 🧹 Removed
+
+- **`components/chat/ModelPickerPopover.tsx` / `EffortPickerPopover.tsx`** の
+  2 ファイルを削除（StatusBar 専用の未使用コンポーネントになったため）。
+  `/model` / `/effort` slash 用の `ModelPickerDialog` / `EffortPickerDialog` は
+  引き続き残置。
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.8.3] - 2026-04-24
 
 **Strict Session Context + Cleanup** — コンテキスト表示の session 厳密化 + 不要 UI 撤去。

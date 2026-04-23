@@ -707,6 +707,12 @@ pub async fn send_agent_prompt(
     // PM-830: SDK 側 session UUID。Some(uuid) なら sidecar が
     // `query({ resume: uuid })` で context 継続、None なら従来どおり stateless。
     resume: Option<String>,
+    // v1.9.0 (DEC-053): TrayBar の session 別 picker から渡される per-query options。
+    // 現状サポート key: `model: string` / `maxThinkingTokens: number` /
+    // `permissionMode: "default"|"acceptEdits"|"bypassPermissions"|"plan"`。
+    // sidecar 側 (handlePrompt) で req.options 経由で拾われ、SDK query options を上書きする。
+    // None の場合は従来どおり sidecar 起動時 argv のデフォルトで動く。
+    options: Option<serde_json::Value>,
 ) -> Result<(), String> {
     let mut guard = state
         .sidecars
@@ -720,10 +726,17 @@ pub async fn send_agent_prompt(
     // frontend 側の UI message id とは分離するため Rust 側で生成する。
     let req_id = uuid::Uuid::new_v4().to_string();
 
+    // v1.9.0 (DEC-053): frontend から受け取った options を起点に Map を組み立てる。
+    // 非 object (null / array / primitive) で来た場合は空 Map 扱いにして後段の
+    // resume / cwd / settingSources 注入だけ行う（fail-safe）。
+    let mut options: serde_json::Map<String, serde_json::Value> = match options {
+        Some(serde_json::Value::Object(m)) => m,
+        _ => serde_json::Map::new(),
+    };
+
     // PM-830: options に resume を入れる。None / 空文字列は省略 (stateless 扱い)。
     // `serde_json::json!` のオブジェクト構築では None / null をそのまま入れても
     // 受信側で resume が undefined になり問題ないが、後方互換のため Some 時のみ key を付ける。
-    let mut options = serde_json::Map::new();
     if let Some(ref sdk_id) = resume {
         if !sdk_id.is_empty() {
             options.insert(

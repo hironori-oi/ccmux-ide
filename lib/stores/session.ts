@@ -157,6 +157,42 @@ async function readActiveProjectId(): Promise<string | null> {
   }
 }
 
+/**
+ * v1.9.0 (DEC-053): 新規 session 確定直後に session-preferences store を
+ * global default で seed する。既に登録済なら no-op (initializeSession 内部で
+ * guard 済)。
+ *
+ * 循環依存 (dialog / types → session) を避けるため動的 import で都度ロードする。
+ */
+async function seedSessionPreferences(sessionId: string): Promise<void> {
+  if (!sessionId) return;
+  try {
+    const [prefMod, dialogMod, typesMod] = await Promise.all([
+      import("@/lib/stores/session-preferences"),
+      import("@/lib/stores/dialog"),
+      import("@/lib/types"),
+    ]);
+    const dialog = dialogMod.useDialogStore.getState();
+    prefMod.useSessionPreferencesStore.getState().initializeSession(sessionId, {
+      model: dialog.selectedModel ?? null,
+      effort: dialog.selectedEffort ?? null,
+      permissionMode: typesMod.DEFAULT_PERMISSION_MODE,
+    });
+  } catch {
+    // store 未ロード / SSR などでは黙って skip
+  }
+}
+
+/**
+ * v1.9.0 (DEC-053): 既存 session の lazy 初期化。
+ *
+ * 過去バージョンで作成された session (= session-preferences に未登録)
+ * を UI で開いた際に呼ぶ。登録済なら initializeSession 内で no-op。
+ */
+async function ensureSessionPreferences(sessionId: string): Promise<void> {
+  return seedSessionPreferences(sessionId);
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
@@ -198,6 +234,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       useChatStore.getState().setMessages(chatMessages);
       useChatStore.getState().setSessionId(id);
       set({ currentSessionId: id, isLoading: false });
+      // v1.9.0 (DEC-053): 既存 session の lazy 初期化（未登録なら seed）。
+      void ensureSessionPreferences(id);
     } catch (e) {
       set({
         error: String(e),
@@ -245,6 +283,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         currentSessionId: session.id,
         isLoading: false,
       });
+      // v1.9.0 (DEC-053): 新規 session の preferences を global default で seed する。
+      void seedSessionPreferences(session.id);
       return session;
     } catch (e) {
       set({ error: String(e), isLoading: false });
@@ -271,6 +311,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         currentSessionId: wasCurrent ? null : get().currentSessionId,
         isLoading: false,
       });
+      // v1.9.0 (DEC-053): session 削除時は preferences も掃除。
+      void (async () => {
+        try {
+          const mod = await import("@/lib/stores/session-preferences");
+          mod.useSessionPreferencesStore.getState().clearSession(id);
+        } catch {
+          // store 未ロード等では skip
+        }
+      })();
     } catch (e) {
       set({ error: String(e), isLoading: false });
     }

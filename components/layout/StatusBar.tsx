@@ -1,13 +1,9 @@
 "use client";
 
-import { Cpu, DollarSign, GitBranch, Zap } from "lucide-react";
+import { Cpu, GitBranch, Zap } from "lucide-react";
 
 import { cn } from "@/lib/utils";
-import {
-  selectContextPercent,
-  useMonitorStore,
-} from "@/lib/stores/monitor";
-import { useUsageStore } from "@/lib/stores/usage";
+import { useMonitorStore } from "@/lib/stores/monitor";
 import { useOAuthUsageStore } from "@/lib/stores/oauth-usage";
 import { useProjectStore } from "@/lib/stores/project";
 import { useChatStore, type ChatActivity } from "@/lib/stores/chat";
@@ -27,8 +23,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ModelPickerPopover } from "@/components/chat/ModelPickerPopover";
-import { EffortPickerPopover } from "@/components/chat/EffortPickerPopover";
 import type { OAuthUsageWindow, RegisteredProject } from "@/lib/types";
 
 /**
@@ -47,10 +41,6 @@ import type { OAuthUsageWindow, RegisteredProject } from "@/lib/types";
  */
 export function StatusBar() {
   const monitor = useMonitorStore((s) => s.monitor);
-  const percentFromStore = useMonitorStore(selectContextPercent);
-
-  const stats = useUsageStore((s) => s.stats);
-  const usageError = useUsageStore((s) => s.error);
 
   const oauthUsage = useOAuthUsageStore((s) => s.usage);
   const oauthError = useOAuthUsageStore((s) => s.error);
@@ -72,10 +62,6 @@ export function StatusBar() {
     ? shortModel(monitor.model)
     : "Claude";
   const branch = monitor?.git_branch ?? undefined;
-  const contextPercent = monitor ? percentFromStore : null;
-
-  // daily の末尾 = 今日（Rust 側が 7 日分を昇順で返してくる）
-  const todayCost = stats?.daily?.[stats.daily.length - 1]?.costUsd ?? null;
 
   return (
     <TooltipProvider delayDuration={250}>
@@ -118,11 +104,11 @@ export function StatusBar() {
        */}
       {/* <TodayCostSection cost={todayCost} error={usageError} /> */}
 
-      {/* 右: model / effort picker + branch + hotkey */}
+      {/* 右: branch + hotkey
+          v1.9.0 (DEC-053): ModelPickerPopover / EffortPickerPopover は TrayBar に
+          session 別 picker として移設。StatusBar からは撤去し、OAuth ゲージと
+          ClaudeActivitySummary は引き続き表示する。 */}
       <div className="flex items-center gap-2">
-        {/* v3.4.9: Claude Desktop 風のモデル / 工数 compact picker */}
-        <ModelPickerPopover />
-        <EffortPickerPopover />
         {branch && (
           <span className="ml-1 flex items-center gap-1">
             <GitBranch className="h-3 w-3" aria-hidden />
@@ -559,82 +545,11 @@ function formatShortResetTime(
 }
 
 // ---------------------------------------------------------------------------
-// 今日の推定コスト (Stage B)
+// v1.9.0 (DEC-053): TodayCostSection / formatCost / costTextColor /
+// contextPercentColor は従来から呼出 0（render から消されたまま）だったため、
+// StatusBar の picker 撤去に合わせてクリーンアップ目的で削除した。今後コスト
+// 表示が必要になれば Settings > Usage 画面で別途実装する（PRJ-012 方針）。
 // ---------------------------------------------------------------------------
-
-interface TodayCostSectionProps {
-  cost: number | null;
-  error: string | null;
-}
-
-/**
- * Stage B の今日分コストを表示する mini-section。
- *
- * - ロード中 / エラー / データ無し → `—` placeholder（タイトル属性でエラー内容表示）
- * - 値あり → `$1.23` 形式 + 色段階（<$1 緑 / <$5 黄 / >=$5 赤）
- *
- * `hidden md:flex` でナローウィンドウでは省略（status bar の全体幅を確保するため）。
- */
-function TodayCostSection({ cost, error }: TodayCostSectionProps) {
-  if (cost === null) {
-    return (
-      <div
-        className="hidden items-center gap-1 opacity-60 md:flex"
-        title={
-          error
-            ? `Stage B 集計エラー: ${error}`
-            : "今日のローカル集計コスト（推定値、取得中）"
-        }
-        aria-label="今日の推定コスト"
-      >
-        <DollarSign className="h-3 w-3" aria-hidden />
-        <span>—</span>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="hidden items-center gap-1 md:flex"
-      title="今日のローカル集計コスト（推定値）"
-      aria-label={`今日の推定コスト ${formatCost(cost)}`}
-    >
-      <DollarSign
-        className={cn("h-3 w-3", costTextColor(cost))}
-        aria-hidden
-      />
-      <span className={cn("font-medium tabular-nums", costTextColor(cost))}>
-        {formatCost(cost)}
-      </span>
-      <span className="text-[10px] text-muted-foreground/70">今日</span>
-    </div>
-  );
-}
-
-/** `$0` / `$1.23` / `$12` の桁に応じた簡易 format。 */
-function formatCost(usd: number): string {
-  if (usd <= 0) return "$0";
-  if (usd < 0.01) return "<$0.01";
-  if (usd < 10) return `$${usd.toFixed(2)}`;
-  if (usd < 100) return `$${usd.toFixed(1)}`;
-  return `$${Math.round(usd)}`;
-}
-
-/** 今日コストの色段階（<$1 緑 / <$5 黄 / >=$5 赤）。 */
-function costTextColor(usd: number): string {
-  if (usd >= 5) return "text-red-500 dark:text-red-400";
-  if (usd >= 1) return "text-yellow-600 dark:text-yellow-400";
-  return "text-emerald-600 dark:text-emerald-400";
-}
-
-/**
- * context 使用率の段階色。Chunk 2 の ContextGauge（PM-165）と同じ閾値。
- */
-function contextPercentColor(p: number): string {
-  if (p >= 85) return "bg-red-500";
-  if (p >= 60) return "bg-yellow-500";
-  return "bg-green-500";
-}
 
 /**
  * `"claude-opus-4-7[1m]"` → `"opus-4.7 1M"` 形式に短縮。

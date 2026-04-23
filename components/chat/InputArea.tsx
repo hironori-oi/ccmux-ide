@@ -20,6 +20,17 @@ import { ClearSessionDialog } from "@/components/chat/ClearSessionDialog";
 import { ModelPickerDialog } from "@/components/chat/ModelPickerDialog";
 import { EffortPickerDialog } from "@/components/chat/EffortPickerDialog";
 import { useChatStore, DEFAULT_PANE_ID, type Attachment } from "@/lib/stores/chat";
+import { useDialogStore } from "@/lib/stores/dialog";
+import {
+  resolveSessionPreferences,
+  useSessionPreferencesStore,
+  type SessionPreferences,
+} from "@/lib/stores/session-preferences";
+import {
+  DEFAULT_PERMISSION_MODE,
+  EFFORT_CHOICES,
+  modelIdToSdkId,
+} from "@/lib/types";
 
 // React 19 + zustand: selector が新配列を返すと getSnapshot cache が効かず
 // infinite loop。固定参照の凍結空配列で回避。
@@ -349,6 +360,33 @@ export function InputArea({
       // 確定 mapping が作られる。以降同 requestId の event は必ず当該 pane に
       // dispatch される (split second pane 送信時の DEFAULT_PANE_ID 誤配信を解消)。
       claimNextSendForPane(activeProjectId, paneId);
+
+      // v1.9.0 (DEC-053): session 別 preferences を per-query options として Rust に
+      // 渡す。sidecar (handlePrompt) は req.options.{model,maxThinkingTokens,
+      // permissionMode} を SDK query option に上書きする実装なので、argv 再起動を
+      // 経ずに設定切替が適用される。global fallback は dialog store の
+      // selectedModel / selectedEffort。
+      const dialog = useDialogStore.getState();
+      const globalDefaults: SessionPreferences = {
+        model: dialog.selectedModel ?? null,
+        effort: dialog.selectedEffort ?? null,
+        permissionMode: DEFAULT_PERMISSION_MODE,
+      };
+      const resolvedPrefs = resolveSessionPreferences(
+        useSessionPreferencesStore.getState(),
+        sessionId,
+        globalDefaults,
+      );
+      const effortMeta = resolvedPrefs.effort
+        ? EFFORT_CHOICES.find((e) => e.id === resolvedPrefs.effort) ?? null
+        : null;
+      const sdkModel = modelIdToSdkId(resolvedPrefs.model);
+      const perQueryOptions: Record<string, unknown> = {
+        permissionMode: resolvedPrefs.permissionMode,
+      };
+      if (sdkModel) perQueryOptions.model = sdkModel;
+      if (effortMeta) perQueryOptions.maxThinkingTokens = effortMeta.thinkingTokens;
+
       await callTauri<void>("send_agent_prompt", {
         projectId: activeProjectId,
         id,
@@ -357,6 +395,7 @@ export function InputArea({
         // Rust 側は `resume: Option<String>`、null/undefined を送ると
         // serde が None として扱う。明示的に null を渡しても same shape。
         resume: sdkSessionId,
+        options: perQueryOptions,
       });
       clearAttachments(paneId);
     } catch (e) {

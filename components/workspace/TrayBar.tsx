@@ -23,6 +23,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { TrayContextBar } from "@/components/workspace/TrayContextBar";
+import { TrayEffortPicker } from "@/components/workspace/TrayEffortPicker";
+import { TrayModelPicker } from "@/components/workspace/TrayModelPicker";
+import { TrayPermissionModePicker } from "@/components/workspace/TrayPermissionModePicker";
 import { DEFAULT_PANE_ID } from "@/lib/stores/chat";
 import { useEditorStore } from "@/lib/stores/editor";
 import { usePreviewInstances } from "@/lib/stores/preview-instances";
@@ -67,6 +70,10 @@ export function TrayBar() {
       <div className="ml-auto flex shrink-0 items-center gap-2">
         {/* PM-984: 画面分割切替ボタンの左側にコンテキスト使用量を表示 */}
         <TrayContextBar />
+        {/* v1.9.0 (DEC-053): session 別の model / effort / permission-mode */}
+        <TrayModelPicker />
+        <TrayEffortPicker />
+        <TrayPermissionModePicker />
         <div className="h-5 w-px bg-border/60" aria-hidden />
         <LayoutSwitcher />
       </div>
