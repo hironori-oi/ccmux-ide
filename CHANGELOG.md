@@ -11,6 +11,36 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.8.0] - 2026-04-24
+
+**Simplified Tray: Fixed 3 Chips + Editor Multi** — Tray の構成をオーナー要望に合わせて大幅簡素化。
+
+### 💎 Changed (Breaking UI)
+
+- **Tray のチップ構成を再設計** (PM-982)。session あたり:
+  - **Chat**: 1 固定（main pane、削除不可）
+  - **Terminal**: 1 固定（session ごと lazy 生成、削除不可）
+  - **Preview**: 1 固定（session ごと lazy 生成、削除不可）
+  - **Editor**: 複数（従来通り、sidebar D&D で追加）
+- **+ ボタン (チャット追加 / ターミナル追加 / プレビュー配置) を全廃** (PM-982)。
+  ユーザーは固定チップを **そのままドラッグ** するだけで配置できる。Session に
+  terminal / preview が未作成の場合、**drop 時に自動生成**する。
+- **Chat 複数 pane 機能撤去**。`addPane` ロジックは store に残すが UI からは
+  アクセス不可。これまでの Chat 1/2/3 の「セッション切替バグ」を根本解消。
+- **固定チップには ✕ 削除ボタンなし**（削除不可の session リソースのため）。
+  配置解除は slot 側の ✕ で。エディタチップは従来通り ✕ で file を purge。
+
+### ✨ Added
+
+- **Lazy 生成ロジック** (PM-982)。`WorkspaceView.handleDragEnd` で refId が
+  null の chip を drop した場合に:
+  - terminal → `createTerminal(projectId, path)` → 生成された ptyId で setSlot
+  - preview → `addInstance(projectId, { sessionId })` → 新 id で setSlot
+  - chat / editor はもとから refId がある前提（例外はトースト表示）
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.7.4] - 2026-04-24
 
 **Session-Scoped Workspace Layout** — session ごとに slot 配置と layout を独立管理。

@@ -12,10 +12,15 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 
+import { toast } from "sonner";
+
 import { TrayBar } from "@/components/workspace/TrayBar";
 import { SlotContainer } from "@/components/workspace/SlotContainer";
 import { DEFAULT_PANE_ID } from "@/lib/stores/chat";
+import { usePreviewInstances } from "@/lib/stores/preview-instances";
+import { useProjectStore } from "@/lib/stores/project";
 import { useSessionStore } from "@/lib/stores/session";
+import { useTerminalStore } from "@/lib/stores/terminal";
 import {
   useCurrentLayout,
   useCurrentSlots,
@@ -71,20 +76,24 @@ export function WorkspaceView() {
 
   function handleDragStart(ev: DragStartEvent) {
     const data = ev.active.data.current as
-      | { kind: SlotContentKind; refId: string; label: string }
+      | { kind: SlotContentKind; refId: string | null; label: string }
       | undefined;
     if (!data) return;
     setActiveDrag({ kind: data.kind, label: data.label });
   }
 
-  function handleDragEnd(ev: DragEndEvent) {
+  /**
+   * PM-982: refId が null の場合（terminal / preview の未作成状態）は drop 時に
+   * lazy 生成してから setSlot する。chat と editor は常に refId がある前提。
+   */
+  async function handleDragEnd(ev: DragEndEvent) {
     setActiveDrag(null);
     const over = ev.over;
     const active = ev.active;
     if (!over || !active) return;
     const overData = over.data.current as { slotIndex?: number } | undefined;
     const activeData = active.data.current as
-      | { kind: SlotContentKind; refId: string; label: string }
+      | { kind: SlotContentKind; refId: string | null; label: string }
       | undefined;
     if (
       !activeData ||
@@ -92,17 +101,68 @@ export function WorkspaceView() {
       typeof overData.slotIndex !== "number"
     )
       return;
-    setSlot(overData.slotIndex, {
-      kind: activeData.kind,
-      refId: activeData.refId,
-    });
+
+    const slotIndex = overData.slotIndex;
+
+    // refId が既にあれば即 setSlot
+    if (activeData.refId) {
+      setSlot(slotIndex, {
+        kind: activeData.kind,
+        refId: activeData.refId,
+      });
+      return;
+    }
+
+    // 以下 lazy 生成経路（terminal / preview のみ）
+    if (activeData.kind === "terminal") {
+      const { activeProjectId, projects } = useProjectStore.getState();
+      if (!activeProjectId) {
+        toast.error("プロジェクトが選択されていません");
+        return;
+      }
+      const projectPath =
+        projects.find((p) => p.id === activeProjectId)?.path ?? null;
+      if (!projectPath) {
+        toast.error("プロジェクトパスが取得できません");
+        return;
+      }
+      try {
+        const ptyId = await useTerminalStore
+          .getState()
+          .createTerminal(activeProjectId, projectPath);
+        if (!ptyId) {
+          toast.error("ターミナルの起動に失敗しました");
+          return;
+        }
+        setSlot(slotIndex, { kind: "terminal", refId: ptyId });
+      } catch (e) {
+        toast.error(
+          `ターミナル起動失敗: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+      return;
+    }
+
+    if (activeData.kind === "preview") {
+      const { activeProjectId } = useProjectStore.getState();
+      if (!activeProjectId) {
+        toast.error("プロジェクトが選択されていません");
+        return;
+      }
+      const sessionId = useSessionStore.getState().currentSessionId;
+      const id = usePreviewInstances
+        .getState()
+        .addInstance(activeProjectId, { sessionId });
+      setSlot(slotIndex, { kind: "preview", refId: id });
+      return;
+    }
   }
 
   return (
     <DndContext
       sensors={sensors}
       onDragStart={handleDragStart}
-      onDragEnd={handleDragEnd}
+      onDragEnd={(ev) => void handleDragEnd(ev)}
       onDragCancel={() => setActiveDrag(null)}
     >
       <div className="flex min-h-0 flex-1 flex-col">
