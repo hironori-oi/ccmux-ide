@@ -11,6 +11,39 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.4.1] - 2026-04-23
+
+**Context Fix** — Claude Code CLI 相当のプロジェクトコンテキスト自動読込を実装。
+
+### 🔧 Fixed: Claude がプロジェクト構造 / CLAUDE.md / skill を認識できない regression (PM-966 / DEC-055)
+
+v1.4.0 まで、Sumi で project を開いても Claude が以下を認識できない重大な問題があった:
+- `CLAUDE.md` のプロジェクトルール・指示が完全に無視され、Claude が「どのディレクトリですか？絶対パスを教えてください」と聞き返す
+- `/ceo` などの skill が SlashPalette に表示されるのに、実行すると「そのスキルは登録されていません」と応答
+- Claude が自身の `cwd` を Sumi インストールディレクトリ（`C:\Program Files\Sumi\...`）だと認識し、プロジェクトファイルが見えない
+
+#### 根因（3 層の複合）
+1. **sidecar cwd がプロジェクトパスでない** — `send_agent_prompt` が options JSON に `cwd` を含めず、sidecar が `process.cwd() = Sumi インストール dir` にフォールバックしていた
+2. **`settingSources` が未指定** — Claude Agent SDK は `settingSources` 未設定のとき CLAUDE.md / .claude/settings.json / commands / skills / MCP を **一切自動読込しない**（Claude Code CLI との差異）
+3. **skills 個別登録は実は不要** — SDK は `settingSources` 有効化で `~/.claude/skills/` + `<cwd>/.claude/skills/` を auto-discover する。個別 API 呼出は不要
+
+#### 修正内容
+- **`src-tauri/src/commands/agent.rs`**: `send_agent_prompt` の options JSON に以下 2 項目を毎回注入
+  - `cwd: handle.cwd` — `SidecarHandle` に起動時保存したプロジェクトパス
+  - `settingSources: ["user", "project", "local"]` — Claude Code CLI と同等の file-based 設定読込
+- **`sidecar/src/index.ts`**: defense-in-depth として `settingSources` の default を `["user", "project", "local"]` に設定。debug stderr ログに `settingSources` を追加
+- **`components/palette/SlashPalette.tsx`**: skill click の toast 文言を「セッションで自動で利用されます」（嘘だった）→「次のプロンプト送信時に Claude が自動で読み込みます」（DEC-055 で実際にそうなった）
+
+#### 挙動変化
+- **CLAUDE.md のルールに Claude が従い始める**（user + project 階層）
+- **`/ceo` `/dev` 等の slash コマンドが実動作**
+- **skills が auto-discover され呼出可能**
+- **MCP servers が `.mcp.json` から自動 load**
+- sidecar cwd がプロジェクト実パスに設定され、ファイル操作が project root 基準で動作
+
+#### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu/ccmux) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.4.0] - 2026-04-23
 
 **The "Sumi" Rename Release** — `ccmux-ide` 改称 + ブランドアイデンティティ + 公式サイト公開。
