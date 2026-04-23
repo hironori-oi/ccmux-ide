@@ -11,6 +11,25 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.6.2] - 2026-04-23
+
+**Creation Buttons Re-balanced** — エディタ + ボタンを撤去、プレビュー + を追加。
+
+### 💎 Changed
+
+- **エディタ + ボタンを撤去** (PM-972)。ファイルを開く導線は **サイドバー →
+  slot への直接 D&D** に一本化。トレイバー上の「📂 エディタでファイルを開く」
+  ボタンは不要と判断し削除。
+- **プレビュー + ボタンを追加** (PM-972)。Tray 右側に「🌐 プレビューを配置」
+  ボタンを追加。クリックで、現在表示中 layout の **最初の空 slot にプレビュー
+  を自動配置** する（ドラッグ不要の 1 クリック配置）。既に表示中または空 slot
+  なしの場合はトーストで案内。
+- **Creation Button の並びを統一**: 💬 チャット → 🖥 ターミナル → 🌐 プレビュー
+  の 3 つ（tray 右側、Tooltip 付き）。
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.6.1] - 2026-04-23
 
 **Tray UX Polish** — 削除ボタン + エディタ追加ボタン + チャット名簡潔化。

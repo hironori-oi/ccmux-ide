@@ -2,11 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Columns2,
   FileText,
-  FolderOpen,
   LayoutGrid,
   MessageSquare,
   MessageSquarePlus,
@@ -365,7 +363,9 @@ function CreationButtons() {
   });
   const addChatPane = useChatStore((s) => s.addPane);
   const createTerminal = useTerminalStore((s) => s.createTerminal);
-  const openFile = useEditorStore((s) => s.openFile);
+  const slots = useWorkspaceLayoutStore((s) => s.slots);
+  const layout = useWorkspaceLayoutStore((s) => s.layout);
+  const setSlot = useWorkspaceLayoutStore((s) => s.setSlot);
   const [spawning, setSpawning] = useState(false);
 
   const disabled = !activeProjectId;
@@ -378,26 +378,6 @@ function CreationButtons() {
       return;
     }
     toast.success("チャットを追加しました");
-  }
-
-  async function handleAddEditor() {
-    if (disabled || !activeProjectPath) return;
-    try {
-      // Tauri native file picker。defaultPath でプロジェクトルートから開始。
-      const selected = await openDialog({
-        multiple: false,
-        directory: false,
-        defaultPath: activeProjectPath,
-        title: "エディタで開くファイルを選択",
-      });
-      if (!selected || typeof selected !== "string") return;
-      await openFile(selected);
-      toast.success("ファイルを開きました");
-    } catch (e) {
-      toast.error(
-        `ファイルを開けませんでした: ${e instanceof Error ? e.message : String(e)}`
-      );
-    }
   }
 
   async function handleAddTerminal() {
@@ -415,6 +395,35 @@ function CreationButtons() {
     }
   }
 
+  /**
+   * PM-972: プレビューは project 単位で 1 つなので「追加」ではなく
+   * 「表示中の layout の最初の空 slot に配置する」挙動にする。
+   * すでに配置済ならトーストで案内。
+   */
+  function handleAddPreview() {
+    if (disabled || !activeProjectId) return;
+    // 既に配置済みかチェック（visible な slot のみ）
+    const visibleIndexes = VISIBLE_SLOTS[layout];
+    const alreadyPlaced = visibleIndexes.some((i) => {
+      const c = slots[i];
+      return c?.kind === "preview" && c.refId === activeProjectId;
+    });
+    if (alreadyPlaced) {
+      toast.message("プレビューはすでに表示されています");
+      return;
+    }
+    // 最初の空 slot を探して配置
+    const emptyIndex = visibleIndexes.find((i) => !slots[i]);
+    if (emptyIndex === undefined) {
+      toast.message(
+        "空の slot がありません。既存 slot を削除するか、レイアウトを切替えてください"
+      );
+      return;
+    }
+    setSlot(emptyIndex, { kind: "preview", refId: activeProjectId });
+    toast.success("プレビューを配置しました");
+  }
+
   return (
     <>
       <CreationButton
@@ -423,13 +432,6 @@ function CreationButtons() {
         colorClass="text-blue-500 hover:bg-blue-500/10"
         disabled={disabled}
         onClick={handleAddChat}
-      />
-      <CreationButton
-        icon={<FolderOpen className="h-3.5 w-3.5" aria-hidden />}
-        label="エディタでファイルを開く"
-        colorClass="text-amber-500 hover:bg-amber-500/10"
-        disabled={disabled}
-        onClick={handleAddEditor}
       />
       <CreationButton
         icon={<TerminalSquare className="h-3.5 w-3.5" aria-hidden />}
@@ -443,7 +445,14 @@ function CreationButtons() {
           ) : undefined
         }
       />
-      {/* Preview は project に 1 個、チップ自体が常時存在するため + ボタン不要。 */}
+      <CreationButton
+        icon={<Monitor className="h-3.5 w-3.5" aria-hidden />}
+        label="プレビューを配置"
+        colorClass="text-sky-500 hover:bg-sky-500/10"
+        disabled={disabled}
+        onClick={handleAddPreview}
+      />
+      {/* Editor は sidebar のファイルを slot 直接 D&D で開く設計のため + ボタンなし。 */}
     </>
   );
 }
