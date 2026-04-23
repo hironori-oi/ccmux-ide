@@ -99,28 +99,9 @@ export function StatusBar() {
       {/* 左 3: Claude activity summary (v3.5 Chunk C) */}
       <ClaudeActivitySummary panes={panes} activePaneId={activePaneId} />
 
-      {/* 中央L: context % */}
-      <div className="flex items-center gap-1.5">
-        {contextPercent !== null ? (
-          <>
-            <span
-              aria-hidden
-              className={cn(
-                "inline-block h-2 w-2 rounded-full",
-                contextPercentColor(contextPercent)
-              )}
-            />
-            <span
-              aria-label={`コンテキスト使用率 ${contextPercent}%`}
-              className="tabular-nums"
-            >
-              コンテキスト {Math.round(contextPercent)}%
-            </span>
-          </>
-        ) : (
-          <span className="opacity-60">コンテキスト --</span>
-        )}
-      </div>
+      {/* PM-985: 旧「中央L: context %」（global 最新値）を撤去。
+          TrayBar の TrayContextBar (session 別) が代替となるため、StatusBar
+          からは削除して重複表示を避ける。 */}
 
       {/* 中央M: 公式 OAuth ゲージ（Round D'） */}
       <OAuthGaugeSection

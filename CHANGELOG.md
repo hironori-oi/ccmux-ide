@@ -11,6 +11,26 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.8.3] - 2026-04-24
+
+**Strict Session Context + Cleanup** — コンテキスト表示の session 厳密化 + 不要 UI 撤去。
+
+### 💎 Changed
+
+- **TrayContextBar の global fallback を廃止** (PM-985)。session 別の snapshot が
+  無い場合に global 最新値を fallback 表示する挙動は混乱を招くため撤去。
+  snapshot が無ければ `ctx — (empty bar)` と明示表示、tooltip で「この session
+  ではまだ計測していません（Claude と会話すると表示）」と案内する。
+- **StatusBar から global コンテキスト表示を撤去** (PM-985)。TrayBar の
+  TrayContextBar (session 別) が代替となるため、StatusBar 中央L の
+  `コンテキスト XX%` 表示は削除して重複を解消。
+- **SessionList から「未分類を表示」toggle を撤去** (PM-985)。v5 Chunk B /
+  DEC-032 で入れた旧 toggle は機能不要と判断し、関連 state /
+  fetchUncategorizedSessions 処理 / UI section を全て削除。
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.8.2] - 2026-04-24
 
 **Tray Context Bar** — session 別のコンテキスト使用量を Tray Bar に表示。

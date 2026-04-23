@@ -95,16 +95,20 @@ export function selectIsNearLimit(s: MonitorStore): boolean {
 }
 
 /**
- * PM-984: 指定 session の monitor snapshot を取得するヘルパ。
- * - session id が null の場合は global monitor を返す
- * - snapshot が無い session（まだ tick を受けていない）も global monitor を fallback
- *   として返す（「session 選んだ直後は currentlyrunning の値で OK」）
+ * PM-984 / PM-985: 指定 session の monitor snapshot を取得するヘルパ。
+ *
+ * PM-985 で global fallback を廃止: session に固有の snapshot が無ければ null を
+ * 返し、UI 側は「—」を表示する。session 別表示の意味を厳密にするため
+ * （ユーザー要望: 無関係の session で最新値が出るのは混乱の元）。
+ *
+ * - session id が null （session 未選択）の場合は null を返す
+ * - snapshot が無い session も null を返す（fallback せず）
  */
 export function selectMonitorForSession(
   s: MonitorStore,
   sessionId: string | null
 ): MonitorState | null {
-  if (!sessionId) return s.monitor;
-  return s.perSession[sessionId] ?? s.monitor;
+  if (!sessionId) return null;
+  return s.perSession[sessionId] ?? null;
 }
 

@@ -40,9 +40,34 @@ export function TrayContextBar() {
     selectMonitorForSession(s, currentSessionId)
   );
 
-  // monitor が null（1 度も tick を受けていない）なら非表示
+  // PM-985: snapshot が無い（session 未選択 / 当該 session で未会話）なら
+  // 「—」表示で該当 session のデータが無いことを明示する。
   if (!monitor) {
-    return null;
+    return (
+      <TooltipProvider delayDuration={200}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="flex h-6 shrink-0 cursor-default items-center gap-1.5 rounded border border-border/40 bg-muted/20 px-2 text-[11px] text-muted-foreground"
+              role="status"
+              aria-label="コンテキスト使用量 未計測"
+            >
+              <span className="shrink-0 text-[10px]">ctx</span>
+              <div
+                className="relative h-1 w-[60px] shrink-0 overflow-hidden rounded-full bg-muted/60"
+                aria-hidden
+              />
+              <span className="shrink-0 tabular-nums">—</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">
+            {currentSessionId
+              ? "この session ではまだコンテキスト使用量を計測していません（Claude と会話すると表示されます）"
+              : "session が選択されていません"}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
   }
 
   const percent =

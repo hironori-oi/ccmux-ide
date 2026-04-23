@@ -20,9 +20,6 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   Clock,
-  Eye,
-  EyeOff,
-  FileQuestion,
   GripVertical,
   ListOrdered,
   MoreHorizontal,
@@ -61,7 +58,6 @@ import { useProjectStore } from "@/lib/stores/project";
 import { useChatStore } from "@/lib/stores/chat";
 import {
   applySessionOrder,
-  UNCATEGORIZED_KEY,
   useSessionOrderStore,
 } from "@/lib/stores/session-order";
 import {
@@ -81,13 +77,11 @@ import type { SessionSummary } from "@/lib/types";
  *
  * 日本語 UI、framer-motion の `layout` アニメで並べ替え時の動きを滑らかにする。
  *
- * ## v5 Chunk B / DEC-032: activeProjectId 別表示 + 未分類 toggle
+ * ## v5 Chunk B / DEC-032 → PM-985 で簡素化
  *
  * - activeProjectId が null（未選択）なら全件表示（従来動作）
  * - activeProjectId が非 null の場合、当該 project の session のみをデフォルト表示
- * - session_store の fetchSessions 側で Rust に WHERE 条件を投げているので、
- *   UI 側では「未分類 toggle」のみで切替する（toggle ON 時は追加クエリで全件
- *   を取得し、projectId === null の分だけ併記）
+ * - 旧「未分類 toggle」は PM-985 で撤去（オーナー判断、機能不要）
  */
 export function SessionList() {
   const sessions = useSessionStore((s) => s.sessions);
@@ -134,54 +128,11 @@ export function SessionList() {
   const setOrder = useSessionOrderStore((s) => s.setOrder);
   const removeFromOrder = useSessionOrderStore((s) => s.removeFromOrder);
 
-  // v5 Chunk B / DEC-032: 「未分類を表示」toggle。初期 off。
-  // activeProjectId != null のときだけ UI を出す（null のときは既に全件表示中）。
-  const [showUncategorized, setShowUncategorized] = useState(false);
-  // 未分類 toggle が ON のとき、別クエリで持ってくる未分類セッション一覧。
-  const [uncategorizedSessions, setUncategorizedSessions] = useState<
-    SessionSummary[]
-  >([]);
+  // PM-985: 旧「未分類を表示」toggle は撤去済（オーナー判断、機能不要）
 
   useEffect(() => {
     void fetchSessions();
   }, [fetchSessions]);
-
-  // activeProjectId が切り替わったら未分類 toggle を off にリセット（UX シンプル化）。
-  useEffect(() => {
-    setShowUncategorized(false);
-    setUncategorizedSessions([]);
-  }, [activeProjectId]);
-
-  // 未分類 toggle ON 時に未分類 session を fetch する（Rust の list_sessions を
-  // projectId 引数なし = 全件で叩き、projectId === null のものだけに絞る）。
-  useEffect(() => {
-    if (!showUncategorized) {
-      setUncategorizedSessions([]);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        // 動的 import を避けるため、session store の fetch は使わず直接 invoke する。
-        // サイドバーの main list state を汚さないためにも local state で保持する。
-        const { callTauri } = await import("@/lib/tauri-api");
-        const all = await callTauri<SessionSummary[]>("list_sessions", {
-          limit: 200,
-          offset: 0,
-        });
-        if (cancelled) return;
-        setUncategorizedSessions(all.filter((s) => s.projectId === null));
-      } catch (e) {
-        if (!cancelled) {
-          toast.error(`未分類セッションの取得に失敗: ${String(e)}`);
-          setShowUncategorized(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [showUncategorized]);
 
   // activeProjectId != null のとき、本体 sessions は fetchSessions が既に
   // project filter 済で返しているのでそのまま使う。ただし万一 race で
@@ -192,21 +143,11 @@ export function SessionList() {
   }, [sessions, activeProjectId]);
 
   // PM-983: 表示順を適用。manual モードなら保存済並び順、それ以外は updated_at DESC
-  const projectKey = activeProjectId ?? UNCATEGORIZED_KEY;
+  const projectKey = activeProjectId ?? "__none__";
   const visibleSessions = useMemo(
     () =>
       applySessionOrder(filteredSessions, projectKey, orderMode, orderMap),
     [filteredSessions, projectKey, orderMode, orderMap]
-  );
-  const orderedUncategorizedSessions = useMemo(
-    () =>
-      applySessionOrder(
-        uncategorizedSessions,
-        UNCATEGORIZED_KEY,
-        orderMode,
-        orderMap
-      ),
-    [uncategorizedSessions, orderMode, orderMap]
   );
 
   // PM-983: drag sensors（4px 移動で activate、通常クリックを誤発火させない）
@@ -278,9 +219,7 @@ export function SessionList() {
   }
 
   const hasMain = visibleSessions.length > 0;
-  const hasUncategorized =
-    showUncategorized && uncategorizedSessions.length > 0;
-  const showEmpty = !hasMain && !hasUncategorized && !isLoading;
+  const showEmpty = !hasMain && !isLoading;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -351,52 +290,11 @@ export function SessionList() {
               />
             )}
 
-            {/* 未分類セクション（toggle ON + active project 指定時のみ） */}
-            {hasUncategorized && (
-              <div className="mt-4">
-                <div className="mb-1 flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                  <FileQuestion className="h-3 w-3" aria-hidden />
-                  未分類
-                </div>
-                <SessionSection
-                  sessions={orderedUncategorizedSessions}
-                  orderKey={UNCATEGORIZED_KEY}
-                  orderMode={orderMode}
-                  sensors={dndSensors}
-                  onDragEnd={handleDragEnd}
-                  currentSessionId={currentSessionId}
-                  activitiesBySession={activitiesBySession}
-                  onLoad={(id) => void handleLoad(id)}
-                  onRename={(s) => openRename(s)}
-                  onDelete={(s) => setDeleteTarget(s)}
-                  muted
-                  keyPrefix="uncat-"
-                />
-              </div>
-            )}
           </>
         )}
       </div>
 
-      {/* 未分類 toggle（activeProjectId 指定時のみ表示） */}
-      {activeProjectId !== null && (
-        <div className="border-t px-2 py-1.5">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full justify-start gap-2 text-xs text-muted-foreground"
-            onClick={() => setShowUncategorized((v) => !v)}
-            aria-pressed={showUncategorized}
-          >
-            {showUncategorized ? (
-              <EyeOff className="h-3.5 w-3.5" aria-hidden />
-            ) : (
-              <Eye className="h-3.5 w-3.5" aria-hidden />
-            )}
-            {showUncategorized ? "未分類を隠す" : "未分類を表示"}
-          </Button>
-        </div>
-      )}
+      {/* PM-985: 旧「未分類を表示」toggle は撤去（機能不要のため）。 */}
 
       {/* Rename Dialog */}
       <Dialog
