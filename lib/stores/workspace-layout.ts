@@ -94,6 +94,19 @@ export const useWorkspaceLayoutStore = create<WorkspaceLayoutState>()(
         set((s) => {
           if (slotIndex < 0 || slotIndex >= MAX_WORKSPACE_SLOTS) return s;
           const next = s.slots.slice();
+          // PM-980: 同じ chip (kind + refId) が別 slot に存在する場合は先に
+          // そちらを空にする（1 chip = 1 slot 制約）。
+          // 「移動」のセマンティクス: slot A → slot B にドラッグしたら A は空、
+          // B に表示。同じ内容の複製は作らない。
+          if (content) {
+            for (let i = 0; i < next.length; i++) {
+              if (i === slotIndex) continue;
+              const c = next[i];
+              if (c && c.kind === content.kind && c.refId === content.refId) {
+                next[i] = null;
+              }
+            }
+          }
           next[slotIndex] = content;
           return { slots: next };
         }),

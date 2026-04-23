@@ -11,6 +11,21 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.7.3] - 2026-04-24
+
+**One Chip = One Slot** — 同じチップは常に 1 slot 限定で表示。
+
+### 💎 Changed
+
+- **setSlot に 1 chip = 1 slot 制約を追加** (PM-980)。旧動作では同じ chip を
+  別 slot にドラッグすると両方に同じ内容が並列表示されていたが、
+  「移動」セマンティクス（元 slot を空にして新 slot に表示）に変更した。
+  例: Slot A に Chat 1 を表示中 → Slot B にドラッグ → Slot A 空 + Slot B に
+  Chat 1。重複表示による認知コストとリソース浪費を回避。
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.7.2] - 2026-04-24
 
 **Slim Chat Header + Session-Scoped Chat** — チャット画面を縦方向にさらに拡大、chat も session 別管理へ。
