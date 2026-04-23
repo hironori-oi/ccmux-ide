@@ -11,6 +11,33 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.6.3] - 2026-04-23
+
+**Multi-instance Preview** — プレビューを複数同時に独立 URL で表示可能に。
+
+### ✨ Added
+
+- **Preview インスタンス管理** (PM-973)。新規ストア `usePreviewInstances` を
+  追加し、slot に配置した各プレビューが **独立した URL** を持てるようにした。
+  これまでは 1 project = 1 preview で、同一プロジェクト内に複数スロットを
+  置いても全て同じ URL に同期していた。v1.6.3 以降は:
+  - `🌐+` ボタンを押す毎に **新規プレビューインスタンス**を作成
+  - 最初の空 slot に自動配置、空 slot が無ければ tray にチップとして残置
+  - 各インスタンスは URL を独立に保持（例: Slot A = `localhost:3000`、
+    Slot B = `localhost:3001`）
+  - `sumi:preview-instances` localStorage に永続化、再起動で復元
+- PreviewPane に `previewId?: string` prop を追加（指定時は instance 固有の
+  URL を読み書き、未指定時は旧 project 単位の挙動で後方互換）
+
+### 💎 Changed
+
+- **Tray 左側の既定 Preview チップを廃止** (PM-973)。旧動作では project を
+  選ぶだけで常時表示されていたが、`🌐+` ボタン経由で作成されたインスタンス
+  のみ表示する設計に変更。
+
+### Credits
+- Based on [ccmux](https://github.com/Shin-sibainu) by [@Shin-sibainu](https://github.com/Shin-sibainu), MIT Licensed.
+
 ## [v1.6.2] - 2026-04-23
 
 **Creation Buttons Re-balanced** — エディタ + ボタンを撤去、プレビュー + を追加。

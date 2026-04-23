@@ -26,6 +26,7 @@ import {
   usePreviewStore,
   type PreviewWindowGeometry,
 } from "@/lib/stores/preview";
+import { usePreviewInstances } from "@/lib/stores/preview-instances";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 
 /**
@@ -112,11 +113,25 @@ function buildPreviewWindowLabel(projectId: string): string {
   return `preview-${sanitized}`;
 }
 
-export function PreviewPane() {
+/**
+ * PM-973: `previewId` prop で複数独立インスタンス対応。
+ * - `previewId` 未指定: 旧動作 (project 単位 1 URL、usePreviewStore)
+ * - `previewId` 指定:   `usePreviewInstances` からインスタンス固有 URL を読み書き
+ *
+ * in-app secondary WebviewWindow の spawn は引き続き project 単位 (同プロジェクト
+ * の preview が複数 slot に配置されていても secondary window は 1 つに収束)。
+ */
+export function PreviewPane({ previewId }: { previewId?: string } = {}) {
   const activeProject = useProjectStore((s) => s.getActiveProject());
   const activeProjectId = activeProject?.id ?? null;
 
-  // persist store から project ごとの URL を取得
+  // PM-973: instance URL (previewId 指定時)
+  const instance = usePreviewInstances((s) =>
+    previewId ? s.instances[previewId] : undefined
+  );
+  const setInstanceUrl = usePreviewInstances((s) => s.setUrl);
+
+  // persist store から project ごとの URL を取得 (fallback for legacy previewId 未指定)
   // （history は v1.0 では UI 露出しないが、store 側は PM-925 実装を維持）
   const urlEntry = usePreviewStore((s) =>
     activeProjectId ? s.urls[activeProjectId] : undefined
@@ -133,7 +148,9 @@ export function PreviewPane() {
   const getWindowGeometry = usePreviewStore((s) => s.getWindowGeometry);
   const setWindowGeometry = usePreviewStore((s) => s.setWindowGeometry);
 
-  const committedUrl = urlEntry?.current ?? DEFAULT_PREVIEW_URL;
+  // PM-973: URL の解決優先度は instance > project store > DEFAULT
+  const committedUrl =
+    instance?.url ?? urlEntry?.current ?? DEFAULT_PREVIEW_URL;
 
   // URL input の局所 state（type 中は store に流し込まない）
   const [inputValue, setInputValue] = useState(committedUrl);
@@ -160,13 +177,24 @@ export function PreviewPane() {
 
   const handleCommitUrl = useCallback(
     (next: string) => {
-      if (!activeProjectId) return;
       const trimmed = next.trim();
       if (!trimmed) return;
       if (trimmed === committedUrl) return;
+      // PM-973: previewId 指定時は instance 側に書き込む
+      if (previewId) {
+        setInstanceUrl(previewId, trimmed);
+        return;
+      }
+      if (!activeProjectId) return;
       setCurrentUrl(activeProjectId, trimmed);
     },
-    [activeProjectId, committedUrl, setCurrentUrl]
+    [
+      previewId,
+      activeProjectId,
+      committedUrl,
+      setCurrentUrl,
+      setInstanceUrl,
+    ]
   );
 
   /**

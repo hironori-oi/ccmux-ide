@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useChatStore } from "@/lib/stores/chat";
 import { useEditorStore } from "@/lib/stores/editor";
+import { usePreviewInstances } from "@/lib/stores/preview-instances";
 import { useProjectStore } from "@/lib/stores/project";
 import { useTerminalStore } from "@/lib/stores/terminal";
 import {
@@ -120,18 +121,21 @@ function TrayChips() {
       }));
   }, [terminals, activeProjectId]);
 
+  // PM-973: Preview は project 依存ではなく instance ごとに独立した URL を持つ。
+  // Tray 左側の「既定チップ」を廃止し、+ ボタンで作った instance のみ表示。
+  const previewInstancesMap = usePreviewInstances((s) => s.instances);
   const previewItems = useMemo(() => {
     if (!activeProjectId) return [];
-    return [
-      {
+    return Object.values(previewInstancesMap)
+      .filter((inst) => inst.projectId === activeProjectId)
+      .map((inst, idx) => ({
         kind: "preview" as const,
-        refId: activeProjectId,
-        label: "Preview",
-        tooltip: "プレビュー（外部サイト / dev server）",
-        deletable: false,
-      },
-    ];
-  }, [activeProjectId]);
+        refId: inst.id,
+        label: `Preview ${idx + 1}`,
+        tooltip: inst.url,
+        deletable: true,
+      }));
+  }, [previewInstancesMap, activeProjectId]);
 
   const isEmpty =
     chatItems.length === 0 &&
@@ -305,6 +309,7 @@ function DeleteChipButton({
   const removeChatPane = useChatStore((s) => s.removePane);
   const closeFile = useEditorStore((s) => s.closeFile);
   const closeTerminal = useTerminalStore((s) => s.closeTerminal);
+  const removePreviewInstance = usePreviewInstances((s) => s.removeInstance);
   const removeByRefId = useWorkspaceLayoutStore((s) => s.removeByRefId);
 
   async function handleDelete(e: React.MouseEvent) {
@@ -317,6 +322,8 @@ function DeleteChipButton({
         closeFile(refId);
       } else if (kind === "terminal") {
         await closeTerminal(refId);
+      } else if (kind === "preview") {
+        removePreviewInstance(refId);
       }
       // slot に配置済なら slot も空に
       removeByRefId(kind, refId);
@@ -363,6 +370,7 @@ function CreationButtons() {
   });
   const addChatPane = useChatStore((s) => s.addPane);
   const createTerminal = useTerminalStore((s) => s.createTerminal);
+  const addPreviewInstance = usePreviewInstances((s) => s.addInstance);
   const slots = useWorkspaceLayoutStore((s) => s.slots);
   const layout = useWorkspaceLayoutStore((s) => s.layout);
   const setSlot = useWorkspaceLayoutStore((s) => s.setSlot);
@@ -396,32 +404,25 @@ function CreationButtons() {
   }
 
   /**
-   * PM-972: プレビューは project 単位で 1 つなので「追加」ではなく
-   * 「表示中の layout の最初の空 slot に配置する」挙動にする。
-   * すでに配置済ならトーストで案内。
+   * PM-973: プレビューは instance ごとに独立した URL を持つ。+ ボタンは毎回
+   * 新規 instance を作成し、表示中 layout の最初の空 slot に配置する。
+   * 空 slot が無い場合は instance だけ作って tray に残す（ユーザーが後で
+   * drag 配置できる）。
    */
   function handleAddPreview() {
     if (disabled || !activeProjectId) return;
-    // 既に配置済みかチェック（visible な slot のみ）
+    const id = addPreviewInstance(activeProjectId);
+    // 空 slot を探して自動配置（なければ tray のみ）
     const visibleIndexes = VISIBLE_SLOTS[layout];
-    const alreadyPlaced = visibleIndexes.some((i) => {
-      const c = slots[i];
-      return c?.kind === "preview" && c.refId === activeProjectId;
-    });
-    if (alreadyPlaced) {
-      toast.message("プレビューはすでに表示されています");
-      return;
-    }
-    // 最初の空 slot を探して配置
     const emptyIndex = visibleIndexes.find((i) => !slots[i]);
-    if (emptyIndex === undefined) {
-      toast.message(
-        "空の slot がありません。既存 slot を削除するか、レイアウトを切替えてください"
+    if (emptyIndex !== undefined) {
+      setSlot(emptyIndex, { kind: "preview", refId: id });
+      toast.success("プレビューを配置しました");
+    } else {
+      toast.success(
+        "プレビューを追加しました（空 slot が無いためトレイに保留、ドラッグで配置してください）"
       );
-      return;
     }
-    setSlot(emptyIndex, { kind: "preview", refId: activeProjectId });
-    toast.success("プレビューを配置しました");
   }
 
   return (

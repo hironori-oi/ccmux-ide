@@ -249,9 +249,12 @@ function SlotContentRenderer({ content }: { content: SlotContent }) {
     return <SlotTerminalRenderer ptyId={content.refId} />;
   }
   if (content.kind === "preview") {
+    // PM-973: refId は previewInstance id（旧仕様では projectId だったが、複数
+    // 独立インスタンス対応で instance 単位に）。PreviewPane は previewId 指定時、
+    // インスタンス固有の URL 状態を読み書きする。
     return (
       <div className="flex h-full flex-col">
-        <PreviewPane />
+        <PreviewPane previewId={content.refId} />
       </div>
     );
   }
