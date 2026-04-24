@@ -1,6 +1,6 @@
 {
   "name": "sumi",
-  "version": "1.14.0",
+  "version": "1.15.0",
   "description": "Sumi — Japanese-first Claude Code desktop client (Tauri + Next.js)",
   "license": "MIT",
   "private": true,
@@ -59,6 +59,7 @@
     "react-markdown": "^9.0.1",
     "react-resizable-panels": "^2.1.9",
     "rehype-highlight": "^7.0.1",
+    "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.0",
     "sonner": "^1.7.0",
     "tailwind-merge": "^2.5.5",
@@ -67,6 +68,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.48.0",
+    "@tailwindcss/typography": "^0.5.19",
     "@tauri-apps/cli": "^2.1.0",
     "@types/node": "^22",
     "@types/react": "^19",

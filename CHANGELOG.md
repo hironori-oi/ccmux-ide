@@ -11,6 +11,45 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.15.0] - 2026-04-24
+
+**Chat Markdown レンダリング品質を Cursor 並みに引き上げ** — 従来の Chat
+返答は `@tailwindcss/typography` 未導入、さらに Claude 出力で table 直前の
+blank line が時折欠落して GFM parser が発火しない問題で、Markdown table が
+段落と連結した 1 枚岩の `<p>` として描画されていた。v1.15.0 では
+`@tailwindcss/typography` を導入し `prose` ベースで刷新、`remark-breaks`
+追加で単一改行も反映、さらに Frontend 側で `normalizeMarkdownForGfm` を
+挿入して「table 直前 blank line 欠落」を defensive に補完する (DEC-061)。
+コードブロックには「コピー」ボタン、リンククリックは Tauri shell.open で
+外部ブラウザ起動に変更した。
+
+### Added
+
+- `@tailwindcss/typography` を devDependency に追加し、Chat の Markdown
+  表示を `prose prose-sm prose-neutral max-w-none dark:prose-invert` で
+  刷新 (DEC-061)
+- `remark-breaks` プラグインを追加し、単一改行も `<br />` として反映
+- コードブロックにコピーボタンを追加 (`components/chat/CodeBlock.tsx`)。
+  Tauri `plugin-clipboard-manager` で書込み、navigator.clipboard に
+  フォールバック。成功時は sonner toast で通知
+- リンククリック時に `@tauri-apps/plugin-shell::open` でシステム既定の
+  ブラウザを起動するよう変更 (SSR / fallback は `window.open`)
+- Markdown プリプロセッサ `lib/utils/markdown.ts` を新規追加。行頭
+  `|` 行で直前行が空行でも `|` 行でもない場合に blank line を挿入する
+  `normalizeMarkdownForGfm` を実装。fenced code 内は不変
+- `tailwind.config.ts` に `extend.typography` を追加し、table / th / td /
+  blockquote / code / heading / p / hr / img を chat UI 密度に微調整。
+  `dark:prose-invert` 用の `invert` variant も CSS variable で統一
+
+### Changed
+
+- `AssistantMessage` の手書き `mdComponents` を `prose` で代替し視覚品質を
+  向上。残すのは `a` / `pre` (CodeBlock) / `img` のみ
+- Markdown table / list / blockquote / heading の表示が Cursor 並みの整形に
+  改善。table は wrapper で overflow-x-auto し、モバイル狭幅でも横スクロール
+- `AssistantMessage` は `useMemo` で `normalizeMarkdownForGfm` を再計算
+  抑制。streaming 中も過剰な再パースを起こさない
+
 ## [v1.14.0] - 2026-04-24
 
 **ExitPlanMode の cwd 外書込み修正 + Permission Dialog cwd 外警告** — v1.13.0
