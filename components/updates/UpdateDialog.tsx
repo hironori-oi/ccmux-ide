@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { DownloadCloud, RefreshCcw } from "lucide-react";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
+import { DownloadCloud, ExternalLink, RefreshCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +21,37 @@ import {
   UPDATE_DIALOG_EVENT_NAMES,
   requestInstallUpdate,
 } from "@/components/updates/UpdateNotifier";
+
+/**
+ * v1.20.1 (DEC-065 延長): 自動更新が「署名関連エラー」で失敗した場合に
+ * 手動ダウンロードへ誘導するための判定関数。
+ *
+ * 典型的な発生パターン:
+ *   - v1.18.2 以前の installed binary は pubkey を埋め込んでいないため、
+ *     signed latest.json を受け取っても minisign parser が「Invalid encoding
+ *     in minisign data」を吐いて落ちる (DEC-065)
+ *   - release workflow の signing が失敗して unsigned (signature: "") の
+ *     latest.json が配布された場合も同様のエラーになる
+ *   - 両ケースとも自動更新は技術的に継続不可能。唯一の解決策は
+ *     「最新 installer を手動 DL + 上書きインストール」
+ *
+ * 判定は string 部分一致。将来 i18n 化する場合は error code ベースに
+ * 切り替える余地を残す。
+ */
+const SIGNATURE_ERROR_NEEDLES = [
+  "Invalid encoding in minisign",
+  "minisign",
+  "signature",
+  "Signature",
+];
+
+function isSignatureError(message: string | null | undefined): boolean {
+  if (!message) return false;
+  return SIGNATURE_ERROR_NEEDLES.some((needle) => message.includes(needle));
+}
+
+const MANUAL_DOWNLOAD_URL =
+  "https://github.com/hironori-oi/ccmux-ide/releases/latest";
 
 /**
  * v1.16.0 / DEC-062: 自動更新の詳細ダイアログ。
@@ -96,6 +128,27 @@ export function UpdateDialog() {
     }
   }, []);
 
+  // v1.20.1: 署名関連エラーのときに GitHub Releases を既定ブラウザで開く。
+  // plugin-shell の open() は OS 既定のブラウザで URL を起動する。
+  const handleOpenReleases = useCallback(async () => {
+    try {
+      await openExternal(MANUAL_DOWNLOAD_URL);
+    } catch (err) {
+      console.warn("[UpdateDialog] open releases failed", err);
+      // fallback: window.open（Tauri webview 内では new window が許可されない
+      // ことが多いが、念のため）
+      if (typeof window !== "undefined") {
+        window.open(MANUAL_DOWNLOAD_URL, "_blank", "noopener,noreferrer");
+      }
+    }
+  }, []);
+
+  // v1.20.1: 署名関連エラーを検出し、専用 UI に切り替える
+  const isSignatureFailure = useMemo(
+    () => status === "error" && isSignatureError(lastError),
+    [status, lastError]
+  );
+
   // Dialog は通常ユーザーが明示的に開く。close は ESC / overlay クリックで可能。
   // downloading 中は close 不可にしたいため onOpenChange を guard。
   const handleOpenChange = useCallback(
@@ -119,18 +172,22 @@ export function UpdateDialog() {
               ? "更新の準備ができました"
               : status === "downloading"
                 ? "更新をダウンロード中..."
-                : status === "error"
-                  ? "更新エラー"
-                  : "新しいバージョンが利用可能です"}
+                : isSignatureFailure
+                  ? "手動更新が必要です"
+                  : status === "error"
+                    ? "更新エラー"
+                    : "新しいバージョンが利用可能です"}
           </DialogTitle>
           <DialogDescription>
             {status === "ready"
               ? "ダウンロードが完了しました。再起動して更新を適用します。"
               : status === "downloading"
                 ? "ダウンロード中はキャンセルできません。完了まで少々お待ちください。"
-                : status === "error"
-                  ? "更新処理中にエラーが発生しました。時間をおいてから再試行してください。"
-                  : "新しいバージョンを適用して最新の機能を使えるようにします。"}
+                : isSignatureFailure
+                  ? "このバージョンは現行の署名検証に対応していないため、自動更新できません。下のボタンから最新版を手動でダウンロードして上書きインストールしてください。"
+                  : status === "error"
+                    ? "更新処理中にエラーが発生しました。時間をおいてから再試行してください。"
+                    : "新しいバージョンを適用して最新の機能を使えるようにします。"}
           </DialogDescription>
         </DialogHeader>
 
@@ -160,8 +217,29 @@ export function UpdateDialog() {
           </div>
         )}
 
-        {/* error メッセージ */}
-        {status === "error" && lastError && (
+        {/* error メッセージ
+            v1.20.1: 署名関連エラーは専用の赤 warning bar に差し替え、
+            通常エラーは既存表示のまま。 */}
+        {status === "error" && isSignatureFailure && (
+          <div
+            role="alert"
+            className="space-y-1 rounded-md border border-destructive/60 bg-destructive/15 p-3 text-[11px] text-destructive"
+          >
+            <p className="font-medium">
+              現行の Ed25519 署名検証に対応していないバージョンです
+            </p>
+            <p className="text-destructive/90">
+              下の「GitHub Releases から手動ダウンロード」を押し、最新版の installer
+              で上書きインストールしてください。以降は自動更新が正常動作します。
+            </p>
+            {lastError && (
+              <p className="mt-1 font-mono text-[10px] text-destructive/70">
+                {lastError}
+              </p>
+            )}
+          </div>
+        )}
+        {status === "error" && !isSignatureFailure && lastError && (
           <div
             role="alert"
             className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[11px] text-destructive"
@@ -206,7 +284,37 @@ export function UpdateDialog() {
               再起動して更新を適用
             </Button>
           )}
-          {status === "error" && (
+          {status === "error" && isSignatureFailure && (
+            <>
+              <Button variant="outline" size="sm" onClick={handleLater}>
+                閉じる
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    window.dispatchEvent(
+                      new CustomEvent(UPDATE_DIALOG_EVENT_NAMES.check)
+                    );
+                  }
+                }}
+                className="gap-2"
+              >
+                <RefreshCcw className="h-3.5 w-3.5" aria-hidden />
+                再試行
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleOpenReleases}
+                className="gap-2"
+              >
+                <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                GitHub Releases から手動ダウンロード
+              </Button>
+            </>
+          )}
+          {status === "error" && !isSignatureFailure && (
             <>
               <Button variant="outline" size="sm" onClick={handleLater}>
                 閉じる

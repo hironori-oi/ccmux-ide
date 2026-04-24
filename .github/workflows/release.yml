@@ -229,15 +229,27 @@ jobs:
           Get-Item "sidecar/dist/index.mjs" | Select-Object Name, Length
 
       # ------------------------------------------------------------------
-      # 8. 署名鍵の有無を check (DEC-065 v1.19.0)
-      #    Secret 未登録の fork PR では空文字が渡るため、fail させずに警告
-      #    log を出して unsigned build を続行する。本家 main の tag release
-      #    では必ず signed される前提。
+      # 8. 署名鍵の有無を check (DEC-065 v1.19.0 / v1.20.1 strict)
+      #
+      #    v1.19.0 までは Secret 未登録の fork PR を許容する graceful fallback
+      #    だったが、**tag release (`refs/tags/v*`) では unsigned build を
+      #    絶対に release させない** strict mode に変更した (v1.20.1)。
+      #    v1.19.0 / v1.20.0 で signature が空の latest.json が配布され、
+      #    既存 installed binary が「Invalid encoding in minisign data」エラーを
+      #    吐いて自動更新不能になる事故を繰り返さないため。
+      #
+      #    - tag push の場合: Secret 未登録なら即 fail
+      #    - workflow_dispatch (dry run) / PR: 従来通り warning のみで続行
       # ------------------------------------------------------------------
       - name: Check signing key availability (POSIX)
         if: runner.os != 'Windows'
         run: |
+          IS_TAG="${GITHUB_REF#refs/tags/}"
           if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            if [ "$IS_TAG" != "$GITHUB_REF" ]; then
+              echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set for a tag release. Refusing to publish unsigned bundle (would break auto-update for existing users)."
+              exit 1
+            fi
             echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set. Building unsigned bundle (updater won't work)."
             echo "SUMI_BUILD_SIGNED=false" >> "$GITHUB_ENV"
           else
@@ -249,7 +261,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $isTag = $env:GITHUB_REF.StartsWith("refs/tags/")
           if ([string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            if ($isTag) {
+              Write-Host "::error::TAURI_SIGNING_PRIVATE_KEY is not set for a tag release. Refusing to publish unsigned bundle (would break auto-update for existing users)."
+              exit 1
+            }
             Write-Host "::warning::TAURI_SIGNING_PRIVATE_KEY is not set. Building unsigned bundle (updater won't work)."
             "SUMI_BUILD_SIGNED=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           } else {
@@ -269,7 +286,47 @@ jobs:
           CARGO_BUILD_JOBS: '2'
 
       # ------------------------------------------------------------------
-      # 10. Artifact upload（Release 作成用に集約）
+      # 10a. signed build の場合、.sig が実際に生成されたかを verify (v1.20.1)
+      #     tauri-cli は key フォーマット不正 / password ミス等で warning を
+      #     出しつつ unsigned build にフォールバックすることがある。tag release
+      #     で unsigned artifact を上流に流さないため、この step で実体確認する。
+      # ------------------------------------------------------------------
+      - name: Verify .sig files were generated (POSIX)
+        if: runner.os != 'Windows' && env.SUMI_BUILD_SIGNED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          BUNDLE_ROOT="src-tauri/target/${{ matrix.platform.rust_target }}/release/bundle"
+          if [ ! -d "$BUNDLE_ROOT" ]; then
+            BUNDLE_ROOT="src-tauri/target/release/bundle"
+          fi
+          echo "Scanning $BUNDLE_ROOT for .sig files..."
+          SIG_COUNT=$(find "$BUNDLE_ROOT" -type f -name '*.sig' | wc -l | tr -d ' ')
+          echo "Found $SIG_COUNT .sig files:"
+          find "$BUNDLE_ROOT" -type f -name '*.sig' || true
+          if [ "$SIG_COUNT" = "0" ]; then
+            echo "::error::No .sig files were generated despite TAURI_SIGNING_PRIVATE_KEY being set. tauri-cli silently fell back to unsigned build (check key format / password)."
+            exit 1
+          fi
+
+      - name: Verify .sig files were generated (Windows)
+        if: runner.os == 'Windows' && env.SUMI_BUILD_SIGNED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $bundleRoot = "src-tauri/target/release/bundle"
+          if (-Not (Test-Path $bundleRoot)) {
+            Write-Error "bundle dir not found: $bundleRoot"
+            exit 1
+          }
+          $sigs = Get-ChildItem -Path $bundleRoot -Recurse -Filter '*.sig' -File
+          Write-Host "Found $($sigs.Count) .sig files:"
+          $sigs | ForEach-Object { Write-Host "  $($_.FullName)" }
+          if ($sigs.Count -eq 0) {
+            Write-Host "::error::No .sig files were generated despite TAURI_SIGNING_PRIVATE_KEY being set. tauri-cli silently fell back to unsigned build (check key format / password)."
+            exit 1
+          }
+
+      # ------------------------------------------------------------------
+      # 10b. Artifact upload（Release 作成用に集約）
       #    bundle_globs に *.sig を含めているので signed build の場合は
       #    自動的に署名ファイルも一緒に収集される。
       # ------------------------------------------------------------------
@@ -514,12 +571,23 @@ jobs:
           fi
           echo "OK: all platforms have 'signature' key"
 
-          # 追加検証: URL がある platform で signature が空なら warning を出す
-          # （fail はしない。fork PR / secret 未登録時の unsigned build を許容）
-          jq -r '.platforms | to_entries[] | select(.value.url != "" and .value.signature == "") | .key' latest.json \
-            | while read -r plat; do
+          # v1.20.1 strict mode: tag release で URL がある platform の signature が
+          # 空なら fail させる。unsigned latest.json を release すると既存
+          # installed binary が minisign parse error で自動更新不能になる
+          # （DEC-065 / v1.19.0-v1.20.0 で実発生した事故）。
+          EMPTY_SIG_PLATFORMS=$(jq -r '.platforms | to_entries[] | select(.value.url != "" and .value.signature == "") | .key' latest.json)
+          if [ -n "$EMPTY_SIG_PLATFORMS" ]; then
+            echo "Platforms with empty signature:"
+            echo "$EMPTY_SIG_PLATFORMS"
+            if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+              echo "::error::latest.json has empty signature for tag release. Refusing to publish (would break auto-update)."
+              exit 1
+            else
+              echo "$EMPTY_SIG_PLATFORMS" | while read -r plat; do
                 echo "::warning::Platform $plat has URL but empty signature (unsigned build, updater will fail)"
               done
+            fi
+          fi
 
       # ------------------------------------------------------------------
       # 4. GitHub Release 作成 + 全 artifact を upload
@@ -533,10 +601,19 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') }}
           fail_on_unmatched_files: false
+          # v1.20.1: `.sig` も Release assets に含め、
+          # latest.json と整合した署名ファイルを publicly verify できるようにする。
           files: |
             artifacts/**/*.exe
+            artifacts/**/*.exe.sig
             artifacts/**/*.msi
+            artifacts/**/*.msi.sig
             artifacts/**/*.dmg
+            artifacts/**/*.dmg.sig
             artifacts/**/*.AppImage
+            artifacts/**/*.AppImage.sig
             artifacts/**/*.deb
+            artifacts/**/*.deb.sig
+            artifacts/**/*.tar.gz
+            artifacts/**/*.tar.gz.sig
             latest.json

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { AlertTriangle, ArrowRight, Github } from "lucide-react";
+import { AlertTriangle, ArrowRight, ExternalLink, Github } from "lucide-react";
 
 export function Hero() {
   return (
@@ -10,26 +10,31 @@ export function Hero() {
       <div className="hero-glow absolute inset-0 -z-10" aria-hidden />
       <div className="grid-bg absolute inset-0 -z-10 opacity-60" aria-hidden />
 
-      {/* v1.19.0 移行バナー（DEC-065）: v1.20.0 で撤去予定 */}
+      {/* v1.19.0 移行バナー（DEC-065）
+          v1.20.1: 文言 + CTA を刷新。既存ユーザーが Releases に直接飛べる
+          Button を追加（同梱の自動更新は v1.18.2 以前では動かないため、
+          LP からの手動 DL を主導線にする）。 */}
       <div
         role="status"
         className="border-b border-amber-500/30 bg-amber-500/10 text-amber-100"
       >
-        <div className="mx-auto flex max-w-6xl items-start gap-3 px-4 py-3 text-sm sm:px-6">
-          <AlertTriangle className="mt-0.5 h-4 w-4 flex-none text-amber-300" aria-hidden />
-          <p className="leading-relaxed">
-            <span className="font-medium text-amber-100">既存ユーザーの方へ: </span>
-            v1.18.2 以前をお使いの場合、v1.19.0 への自動更新は行われません。
-            <a
-              href="https://github.com/hironori-oi/ccmux-ide/releases/latest"
-              target="_blank"
-              rel="noreferrer"
-              className="ml-1 underline underline-offset-2 hover:text-amber-50"
-            >
-              GitHub Release ページ
-            </a>
-            から installer を手動ダウンロードして上書きインストールしてください。v1.19.0 以降は自動更新が正常動作します。
-          </p>
+        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-3 text-sm sm:flex-row sm:items-center sm:px-6">
+          <div className="flex flex-1 items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-none text-amber-300" aria-hidden />
+            <p className="leading-relaxed">
+              <span className="font-medium text-amber-100">既存ユーザーの方へ: </span>
+              v1.18.2 以前をお使いの場合、最新版への自動更新は行われません。下のボタンから installer を手動ダウンロードして上書きインストールしてください。以降は自動更新が正常動作します。
+            </p>
+          </div>
+          <a
+            href="https://github.com/hironori-oi/ccmux-ide/releases/latest"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex flex-none items-center justify-center gap-2 self-start rounded-md border border-amber-300/60 bg-amber-500/20 px-4 py-1.5 text-xs font-medium text-amber-50 transition hover:bg-amber-500/30 sm:self-auto"
+          >
+            <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+            GitHub Releases を開く
+          </a>
         </div>
       </div>
 

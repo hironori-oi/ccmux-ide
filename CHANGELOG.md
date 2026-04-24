@@ -11,6 +11,46 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.20.1] - 2026-04-25
+
+**自動更新の署名関連エラー時の手動更新 UX + release workflow signing strict 化** —
+v1.19.0 / v1.20.0 の release workflow で `TAURI_SIGNING_PRIVATE_KEY` Secret が
+実効的に使われず、latest.json の `signature` field が空文字列で配布された結果、
+既存 installed binary が「Invalid encoding in minisign data」エラーで自動更新
+できない事故が発生した (DEC-065 延長)。本修正はユーザー側 UX と release 側
+再発防止の両輪で対処する。
+
+### Fixed
+
+- `UpdateDialog`: `lastError` に `Invalid encoding in minisign data` 等の
+  署名関連メッセージを含む場合を検知し、「手動更新が必要」の専用 UI に
+  切り替え。「GitHub Releases から手動ダウンロード」ボタンから既定ブラウザで
+  Releases ページを開けるようにした
+- `release.yml`: tag push (`refs/tags/v*`) で `TAURI_SIGNING_PRIVATE_KEY` が
+  未設定の場合は即 fail に変更。fork PR / workflow_dispatch の graceful
+  fallback は維持 (strict mode はタグ release のみ)
+- `release.yml`: signed build 宣言時に `.sig` ファイルが実際に生成されたかを
+  verify する step を追加。tauri-cli が key 不正で silent fallback した場合
+  にも検知して fail させる
+- `release.yml`: tag release で latest.json の signature が空なら publish を
+  refuse（unsigned manifest の配布を防止）
+- `release.yml`: `.sig` を Release assets にも upload し、署名ファイルを
+  external verify できるようにした
+
+### Changed
+
+- LP (`site/components/Hero.tsx`) の移行バナーを刷新。文言を最新版前提に
+  書き換え、GitHub Releases への直リンク Button を追加して既存ユーザーの
+  手動移行を UX 強化
+
+### Notes
+
+- v1.18.2 以前の installed binary は pubkey を埋め込んでいないため、仮に
+  latest.json が正しく署名されていても自動更新は **技術的に不可能**。唯一の
+  移行手段は GitHub Releases から最新 installer を手動ダウンロードして
+  上書きインストールすること。v1.19.0 以降の installed binary は以後の
+  自動更新が正常動作する
+
 ## [v1.20.0] - 2026-04-25
 
 **ProjectRail 状態可視化強化 + プロジェクト別 accentColor** — ProjectRail の
