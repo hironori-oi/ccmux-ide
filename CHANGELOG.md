@@ -11,6 +11,13 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.20.5] - 2026-04-25
+
+### Fixed
+
+- tauri-cli の既知 bug (shell-quote が passphrase の `!` `$` バッククォート `\` を silently escape し key 暗号化と env 渡しで passphrase 不一致となる問題) を回避するため、shell-safe な英数字のみ passphrase で Ed25519 signing key を再生成
+- pubkey を tauri.conf.json に新値で埋め込み、以降は env 経由 signing が正常動作
+
 ## [v1.20.4] - 2026-04-25
 
 **tauri-cli v2 の env 経由 passphrase 既知 bug (#13485 / #2710) を回避する
