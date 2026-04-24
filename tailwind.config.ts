@@ -2,6 +2,56 @@ import type { Config } from "tailwindcss";
 import tailwindcssAnimate from "tailwindcss-animate";
 import typography from "@tailwindcss/typography";
 
+// PRJ-012 v1.20.0 (DEC-066): プロジェクト accentColor の 19 色プリセット分の
+// bg-/ring-/text- class を safelist に列挙。`lib/utils/project-colors.ts` は
+// class 文字列を静的に埋め込んでいるので content scan でも拾えるが、
+// Tailwind の purge が厳しめに効いた際の保険として列挙しておく。
+const ACCENT_COLOR_KEYS = [
+  "slate",
+  "red",
+  "orange",
+  "amber",
+  "yellow",
+  "lime",
+  "green",
+  "emerald",
+  "teal",
+  "cyan",
+  "sky",
+  "blue",
+  "indigo",
+  "violet",
+  "purple",
+  "fuchsia",
+  "pink",
+  "rose",
+  "neutral",
+];
+const ACCENT_SAFELIST: string[] = [];
+for (const c of ACCENT_COLOR_KEYS) {
+  ACCENT_SAFELIST.push(
+    `bg-${c}-200`,
+    `bg-${c}-400`,
+    `bg-${c}-500`,
+    `bg-${c}-500/25`,
+    `bg-${c}-500/35`,
+    `bg-${c}-700`,
+    `dark:bg-${c}-300`,
+    `dark:bg-${c}-400`,
+    `dark:bg-${c}-500`,
+    `dark:bg-${c}-500/25`,
+    `dark:bg-${c}-500/35`,
+    `dark:bg-${c}-700`,
+    `text-${c}-700`,
+    `text-${c}-800`,
+    `dark:text-${c}-100`,
+    `dark:text-${c}-200`,
+    `ring-${c}-500`,
+    `dark:ring-${c}-300`,
+    `dark:ring-${c}-400`
+  );
+}
+
 const config: Config = {
   darkMode: ["class"],
   content: [
@@ -10,6 +60,7 @@ const config: Config = {
     "./lib/**/*.{js,ts,jsx,tsx,mdx}",
     "./hooks/**/*.{js,ts,jsx,tsx,mdx}",
   ],
+  safelist: ACCENT_SAFELIST,
   theme: {
     container: {
       center: true,

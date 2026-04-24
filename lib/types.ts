@@ -709,6 +709,14 @@ export interface RegisteredProject {
    * persist 対象外（project.ts の partialize で除外）。
    */
   runningEffort?: EffortLevel | null;
+  /**
+   * v1.20.0 (DEC-066): プロジェクト個別のアクセントカラー (19 色プリセット)。
+   *
+   * - `null` / `undefined` = 既定 (`neutral`)
+   * - 値は `lib/utils/project-colors.ts::AccentColor` の文字列
+   * - persist される（`accentColor` は設定であって揮発状態ではない）
+   */
+  accentColor?: string | null;
 }
 
 // v3.5.3 (2026-04-20): Git 統合パネル関連 interface（GitFileEntry / GitStatus /

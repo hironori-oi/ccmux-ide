@@ -148,6 +148,38 @@ export function useAllProjectsSidecarListener(): void {
 }
 
 // ---------------------------------------------------------------------------
+// v1.20.0 (DEC-066) helper: 応答完了時の completed / unread マーキング。
+// ---------------------------------------------------------------------------
+
+/**
+ * pane で「現在表示されている sessionId 集合」を chat store から取得する。
+ */
+function collectDisplayedSessionIds(): Set<string> {
+  const chat = useChatStore.getState();
+  const ids = new Set<string>();
+  for (const pane of Object.values(chat.panes)) {
+    if (pane.currentSessionId) ids.add(pane.currentSessionId);
+  }
+  return ids;
+}
+
+/**
+ * 応答完了時、該当 session が pane で表示中なら即 idle、
+ * 表示されていなければ completed + hasUnread=true でマークする。
+ */
+function markSessionCompletedOrIdle(sessionId: string): void {
+  const displayed = collectDisplayedSessionIds();
+  const sessionStore = useSessionStore.getState();
+  if (displayed.has(sessionId)) {
+    sessionStore.setSessionStatus(sessionId, "idle");
+    sessionStore.setSessionUnread(sessionId, false);
+  } else {
+    sessionStore.setSessionStatus(sessionId, "completed");
+    sessionStore.setSessionUnread(sessionId, true);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // NDJSON dispatch
 // ---------------------------------------------------------------------------
 
@@ -346,8 +378,10 @@ function applyEventToSession(
     }
     chat.setSessionStreaming(sessionId, false);
     chat.setSessionActivity(sessionId, { kind: "complete" });
-    sessionStore.setSessionStatus(sessionId, "idle");
     markActivity();
+    // v1.20.0 (DEC-066): 該当 session が pane で表示されていなければ
+    // 「未読」として completed 状態を継続。表示中なら即 idle。
+    markSessionCompletedOrIdle(sessionId);
     return;
   }
 
@@ -390,8 +424,9 @@ function applyEventToSession(
     }
     chat.setSessionStreaming(sessionId, false);
     chat.setSessionActivity(sessionId, { kind: "complete" });
-    sessionStore.setSessionStatus(sessionId, "idle");
     markActivity();
+    // v1.20.0 (DEC-066): completed / unread judgement
+    markSessionCompletedOrIdle(sessionId);
     return;
   }
 

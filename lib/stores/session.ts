@@ -34,12 +34,28 @@ import { parseToolMessageContent } from "@/lib/tool-content-parser";
  *   次 event で復元）
  */
 
-export type SessionStatus = "idle" | "thinking" | "streaming" | "error";
+/**
+ * v1.20.0 (DEC-066): `completed` を追加。sidecar response 完了後、かつ該当
+ * session がどの pane でも表示されていない間だけ保持される「未読」相当の中間
+ * 状態。ユーザーが session を開いた瞬間に `idle` に戻る。
+ */
+export type SessionStatus =
+  | "idle"
+  | "thinking"
+  | "streaming"
+  | "completed"
+  | "error";
 
 /** session 単位の揮発状態。 */
 export interface SessionVolatileState {
   status: SessionStatus;
   lastActivityAt: number | null;
+  /**
+   * v1.20.0 (DEC-066): 応答完了 (result / done) 時点で当該 session が pane で
+   * 表示されていなかった場合に true。pane でその session を開くと false に戻る。
+   * volatile (persist しない)。
+   */
+  hasUnread: boolean;
 }
 
 interface SessionState {
@@ -74,6 +90,14 @@ interface SessionState {
    * v1.18.0 (DEC-064): session の lastActivityAt を現在時刻で touch する。
    */
   touchSessionActivity: (sessionId: string) => void;
+  /**
+   * v1.20.0 (DEC-066): `hasUnread` flag を明示的に設定する。
+   *
+   * - 応答完了時 (`result`/`done`) に「pane で表示されていなければ true」
+   *   をセットするのに使う。
+   * - pane で該当 session を開いた時には false でクリア。
+   */
+  setSessionUnread: (sessionId: string, hasUnread: boolean) => void;
 }
 
 /**
@@ -156,6 +180,7 @@ async function ensureSessionPreferences(
 const DEFAULT_VOLATILE: SessionVolatileState = {
   status: "idle",
   lastActivityAt: null,
+  hasUnread: false,
 };
 
 export const useSessionStore = create<SessionState>((set, get) => ({
@@ -203,6 +228,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       const owningProjectId =
         get().sessions.find((s) => s.id === id)?.projectId ?? null;
       void ensureSessionPreferences(id, owningProjectId);
+      // v1.20.0 (DEC-066): session を開いたら「未読」をクリア、completed を idle に
+      const cur = get().volatile[id];
+      if (cur?.hasUnread) {
+        get().setSessionUnread(id, false);
+      }
+      if (cur?.status === "completed") {
+        get().setSessionStatus(id, "idle");
+      }
     } catch (e) {
       set({
         error: String(e),
@@ -241,7 +274,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         isLoading: false,
         volatile: {
           ...get().volatile,
-          [session.id]: { status: "idle", lastActivityAt: null },
+          [session.id]: { status: "idle", lastActivityAt: null, hasUnread: false },
         },
       });
       void seedSessionPreferences(session.id, projectId);
@@ -361,6 +394,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         },
       };
     });
+    // v1.20.0 (DEC-066): project 集約を反映
+    void recomputeProjectStatusForSession(sessionId);
   },
 
   touchSessionActivity: (sessionId) => {
@@ -375,7 +410,47 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       };
     });
   },
+
+  setSessionUnread: (sessionId, hasUnread) => {
+    if (!sessionId) return;
+    set((state) => {
+      const cur = state.volatile[sessionId] ?? DEFAULT_VOLATILE;
+      if (cur.hasUnread === hasUnread) return state;
+      return {
+        volatile: {
+          ...state.volatile,
+          [sessionId]: { ...cur, hasUnread },
+        },
+      };
+    });
+    void recomputeProjectStatusForSession(sessionId);
+  },
 }));
+
+/**
+ * v1.20.0 (DEC-066): 指定 session が属する project の集約 status を再計算する。
+ *
+ * session ↔ project 双方向循環を避けるため、`useProjectStore.getState()` 経由で
+ * 呼び、project store 側が持つ `setProjectStatus` に集約結果を渡す。
+ */
+async function recomputeProjectStatusForSession(
+  sessionId: string
+): Promise<void> {
+  try {
+    const sessions = useSessionStore.getState().sessions;
+    const target = sessions.find((s) => s.id === sessionId);
+    const projectId = target?.projectId ?? null;
+    if (!projectId) return;
+
+    const { useProjectStore } = await import("@/lib/stores/project");
+    const recompute = useProjectStore.getState().recomputeProjectStatus;
+    if (typeof recompute === "function") {
+      recompute(projectId);
+    }
+  } catch {
+    // project store 未ロード等では silent skip
+  }
+}
 
 /**
  * PM-830: 指定 sessionId の sdkSessionId を session store cache から引く。

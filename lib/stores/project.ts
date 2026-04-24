@@ -13,6 +13,12 @@ import type {
 } from "@/lib/types";
 import { EFFORT_CHOICES, modelIdToSdkId } from "@/lib/types";
 import { callTauri } from "@/lib/tauri-api";
+import {
+  aggregateProjectStatus,
+  type ProjectStatus,
+  type SessionStatusBucket,
+} from "@/lib/project-status";
+import { normalizeAccentColor } from "@/lib/utils/project-colors";
 
 /**
  * PRJ-012 v3.2 Chunk A（DEC-031）: registry 型 project store。
@@ -99,6 +105,28 @@ interface ProjectState {
    */
   sidecarStatus: Record<string, SidecarStatus>;
 
+  /**
+   * v1.20.0 (DEC-066): project id ごとの volatile な活動状態 (ProjectRail の
+   * アイコン背景色・ring overlay で可視化)。
+   *
+   * - `status`         : idle / thinking / streaming / completed / error
+   * - `hasUnread`      : 応答完了後、ユーザーが該当プロジェクトを pane 上で
+   *                      開くまで true で保持（= 未読）
+   * - `lastActivityAt` : 直近の session 活動時刻 (Unix ms)
+   *
+   * persist 対象外。session 側の event と `recomputeProjectStatus()` で再計算
+   * される。選択中の project に限定せず、全 project が独立に保持する
+   * (選択非連動が DEC-066 の根幹要件)。
+   */
+  projectStatus: Record<
+    string,
+    {
+      status: ProjectStatus;
+      hasUnread: boolean;
+      lastActivityAt: number | null;
+    }
+  >;
+
   // ---- actions ----
   /** 任意ディレクトリを project として登録。既に同一 path があれば activate のみ。 */
   registerProject: (
@@ -182,6 +210,23 @@ interface ProjectState {
   restartSidecarForClear: (id: string) => Promise<void>;
   /** sidecarStatus の読み取りヘルパ（未登録なら "stopped" を返す）。 */
   getSidecarStatus: (id: string) => SidecarStatus;
+
+  // ---- v1.20.0 (DEC-066) project status & accentColor ----
+  /**
+   * session 側の状態から project 集約 status を再計算し、projectStatus map を
+   * 更新する。session.ts の setSessionStatus/setSessionUnread から呼ばれる。
+   */
+  recomputeProjectStatus: (projectId: string) => void;
+  /**
+   * projectStatus.hasUnread を false にクリアし、所属 session の hasUnread も
+   * まとめてクリアする。pane で project 配下 session を開いた時に呼ぶ。
+   */
+  clearProjectUnread: (projectId: string) => void;
+  /**
+   * project の accentColor (19 色プリセット) を設定し、localStorage に
+   * 永続化する。null で渡すと neutral (= 既定) に戻る。
+   */
+  setProjectAccentColor: (projectId: string, color: string | null) => void;
 
   // ---- helpers（Chunk B/C から参照） ----
   /** active project object を返す（null 可）。 */
@@ -372,6 +417,8 @@ async function buildRegisteredProject(
     lastSessionId: null,
     preferredModel: undefined,
     addedAt: Date.now(),
+    // v1.20.0 (DEC-066): 初期値 null = neutral (UI で変更可能)
+    accentColor: null,
   };
 }
 
@@ -397,6 +444,7 @@ export const useProjectStore = create<ProjectState>()(
       isLoading: false,
       error: null,
       sidecarStatus: {},
+      projectStatus: {},
 
       registerProject: async (path, options) => {
         const activate = options?.activate ?? true;
@@ -847,6 +895,151 @@ export const useProjectStore = create<ProjectState>()(
         return get().sidecarStatus[id] ?? "stopped";
       },
 
+      // -----------------------------------------------------------------
+      // v1.20.0 (DEC-066): project status 集約 / hasUnread / accentColor
+      // -----------------------------------------------------------------
+
+      recomputeProjectStatus: (projectId) => {
+        if (!projectId) return;
+        // 循環依存回避のため dynamic import + getState で会話する。
+        // session store → project store は session → project 方向のみ呼ばれ、
+        // 本関数から session store を get しても循環にはならない。
+        void (async () => {
+          try {
+            const sessMod = await import("@/lib/stores/session");
+            const chatMod = await import("@/lib/stores/chat");
+            const sessState = sessMod.useSessionStore.getState();
+            const chatState = chatMod.useChatStore.getState();
+
+            const projectSessions = sessState.sessions.filter(
+              (s) => s.projectId === projectId
+            );
+            if (projectSessions.length === 0) {
+              // 所属 session なしなら idle
+              set((state) => ({
+                projectStatus: {
+                  ...state.projectStatus,
+                  [projectId]: {
+                    status: "idle",
+                    hasUnread: false,
+                    lastActivityAt:
+                      state.projectStatus[projectId]?.lastActivityAt ?? null,
+                  },
+                },
+              }));
+              return;
+            }
+
+            const buckets: SessionStatusBucket[] = [];
+            let anyUnread = false;
+            let latestActivity: number | null = null;
+
+            // pane で現在表示中の session 群 (どの pane でも表示されていなければ unread 継続)
+            const displayedSessionIds = new Set<string>();
+            for (const pane of Object.values(chatState.panes)) {
+              if (pane.currentSessionId) displayedSessionIds.add(pane.currentSessionId);
+            }
+
+            for (const s of projectSessions) {
+              const v = sessState.volatile[s.id];
+              if (v?.lastActivityAt != null) {
+                latestActivity =
+                  latestActivity === null
+                    ? v.lastActivityAt
+                    : Math.max(latestActivity, v.lastActivityAt);
+              }
+              const sStatus = v?.status ?? "idle";
+              if (sStatus === "error") buckets.push("error");
+              else if (sStatus === "thinking") buckets.push("thinking");
+              else if (sStatus === "streaming") buckets.push("streaming");
+              else buckets.push("idle");
+
+              // pane で表示中でなければ hasUnread 判定に加算
+              if (v?.hasUnread && !displayedSessionIds.has(s.id)) {
+                anyUnread = true;
+              }
+            }
+
+            const aggregated = aggregateProjectStatus(buckets, anyUnread);
+            set((state) => {
+              const cur = state.projectStatus[projectId];
+              if (
+                cur &&
+                cur.status === aggregated &&
+                cur.hasUnread === anyUnread &&
+                cur.lastActivityAt === latestActivity
+              ) {
+                return state;
+              }
+              return {
+                projectStatus: {
+                  ...state.projectStatus,
+                  [projectId]: {
+                    status: aggregated,
+                    hasUnread: anyUnread,
+                    lastActivityAt: latestActivity,
+                  },
+                },
+              };
+            });
+          } catch (e) {
+            console.warn(
+              "[project-store] recomputeProjectStatus failed:",
+              e
+            );
+          }
+        })();
+      },
+
+      clearProjectUnread: (projectId) => {
+        if (!projectId) return;
+        void (async () => {
+          try {
+            const sessMod = await import("@/lib/stores/session");
+            const sessState = sessMod.useSessionStore.getState();
+            const projectSessions = sessState.sessions.filter(
+              (s) => s.projectId === projectId
+            );
+            for (const s of projectSessions) {
+              const v = sessState.volatile[s.id];
+              if (v?.hasUnread) {
+                sessState.setSessionUnread(s.id, false);
+              }
+              // completed を idle に倒す (未読クリア = 開いたことの表現)
+              if (v?.status === "completed") {
+                sessState.setSessionStatus(s.id, "idle");
+              }
+            }
+          } catch {
+            // skip
+          }
+        })();
+        set((state) => {
+          const cur = state.projectStatus[projectId];
+          if (!cur || !cur.hasUnread) return state;
+          return {
+            projectStatus: {
+              ...state.projectStatus,
+              [projectId]: {
+                ...cur,
+                hasUnread: false,
+                status: cur.status === "completed" ? "idle" : cur.status,
+              },
+            },
+          };
+        });
+      },
+
+      setProjectAccentColor: (projectId, color) => {
+        if (!projectId) return;
+        const normalized = color === null ? null : normalizeAccentColor(color);
+        set((state) => ({
+          projects: state.projects.map((p) =>
+            p.id === projectId ? { ...p, accentColor: normalized } : p
+          ),
+        }));
+      },
+
       pruneStaleProjects: async () => {
         const before = get().projects;
         if (before.length === 0) {
@@ -927,8 +1120,10 @@ export const useProjectStore = create<ProjectState>()(
           ...p,
           runningModel: undefined,
           runningEffort: undefined,
+          // accentColor は persist する (設定値)
         })),
         activeProjectId: state.activeProjectId,
+        // projectStatus / sidecarStatus は volatile なので persist しない
       }),
       onRehydrateStorage: () => (state, error) => {
         if (error) {
@@ -946,13 +1141,18 @@ export const useProjectStore = create<ProjectState>()(
         }
         // v3.3 DEC-033: persist からは sidecarStatus が復元されないので空で初期化
         state.sidecarStatus = {};
+        // v1.20.0 (DEC-066): project 単位の volatile 状態も初期化。
+        state.projectStatus = {};
 
         // v3.5.16 PM-840: 旧 localStorage (partialize 前) に runningModel /
         // runningEffort が残っているケースへの保険。明示的に null に戻す。
+        // v1.20.0 (DEC-066): accentColor は persist 対象なので触らない (既存値維持)。
         state.projects = state.projects.map((p) => ({
           ...p,
           runningModel: null,
           runningEffort: null,
+          // 既存 project に accentColor 未設定 → neutral (null) で補完
+          accentColor: p.accentColor ?? null,
         }));
 
         // -----------------------------------------------------------------

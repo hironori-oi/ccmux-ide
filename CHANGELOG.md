@@ -11,6 +11,31 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.20.0] - 2026-04-25
+
+**ProjectRail 状態可視化強化 + プロジェクト別 accentColor** — ProjectRail の
+アイコンが「思考中 / 応答中 / 新着応答 / エラー」を背景色 + ring overlay で
+明示するようになった (DEC-066)。非選択プロジェクトでも応答中マークが消えない
+不具合を修正し、応答完了後は「未読」としてプロジェクトを開くまで継続表示する。
+併せてプロジェクトごとに 19 色のアクセントカラーを右クリックメニューから
+設定できるようにした。
+
+### Added
+
+- ProjectRail のアイコンに思考中 / 応答中 / 新着応答 / エラーの状態をアイコン背景色 + ring overlay で表示 (DEC-066)
+- プロジェクトごとに accentColor (19 色のプリセット) を設定できるようにした。右クリックメニュー > 「色を変更」から選択可能
+- 応答完了マークを「未読」として、該当プロジェクトを開くまで継続表示するように変更
+
+### Fixed
+
+- 非選択プロジェクトで応答中マークが消える不具合を修正。status は project 自身が保持し選択状態に非連動
+
+### Changed
+
+- アイコン右下の sidecar status dot / 左下の activity dot を廃止、アイコン全体の背景色 + ring overlay + 中央 overlay icon で状態を表現
+- `useSessionStore.volatile[sessionId]` に `hasUnread` を追加 (persist 対象外)
+- `useProjectStore` に `projectStatus` map / `recomputeProjectStatus` / `clearProjectUnread` / `setProjectAccentColor` を追加
+
 ## [v1.19.0] - 2026-04-24
 
 **updater に Ed25519 署名検証を導入** — v1.18.2 で試みた「signature field 省略」

@@ -815,6 +815,17 @@ export const useChatStore = create<ChatState>()(
               // silent fallback
             });
         }
+
+        // v1.20.0 (DEC-066): pane で session を開いたので「未読」をクリアし、
+        // project status の再集約をトリガする。
+        if (sessionId && typeof window !== "undefined") {
+          void import("@/lib/stores/session").then((mod) => {
+            const ss = mod.useSessionStore.getState();
+            const cur = ss.volatile[sessionId];
+            if (cur?.hasUnread) ss.setSessionUnread(sessionId, false);
+            if (cur?.status === "completed") ss.setSessionStatus(sessionId, "idle");
+          }).catch(() => {/* silent */});
+        }
       },
 
       scrollToMessageId: (paneId, messageId) => {
