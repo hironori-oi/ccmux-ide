@@ -11,6 +11,20 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.21.0] - 2026-04-25
+
+### Added
+
+- Claude 応答中に Esc キーで応答を停止できるようにした (Cursor の Claude Code 互換) (DEC-067)
+- 応答中でも追加チャット送信が可能になった。送信時は現応答を停止して新しい turn として送信
+- InputArea に「Esc で停止」のヒントを応答中のみ表示
+
+### Changed
+
+- グローバル Esc listener を Shell に追加。dialog open 中 / IME composition 中は no-op、応答中の active session のみ send_agent_interrupt を発火
+- InputArea の disabled 制御を緩和、textarea と送信ボタンを応答中も有効化
+- 応答中の placeholder と送信ボタンラベルを状態に応じて切替 (「停止して送信」)
+
 ## [v1.20.6] - 2026-04-25
 
 ### Fixed

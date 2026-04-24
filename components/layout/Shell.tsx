@@ -24,6 +24,7 @@ import {
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ImagePasteZone } from "@/components/chat/ImagePasteZone";
 import { EditorPane } from "@/components/editor/EditorPane";
+import { EscapeProvider } from "@/components/providers/EscapeProvider";
 import { ProjectRail } from "@/components/layout/ProjectRail";
 import { SplitView } from "@/components/layout/SplitView";
 import { StatusBar } from "@/components/layout/StatusBar";
@@ -435,6 +436,12 @@ export function Shell({ children }: { children?: ReactNode }) {
         <UpdateNotifier />
       </UpdateNotifierBoundary>
       <UpdateDialog />
+      {/*
+       * v1.21.0 (DEC-067): グローバル Esc listener。応答中 (thinking / streaming)
+       * の active session に対して send_agent_interrupt を発火する。Cursor の
+       * Claude Code 互換 UX。dialog open 中 / IME composition 中は no-op。
+       */}
+      <EscapeProvider />
     </div>
   );
 }

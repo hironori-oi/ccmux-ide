@@ -192,7 +192,7 @@ export function InputArea({
 
   async function handleSend() {
     const trimmed = text.trim();
-    if (!trimmed || streaming) return;
+    if (!trimmed) return;
 
     // v3.3 DEC-033: activeProjectId が無ければ送信不可（sidecar が無い）。
     if (!activeProjectId) {
@@ -200,6 +200,31 @@ export function InputArea({
         "プロジェクトが選択されていません。左のレールからプロジェクトを選ぶか追加してください。"
       );
       return;
+    }
+
+    // v1.21.0 (DEC-067): 応答中（thinking / streaming）に新規送信が来た場合、
+    // 現 query を sidecar 側で interrupt してから新 prompt として送信する
+    // (Cursor の Claude Code 互換 UX, 案1: interrupt + 新 turn)。
+    //
+    // - send_agent_interrupt は idempotent (該当 session に in-flight 無ければ no-op)
+    // - sidecar 側 AbortController.abort() は同期的に走り、interrupted event は
+    //   非同期で来るが、ここでは event を待たずに次の send_agent_prompt を発行する。
+    //   sidecar 側は同 session の handlePrompt が並列実行可（map ベースの controller
+    //   管理）であり、新 prompt はそのまま新 query として begin する。
+    // - 例外発生時も catch して toast 表示するが、send 続行に支障はない。
+    if (streaming) {
+      const sidForInterrupt =
+        useChatStore.getState().panes[paneId]?.currentSessionId ?? null;
+      if (sidForInterrupt) {
+        try {
+          await callTauri<void>("send_agent_interrupt", {
+            sessionId: sidForInterrupt,
+          });
+        } catch (e) {
+          // interrupt 失敗は致命でない (=既に終了済等のケース)。debug log のみ。
+          logger.debug("[send] interrupt before send failed (may be benign)", e);
+        }
+      }
     }
 
     // PRJ-012 v4 / Chunk C / DEC-028: Claude Code 組込 slash の intercept。
@@ -762,10 +787,13 @@ export function InputArea({
                 !activeProjectId
                   ? "プロジェクトを選択してください（左のレールから ＋ で追加）"
                   : streaming
-                    ? "Claude が考え中です..."
+                    ? "応答中... (Esc で停止 / 送信で停止して新しい turn)"
                     : "メッセージを入力（Ctrl+Enter で送信、/ でコマンド、画像は D&D または Ctrl+V、ファイルは Files タブからドラッグ）"
               }
-              disabled={streaming || !activeProjectId}
+              // v1.21.0 (DEC-067): 応答中でも textarea を有効化し、Cursor の
+              // Claude Code 互換 UX を提供する。送信時は handleSend が現 turn を
+              // sidecar 側で interrupt してから新 prompt を投げる (案1: interrupt + 新 turn)。
+              disabled={!activeProjectId}
               rows={2}
               className="min-h-[52px] resize-none"
             />
@@ -789,14 +817,28 @@ export function InputArea({
           </div>
           <Button
             onClick={handleSend}
-            disabled={streaming || !text.trim() || !activeProjectId}
+            // v1.21.0 (DEC-067): 応答中 (streaming) も送信を許容する。送信時は
+            // 現 turn を停止してから新 prompt を投げる (interrupt + 新 turn)。
+            disabled={!text.trim() || !activeProjectId}
             className="h-10 shrink-0"
-            aria-label="送信"
+            aria-label={streaming ? "停止して送信" : "送信"}
+            title={streaming ? "現在の応答を停止して新しい turn として送信" : "送信"}
           >
             <Send className="h-4 w-4" aria-hidden />
-            <span className="ml-1 hidden sm:inline">送信</span>
+            <span className="ml-1 hidden sm:inline">
+              {streaming ? "停止して送信" : "送信"}
+            </span>
           </Button>
         </div>
+        {/* v1.21.0 (DEC-067): 応答中のみ「Esc で停止」のヒントを表示 (Cursor 互換)。 */}
+        {streaming && activeProjectId && (
+          <div
+            className="text-[10px] text-muted-foreground"
+            aria-live="polite"
+          >
+            応答中: Esc で停止 / そのまま送信すると停止して新しい turn になります
+          </div>
+        )}
       </div>
 
       {/* PRJ-012 v4 / Chunk C: 組込 slash 用 dialog（open/close は useDialogStore） */}
