@@ -11,6 +11,15 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.20.6] - 2026-04-25
+
+### Fixed
+
+- GitHub Actions Windows runner で PowerShell の `Start-Process -FilePath 'npx'` が `.cmd` バッチファイルを「%1 is not a valid Win32 application」として reject するため、明示 signer sign step が常に起動失敗する問題を修正
+- `Start-Process` は `.exe` しか起動できないが Windows runner の `npx` は `npx.cmd`。修正として `cmd /c "npx --yes @tauri-apps/cli signer sign ... > log 2>&1"` で cmd.exe 経由に wrap する形に書き換え、`.cmd` 起動と stderr capture を両立
+- exit code 検出 / "Wrong password" pattern 検出 / `.sig` 存在 verify の二重防御は維持
+- commandline 長 (base64 鍵 ≈464 chars + passphrase + path ≈ 合計 500–600 chars) は Windows の 8191 char 制限に対し十分な余裕があることを確認
+
 ## [v1.20.5] - 2026-04-25
 
 ### Fixed

@@ -545,6 +545,13 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        # v1.20.6 (PM-XXX): PowerShell の `Start-Process -FilePath 'npx'` は
+        # Windows runner 上の `npx` が `npx.cmd` (バッチファイル) であるため
+        # 「%1 is not a valid Win32 application」で起動失敗する
+        # (`Start-Process -FilePath` は `.exe` を期待、`.cmd` は reject)。
+        # → `cmd /c "npx --yes @tauri-apps/cli signer sign ... 2>stderr"` で
+        # cmd.exe 経由に wrap することで `.cmd` 起動 + stderr capture を両立。
+        # exit code / "Wrong password" pattern 検出 / .sig 存在 verify は維持。
         run: |
           $ErrorActionPreference = 'Stop'
           $bundleRoot = "src-tauri/target/release/bundle"
@@ -582,19 +589,27 @@ jobs:
           foreach ($t in $targets) {
             $path = $t.FullName
             Write-Host "Signing: $path"
-            # stderr merge + capture (PowerShell 5.1 で 2>&1 するとエラー record になるため
-            # cmd.exe 経由で native stderr を混ぜる方が安全だが、@tauri-apps/cli は
-            # npx 経由でも stderr を stdout に混ぜて出さないため、Start-Process + file redir で対応)
+
+            # v1.20.6: cmd /c で wrap して npx.cmd を起動可能にする。
+            # stdout + stderr は merge して tmp file に落とし、PowerShell の
+            # 2>&1 による ErrorRecord 化を回避する。
             $logFile = [System.IO.Path]::GetTempFileName()
-            $p = Start-Process -FilePath 'npx' -ArgumentList '--yes','@tauri-apps/cli','signer','sign',"`"$path`"" `
-              -NoNewWindow -Wait -PassThru `
-              -RedirectStandardOutput $logFile `
-              -RedirectStandardError "$logFile.err"
-            $stdoutLog = if (Test-Path $logFile) { Get-Content $logFile -Raw } else { "" }
-            $stderrLog = if (Test-Path "$logFile.err") { Get-Content "$logFile.err" -Raw } else { "" }
-            $combined = "$stdoutLog`n$stderrLog"
+            # 引数は cmd の single commandline として組み立てる。
+            # path は二重引用符で囲う (spaces を含む場合に備えて)。
+            # env var はそのまま埋め込む (base64 鍵 1 行 + 英数字 passphrase なので
+            # special char escape は不要、cmd line 長は後段で verify)。
+            $cmdLine = 'npx --yes @tauri-apps/cli signer sign -k "' + $env:TAURI_SIGNING_PRIVATE_KEY + '" -p "' + $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD + '" "' + $path + '" > "' + $logFile + '" 2>&1'
+
+            # commandline 長の安全確認 (Windows cmd.exe の 8191 char 制限)
+            if ($cmdLine.Length -gt 8000) {
+              Write-Host "::warning::cmd line length $($cmdLine.Length) chars approaches Windows 8191 limit."
+            }
+
+            $p = Start-Process -FilePath 'cmd' -ArgumentList '/c', $cmdLine `
+              -NoNewWindow -Wait -PassThru
+            $combined = if (Test-Path $logFile) { Get-Content $logFile -Raw } else { "" }
             Write-Host $combined
-            Remove-Item -Force $logFile, "$logFile.err" -ErrorAction SilentlyContinue
+            Remove-Item -Force $logFile -ErrorAction SilentlyContinue
 
             if ($p.ExitCode -ne 0) {
               Write-Host "::error::signer sign exited non-zero ($($p.ExitCode)) for $path"
