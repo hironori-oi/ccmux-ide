@@ -11,6 +11,34 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.14.0] - 2026-04-24
+
+**ExitPlanMode の cwd 外書込み修正 + Permission Dialog cwd 外警告** — v1.13.0
+までは sidecar が settingSources に `"user"` を含めるため SDK が
+`~/.claude/settings.json` の `plansDirectory` を読み、ExitPlanMode が project
+外のユーザーホーム `~/.claude/plans/` に plan file を書き込んでいた。
+`"user"` は Max OAuth credentials 読込のため除外不可なので、Rust 側で
+`plansDirectory={cwd}/.claude/plans` を常時注入して根治する。併せて、Write /
+Edit / NotebookEdit が cwd 外の絶対パスを触ろうとした時に Permission Dialog
+で赤色バナーを表示する安全機構も追加した (DEC-060)。
+
+### Fixed
+
+- ExitPlanMode の plan 保存先がホーム `~/.claude/plans/` になっていた問題を
+  修正。Rust `send_agent_prompt` が `plansDirectory={cwd}/.claude/plans` を
+  常時注入するよう変更 (DEC-060)
+- sidecar 側にも `plansDirectory` の defensive fallback を追加。Rust 経由
+  以外から呼ばれても cwd 配下に解決するようになった
+
+### Added
+
+- Permission Dialog に「作業ディレクトリ外への書込み」警告を追加。Write /
+  Edit / NotebookEdit の絶対パスが project cwd 外を指す場合、赤色バナー +
+  dialog の赤いボーダーで強調表示する (DEC-060)
+- パス判定ユーティリティ `lib/utils/path.ts` を新規追加
+  (`isAbsolutePath` / `isPathWithinCwd`)。Windows ドライブ文字 / UNC / POSIX
+  パスを pure function で判定し、Windows は case-insensitive 比較する
+
 ## [v1.13.0] - 2026-04-24
 
 **ツール実行の承認 UI + デフォルト allowedTools 拡張** — Claude が未許可ツール

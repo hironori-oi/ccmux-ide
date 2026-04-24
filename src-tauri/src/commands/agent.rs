@@ -775,6 +775,24 @@ pub async fn send_agent_prompt(
         serde_json::json!(["user", "project", "local"]),
     );
 
+    // DEC-060 (v1.14.0): plansDirectory を project cwd 配下に固定する。
+    //
+    // 問題: settingSources に "user" を含めると SDK が `~/.claude/settings.json` を
+    // 読み、`plansDirectory` が `~/.claude/plans/` に解決されてしまう。結果として
+    // ExitPlanMode が project 外 (ユーザーホーム) に plan file を書き込む。
+    // "user" は Max OAuth credentials 読込のため除外不可なので、plansDirectory を
+    // 明示的に `<cwd>/.claude/plans` で上書きして root cause を解消する。
+    //
+    // - 呼出側 (Frontend) が既に plansDirectory を指定している場合はそちらを尊重
+    //   (`!contains_key` チェック)
+    // - path separator は POSIX `/` を使う (SDK は両方受け付ける、cross-OS 安全)
+    if !options.contains_key("plansDirectory") {
+        options.insert(
+            "plansDirectory".to_string(),
+            serde_json::Value::String(format!("{}/.claude/plans", handle.cwd)),
+        );
+    }
+
     // v3.5.18 PM-830 hotfix debug (2026-04-20): frontend → Rust の resume 伝播を
     // 可視化する。camelCase rename / Option<String> deserialize が正常に効いて
     // いれば、frontend log と一致する値がここに現れる。dogfood 期間中は残置し、
@@ -1123,6 +1141,69 @@ mod tests {
         assert!(s.contains("\"type\":\"permission_response\""));
         assert!(s.contains("\"request_id\":\"abc-123\""));
         assert!(s.contains("\"behavior\":\"allow\""));
+    }
+
+    /// DEC-060 (v1.14.0): plansDirectory 注入ロジックが以下を満たすこと。
+    ///
+    /// 1. 呼出側が plansDirectory を指定していない場合、`{cwd}/.claude/plans` を注入
+    /// 2. 呼出側が plansDirectory を指定済の場合、上書きしない
+    /// 3. Windows パス (`C:\...`) / POSIX パス (`/home/...`) どちらの cwd でも
+    ///    stable な path string を生成する（POSIX `/` separator で統一）
+    ///
+    /// 実際の注入は `send_agent_prompt` の内部で行われるが、Tauri State に依存する
+    /// ため単体テストが困難。代わりに注入時の format 文字列の shape を lock in する。
+    #[test]
+    fn plans_directory_default_format_is_stable() {
+        // POSIX 風 cwd
+        let cwd_posix = "/home/user/myproject";
+        let plans = format!("{}/.claude/plans", cwd_posix);
+        assert_eq!(plans, "/home/user/myproject/.claude/plans");
+
+        // Windows 風 cwd (backslash は混ぜない - Rust 側は handle.cwd をそのまま使う)
+        let cwd_win = "C:\\Users\\hiron\\Desktop\\myproject";
+        let plans_win = format!("{}/.claude/plans", cwd_win);
+        assert_eq!(plans_win, "C:\\Users\\hiron\\Desktop\\myproject/.claude/plans");
+
+        // mixed separator でも prefix は破壊されない (SDK が吸収する前提)
+        assert!(plans_win.ends_with("/.claude/plans"));
+    }
+
+    /// DEC-060: options map への insert / contains_key の挙動確認。
+    ///
+    /// `send_agent_prompt` は `if !options.contains_key("plansDirectory") { insert(...) }`
+    /// の pattern を使う。これが「明示指定あり → 尊重」「未指定 → 注入」の
+    /// 両方で正しく動くことを serde_json::Map に対して確認する。
+    #[test]
+    fn options_map_plans_directory_respects_caller_override() {
+        // case 1: 呼出側指定なし → 注入される
+        let mut opts: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        if !opts.contains_key("plansDirectory") {
+            opts.insert(
+                "plansDirectory".to_string(),
+                serde_json::Value::String("/tmp/myproj/.claude/plans".to_string()),
+            );
+        }
+        assert_eq!(
+            opts.get("plansDirectory").and_then(|v| v.as_str()),
+            Some("/tmp/myproj/.claude/plans")
+        );
+
+        // case 2: 呼出側指定あり → 上書きされない
+        let mut opts2: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+        opts2.insert(
+            "plansDirectory".to_string(),
+            serde_json::Value::String("/custom/plans/dir".to_string()),
+        );
+        if !opts2.contains_key("plansDirectory") {
+            opts2.insert(
+                "plansDirectory".to_string(),
+                serde_json::Value::String("/tmp/myproj/.claude/plans".to_string()),
+            );
+        }
+        assert_eq!(
+            opts2.get("plansDirectory").and_then(|v| v.as_str()),
+            Some("/custom/plans/dir")
+        );
     }
 
     /// Windows: JobObject 作成は `Default::default()` 内で best-effort。

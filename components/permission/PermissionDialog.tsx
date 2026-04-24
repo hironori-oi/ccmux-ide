@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import { Check, Globe, ShieldAlert, Terminal, X } from "lucide-react";
+import { AlertTriangle, Check, Globe, ShieldAlert, Terminal, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ import {
 import { useSessionPreferencesStore } from "@/lib/stores/session-preferences";
 import { useChatStore } from "@/lib/stores/chat";
 import { useProjectStore } from "@/lib/stores/project";
+import { isAbsolutePath, isPathWithinCwd } from "@/lib/utils/path";
 
 /**
  * PRJ-012 v1.13.0 (DEC-059 案B): ツール実行承認モーダル。
@@ -109,6 +110,19 @@ export function PermissionDialog(): React.ReactElement | null {
     [current],
   );
 
+  // DEC-060 (v1.14.0): Write/Edit/NotebookEdit の絶対パスが project cwd の外側を
+  // 指している場合に赤色バナーで警告する。cwd は current.projectId から
+  // useProjectStore.projects[].path で引く。取得不能なら警告抑制 (false positive 回避)。
+  const cwdWarning = useMemo(() => {
+    if (!current) return null;
+    const absPath = extractAbsolutePathFromToolInput(current.toolName, current.toolInput);
+    if (!absPath) return null;
+    const cwd = resolveCwdForProject(current.projectId);
+    if (!cwd) return null;
+    if (isPathWithinCwd(absPath, cwd)) return null;
+    return { path: absPath, cwd };
+  }, [current]);
+
   if (!current) return null;
 
   return (
@@ -124,8 +138,33 @@ export function PermissionDialog(): React.ReactElement | null {
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
         aria-describedby="permission-dialog-description"
-        className="sm:max-w-xl"
+        className={
+          cwdWarning
+            ? "border-red-400/60 sm:max-w-xl dark:border-red-500/50"
+            : "sm:max-w-xl"
+        }
       >
+        {cwdWarning && (
+          <div
+            role="alert"
+            className="rounded-md border border-red-400/60 bg-red-50/70 p-3 text-[12.5px] text-red-900 dark:border-red-500/50 dark:bg-red-950/30 dark:text-red-200"
+          >
+            <div className="mb-1 flex items-center gap-1.5 font-semibold">
+              <AlertTriangle className="h-4 w-4" aria-hidden />
+              作業ディレクトリ外への書込みです
+            </div>
+            <div className="space-y-0.5 font-mono text-[11.5px]">
+              <div>
+                <span className="text-red-700/80 dark:text-red-300/80">path:</span>{" "}
+                {cwdWarning.path}
+              </div>
+              <div>
+                <span className="text-red-700/80 dark:text-red-300/80">cwd :</span>{" "}
+                {cwdWarning.cwd}
+              </div>
+            </div>
+          </div>
+        )}
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShieldAlert
@@ -319,5 +358,53 @@ function resolveSessionIdForDecision(projectId: string): string {
     return chat.panes[paneId]?.currentSessionId ?? "";
   } catch {
     return "";
+  }
+}
+
+/**
+ * DEC-060 (v1.14.0): tool input から対象ファイルの絶対パスを抽出する。
+ *
+ * 対象 tool:
+ * - `Write` / `Edit` : `file_path` / `filePath` / `path`
+ * - `NotebookEdit`   : `notebook_path` / `notebookPath`
+ *
+ * 相対パス (`./foo` / `../bar`) は null 扱い (SDK が cwd 基準で解決するため警告不要)。
+ * 対象外 tool (Bash / Read / Grep / MCP 等) も null。v1.15 以降で拡張予定。
+ */
+function extractAbsolutePathFromToolInput(
+  toolName: string,
+  input: Record<string, unknown>,
+): string | null {
+  const name = toolName.toLowerCase();
+  const get = (k: string): string | null => {
+    const v = input[k];
+    return typeof v === "string" && v.length > 0 ? v : null;
+  };
+  let candidate: string | null = null;
+  if (name === "write" || name === "edit") {
+    candidate = get("file_path") ?? get("filePath") ?? get("path");
+  } else if (name === "notebookedit") {
+    candidate = get("notebook_path") ?? get("notebookPath");
+  }
+  if (!candidate) return null;
+  // 相対パスは警告対象外
+  if (!isAbsolutePath(candidate)) return null;
+  return candidate;
+}
+
+/**
+ * DEC-060 (v1.14.0): projectId から RegisteredProject.path (= session の cwd) を解決。
+ *
+ * - useProjectStore.projects から一致する id を探す
+ * - 見つからない / 空文字列 → null を返し、呼出側は警告抑制 (false positive 回避)
+ */
+function resolveCwdForProject(projectId: string): string | null {
+  try {
+    const projects = useProjectStore.getState().projects;
+    const hit = projects.find((p) => p.id === projectId);
+    if (!hit || typeof hit.path !== "string" || hit.path.length === 0) return null;
+    return hit.path;
+  } catch {
+    return null;
   }
 }

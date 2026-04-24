@@ -521,6 +521,15 @@ async function handlePrompt(req: PromptRequest): Promise<void> {
         "project",
         "local",
       ],
+      // DEC-060 (v1.14.0): plansDirectory を cwd 配下にフォールバック解決する。
+      // 通常は Rust 側 (send_agent_prompt) が常時注入するため ?? の左側が当たるが、
+      // sidecar を直接起動された場合や他経路から呼ばれた場合でも ExitPlanMode が
+      // ユーザーホーム `~/.claude/plans/` に書込むのを防ぐため defensive に設定。
+      plansDirectory:
+        (req.options as Record<string, unknown> | undefined)?.plansDirectory ??
+        (typeof req.options?.cwd === "string" && req.options.cwd.length > 0
+          ? `${req.options.cwd}/.claude/plans`
+          : undefined),
       ...req.options,
       // --- ここから spread で潰されないよう必ず最後に書く ---
       model: resolvedModel,
