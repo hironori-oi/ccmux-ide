@@ -11,6 +11,30 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.18.2] - 2026-04-24
+
+**自動更新の "Invalid encoding in minisign data" エラーを修正** — v1.16.0 から
+v1.18.1 にかけて、オーナー環境で v1.18.1 への自動更新を試みると UpdateDialog /
+toast 上で "Invalid encoding in minisign data" エラーが発生していた。tauri-plugin-updater
+v2 (>= 2.10) は latest.json の `platforms.*.signature` が空文字列 "" だと
+minisign parser に空 data を食わせてパースエラーになるため、`signature` フィールド
+自体を出力しない形に release.yml を修正。
+
+### Fixed
+
+- `.github/workflows/release.yml` で生成する latest.json から
+  `platforms.*.signature` フィールドを省略。pubkey 空の M3 MVP 構成
+  （DEC-013 継承）を維持したまま、v2 updater の minisign パース失敗を回避する
+- 生成された latest.json に signature key が混入していないか、CI 内で jq で
+  assertion する dry-run チェックを追加
+
+### Notes
+
+- 既存 v1.16.0〜v1.18.1 の updater client は ReleaseManifestPlatform の deserialize
+  仕様により signature 省略で failure する可能性があり、その場合は **v1.18.2 以降を
+  手動インストール** する必要がある。Ed25519 署名への完全移行は別 PR（方針B）
+  として CEO 判断待ち
+
 ## [v1.18.1] - 2026-04-24
 
 **updater 誤判定と Release notes fallback の同時 fix** — v1.18.0 で観測された

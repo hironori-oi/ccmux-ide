@@ -19,8 +19,14 @@
 #
 # 注意:
 #   - tauri.conf.json の `plugins.updater.pubkey` は空文字のため updater
-#     manifest の `signature` も空（TOFU 相当、M3 MVP 許容、DEC 候補: M3
-#     PM-304 で Ed25519 ペア発行）
+#     manifest の `signature` も空だが、tauri-plugin-updater v2 (>=2.x) は
+#     signature が空文字列 "" だと minisign parser で "Invalid encoding in
+#     minisign data" エラーを返す。さらに ReleaseManifestPlatform.signature は
+#     serde 上 `String` (非 Option) のため、key を完全省略しても deserialize
+#     error になる可能性がある。短期回避として latest.json 生成時に signature
+#     key 自体を省略（jq の del でフィールド削除）し、v2 updater 側の挙動を
+#     出荷後に検証する方針（DEC 候補: v1.18.2 後の結果次第で Ed25519 鍵ペアへ
+#     移行）。
 #   - Linux は ubuntu-latest（24.04）で webkit2gtk 4.1 前提。もし 22.04 系の
 #     古い glibc 互換が必要になった場合は matrix に ubuntu-22.04 を追加する。
 # ----------------------------------------------------------------------------
@@ -324,13 +330,20 @@ jobs:
       #        "notes": "...",
       #        "pub_date": "2026-04-19T00:00:00Z",
       #        "platforms": {
-      #          "windows-x86_64": { "signature": "", "url": "..." },
-      #          "darwin-x86_64":  { "signature": "", "url": "..." },
-      #          "darwin-aarch64": { "signature": "", "url": "..." },
-      #          "linux-x86_64":   { "signature": "", "url": "..." }
+      #          "windows-x86_64": { "url": "..." },
+      #          "darwin-x86_64":  { "url": "..." },
+      #          "darwin-aarch64": { "url": "..." },
+      #          "linux-x86_64":   { "url": "..." }
       #        }
       #      }
       #    URL は GitHub Release の安定 download URL を使う。
+      #
+      #    v1.18.2 変更: signature フィールドを出力しない。
+      #    tauri-plugin-updater v2 は signature="" を minisign parse しに行き
+      #    "Invalid encoding in minisign data" で失敗するため、key 自体を
+      #    del(.platforms[].signature) で落とす。v2 の Release manifest schema
+      #    上 signature は String 型だが、jq で key を生成しないことで
+      #    updater 側が missing field として扱えるかを実機検証する。
       # ------------------------------------------------------------------
       - name: Generate latest.json (updater manifest)
         id: manifest
@@ -381,6 +394,11 @@ jobs:
 
           NOTES_TEXT="$(cat ${{ steps.notes.outputs.notes_path }})"
 
+          # v1.18.2: signature フィールドを platforms 各エントリから省略する。
+          # tauri-plugin-updater v2 は signature="" を受け付けず minisign parse
+          # で "Invalid encoding in minisign data" エラーになるため、
+          # `del(.platforms[].signature)` で key 自体を落として出力する。
+          # 署名検証は pubkey 空の M3 MVP 構成に準拠。
           jq -n \
             --arg version "$VERSION" \
             --arg notes "$NOTES_TEXT" \
@@ -394,15 +412,24 @@ jobs:
               notes: $notes,
               pub_date: $pub_date,
               platforms: {
-                "windows-x86_64": { signature: "", url: $win_url },
-                "darwin-x86_64":  { signature: "", url: $mac_x64_url },
-                "darwin-aarch64": { signature: "", url: $mac_arm_url },
-                "linux-x86_64":   { signature: "", url: $linux_url }
+                "windows-x86_64": { url: $win_url },
+                "darwin-x86_64":  { url: $mac_x64_url },
+                "darwin-aarch64": { url: $mac_arm_url },
+                "linux-x86_64":   { url: $linux_url }
               }
-            }' > latest.json
+            }
+            | del(.platforms[].signature)' > latest.json
 
           echo "=== latest.json ==="
           cat latest.json
+
+          # dry-run 的な検証: 生成された JSON を jq で parse して、signature
+          # key が存在しないことを確認する（存在したら CI を失敗させる）。
+          if jq -e '.platforms | to_entries | map(.value | has("signature")) | any' latest.json > /dev/null; then
+            echo "ERROR: latest.json still contains 'signature' key in platforms" >&2
+            exit 1
+          fi
+          echo "OK: no 'signature' key in platforms"
 
       # ------------------------------------------------------------------
       # 4. GitHub Release 作成 + 全 artifact を upload
