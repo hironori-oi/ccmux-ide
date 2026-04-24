@@ -11,6 +11,53 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.16.0] - 2026-04-24
+
+**自動更新機能の再有効化 + UX 強化** — M3 MVP 時に React error #185 容疑で
+Shell から disable されたまま v1.15.0 まで放置されていた `UpdateNotifier` を
+再マウント。独自 ErrorBoundary で包み、万一の例外でアプリ本体に波及させない
+構成にした。UpdateBadge を TitleBar 右端に常設、クリックで UpdateDialog を
+開き「今すぐ更新 / 後で / このバージョンをスキップ」を選べる。更新状態は
+新設 `useUpdaterStore` に集約し、`skippedVersions` と `autoCheck` を永続化
+（`sumi:updater`）する (DEC-062)。
+
+### Added
+
+- アプリ自動更新機能を有効化。起動 3 秒後に `@tauri-apps/plugin-updater` の
+  `check()` で最新バージョンを確認し、利用可能なら sonner toast と TitleBar
+  `UpdateBadge` で通知 (DEC-062)
+- `components/updates/UpdateDialog.tsx` を追加。現在バージョンと最新
+  バージョンを対比表示し、「今すぐ更新」「後で」「このバージョンをスキップ」の
+  3 択で更新を選択可能。ダウンロード中は progress bar でリアルタイム進捗表示、
+  完了後は「再起動して更新を適用」CTA に変化
+- `components/updates/UpdateBadge.tsx` を追加。TitleBar 右端に配置、status に
+  応じて DownloadCloud / Loader / RefreshCcw アイコンと青 dot / 進捗 % /
+  再起動強調色を切替える
+- `lib/stores/updater.ts` を新規追加。status / latestVersion / downloadProgress
+  / lastCheckAt / lastError / skippedVersions / autoCheck を保持し、
+  `skippedVersions` と `autoCheck` のみ localStorage `sumi:updater` に永続化
+- Settings > 外観 に「自動更新チェック」ON/OFF toggle を追加。OFF 時は起動時
+  自動 check を skip、手動確認ボタンは引き続き使用可能
+- 「このバージョンをスキップ」を選ぶと該当 version が `skippedVersions` に記録
+  され、以降の自動 check では通知されない（手動 check は skip を無視して常に通知）
+- `components/updates/UpdateNotifierBoundary.tsx` を追加。React class component
+  ベースの独自 ErrorBoundary で UpdateNotifier を包み、万一の例外発生時は
+  `console.error` + crashed state で以降の再マウントを抑止。dev 環境のみ fallback
+  badge を表示
+
+### Changed
+
+- `UpdateNotifier` を store 連携に改修。check / downloadAndInstall の各段階で
+  `setStatus` / `setDownloadProgress` を呼び、UpdateBadge / UpdateDialog が
+  同じ store を subscribe することで UI の一貫性を担保
+- `UpdateNotifier` 自体は DOM を描画しない (return null) に変更。Progress /
+  badge / dialog の表示は専用コンポーネントに分離
+
+### Fixed
+
+- `Shell.tsx` で disabled になっていた `UpdateNotifier` を再マウント。M3 MVP
+  以降放置されていた自動更新が実動作するようになった (DEC-062)
+
 ## [v1.15.0] - 2026-04-24
 
 **Chat Markdown レンダリング品質を Cursor 並みに引き上げ** — 従来の Chat

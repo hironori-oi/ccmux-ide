@@ -13,6 +13,7 @@ import {
 import { toast } from "sonner";
 
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { UpdateBadge } from "@/components/updates/UpdateBadge";
 import { Button } from "@/components/ui/button";
 import {
   AlertDialog,
@@ -216,6 +217,10 @@ export function TitleBar() {
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          {/* v1.16.0 (DEC-062): 自動更新 badge。status=idle のときは render null。
+              配置は既存 window control 群（Settings / ThemeToggle / Account placeholder）の
+              左側で、sidecar 切替 spinner よりもさらに左に置く。 */}
+          <UpdateBadge />
           {switching && (
             <Loader2
               className="h-4 w-4 animate-spin text-muted-foreground"

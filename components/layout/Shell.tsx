@@ -41,8 +41,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-// NOTE(M3): UpdateNotifier は dogfood に不要かつ挙動不明なので disable 継続。
-// import { UpdateNotifier } from "@/components/updates/UpdateNotifier";
+// v1.16.0 (DEC-062): M3 MVP 時に React error #185 容疑で disable していた
+// UpdateNotifier を再マウント。独自 ErrorBoundary で包み、万一のクラッシュは
+// アプリ本体に波及させない。
+import { UpdateNotifier } from "@/components/updates/UpdateNotifier";
+import { UpdateNotifierBoundary } from "@/components/updates/UpdateNotifierBoundary";
+import { UpdateDialog } from "@/components/updates/UpdateDialog";
 import { useAllProjectsSidecarListener } from "@/hooks/useAllProjectsSidecarListener";
 import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
 import { useClaudeOAuthUsage } from "@/hooks/useClaudeOAuthUsage";
@@ -423,7 +427,15 @@ export function Shell({ children }: { children?: ReactNode }) {
        * page 側は CommandPalette / SearchPalette / HelloBubble 等の上乗せ UI のみ。
        */}
       {children}
-      {/* <UpdateNotifier /> */}
+      {/*
+       * v1.16.0 (DEC-062): UpdateNotifier を ErrorBoundary で包んで再マウント。
+       * Notifier は DOM を持たない（store を更新 + toast を出すだけ）。
+       * UpdateDialog は TitleBar の UpdateBadge クリックから CustomEvent で開く。
+       */}
+      <UpdateNotifierBoundary>
+        <UpdateNotifier />
+      </UpdateNotifierBoundary>
+      <UpdateDialog />
     </div>
   );
 }

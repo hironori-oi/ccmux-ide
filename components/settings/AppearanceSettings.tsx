@@ -17,6 +17,7 @@ import { Card } from "@/components/ui/card";
 import { triggerManualUpdateCheck } from "@/components/updates/UpdateNotifier";
 import { cn } from "@/lib/utils";
 import { useSettingsStore } from "@/lib/stores/settings";
+import { useUpdaterStore } from "@/lib/stores/updater";
 import {
   applyAccent,
   applyBackground,
@@ -83,6 +84,11 @@ export function AppearanceSettings() {
   const setFontSize = useSettingsStore((s) => s.setFontSize);
   const setBackgroundImage = useSettingsStore((s) => s.setBackgroundImage);
   const clearBackgroundImage = useSettingsStore((s) => s.clearBackgroundImage);
+
+  // v1.16.0 (DEC-062): 自動更新チェックの ON/OFF と skippedVersions を subscribe
+  const autoCheck = useUpdaterStore((s) => s.autoCheck);
+  const setAutoCheck = useUpdaterStore((s) => s.setAutoCheck);
+  const skippedVersions = useUpdaterStore((s) => s.skippedVersions);
 
   // 背景画像設定（v2 以前の persisted で未定義の場合に備え fallback）
   const bgImage: BackgroundImageSettings =
@@ -666,7 +672,7 @@ export function AppearanceSettings() {
         </div>
       </Card>
 
-      {/* アプリ更新（PM-283） */}
+      {/* アプリ更新（PM-283 / v1.16.0 DEC-062） */}
       <Card className="space-y-3 p-5">
         <div>
           <h3 className="flex items-center gap-1.5 text-sm font-semibold">
@@ -674,9 +680,46 @@ export function AppearanceSettings() {
             アプリの更新
           </h3>
           <p className="text-xs text-muted-foreground">
-            GitHub Release から最新版を手動で確認します。起動時にも自動でチェックされます。
+            GitHub Release から最新版を確認します。自動更新チェックが ON のとき、
+            起動 3 秒後に最新バージョンを自動確認し、利用可能なら TitleBar と
+            通知で案内します。
           </p>
         </div>
+
+        {/* 自動更新チェック toggle */}
+        <div className="flex items-center justify-between gap-3 rounded-md border bg-muted/30 px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-medium">自動更新チェック</div>
+            <div className="text-[11px] text-muted-foreground">
+              起動時に最新バージョンを自動で確認します。OFF にしても手動確認は使えます。
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoCheck}
+            onClick={() => setAutoCheck(!autoCheck)}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+              autoCheck
+                ? "border-primary bg-primary"
+                : "border-border bg-muted"
+            )}
+            aria-label={
+              autoCheck
+                ? "自動更新チェックを無効にする"
+                : "自動更新チェックを有効にする"
+            }
+          >
+            <span
+              className={cn(
+                "inline-block h-3.5 w-3.5 transform rounded-full bg-background shadow transition-transform",
+                autoCheck ? "translate-x-4" : "translate-x-0.5"
+              )}
+            />
+          </button>
+        </div>
+
         <div>
           <Button
             variant="outline"
@@ -688,6 +731,15 @@ export function AppearanceSettings() {
             手動で更新を確認
           </Button>
         </div>
+
+        {skippedVersions.length > 0 && (
+          <div className="rounded-md border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+            スキップ中のバージョン:{" "}
+            <span className="font-mono">
+              {skippedVersions.map((v) => `v${v}`).join(", ")}
+            </span>
+          </div>
+        )}
       </Card>
 
       <div>
