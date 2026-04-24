@@ -66,7 +66,13 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
   const [open, setOpen] = useState(false);
 
   const sessions = useSessionStore((s) => s.sessions);
+  // v1.18.0 (DEC-064): attachment は session 単位。active pane の currentSessionId
+  // を対象にする。
   const appendAttachment = useChatStore((s) => s.appendAttachment);
+  const activeSessionId = useChatStore((s) => {
+    const pid = s.activePaneId;
+    return s.panes[pid]?.currentSessionId ?? null;
+  });
   // PM-939 (v3.5.22): プロジェクト未選択時は「新規セッション」項目を disabled にする。
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
@@ -133,7 +139,15 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
         typeof crypto !== "undefined" && "randomUUID" in crypto
           ? crypto.randomUUID()
           : `att-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      appendAttachment({ id, path: savedPath });
+      // v1.18.0: session 未選択時は toast で促してから skip（新規作成はここで
+      // 行わず、InputArea / SessionList 経由で明示的に作成してもらう）。
+      if (!activeSessionId) {
+        toast.error(
+          "セッションが選択されていません。先にセッションを開始してから画像を添付してください。"
+        );
+        return;
+      }
+      appendAttachment(activeSessionId, { id, path: savedPath });
       toast.success("画像を添付しました");
     } catch (e) {
       toast.error(

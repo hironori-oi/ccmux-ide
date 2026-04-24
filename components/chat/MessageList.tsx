@@ -3,7 +3,14 @@
 import { useEffect, useMemo, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Loader2, Sparkles } from "lucide-react";
-import { useChatStore, DEFAULT_PANE_ID, type ChatMessage } from "@/lib/stores/chat";
+import {
+  useChatStore,
+  DEFAULT_PANE_ID,
+  selectMessagesForPane,
+  selectStreamingForSession,
+  type ChatMessage,
+} from "@/lib/stores/chat";
+// ChatMessage は groupConsecutiveTools 内で使用
 import { useSettingsStore } from "@/lib/stores/settings";
 import { UserMessage } from "@/components/chat/UserMessage";
 import { AssistantMessage } from "@/components/chat/AssistantMessage";
@@ -13,8 +20,8 @@ import { parseToolMessageContent } from "@/lib/tool-content-parser";
 
 // React 19 + zustand: selector が新しい配列/オブジェクトを返すと
 // getSnapshot cache が効かず "should be cached to avoid an infinite loop" になる。
-// 固定参照の空配列を返すことで回避。
-const EMPTY_MESSAGES: readonly ChatMessage[] = Object.freeze([]);
+// selectMessagesForPane は store 内部で同じ参照を返すよう作ってあるため、
+// 本コンポーネントでは追加の EMPTY_MESSAGES fallback は不要。
 
 /**
  * PM-967: `showToolDetails === false` のとき連続する tool メッセージを 1 グループに
@@ -63,10 +70,15 @@ function groupConsecutiveTools(messages: ChatMessage[]): DisplayItem[] {
  * 1 pane 前提の呼出元（SearchPalette 経由のジャンプ等）も動く。
  */
 export function MessageList({ paneId = DEFAULT_PANE_ID }: { paneId?: string }) {
-  const messages = useChatStore(
-    (s) => (s.panes[paneId]?.messages ?? EMPTY_MESSAGES) as ChatMessage[]
+  // v1.18.0 (DEC-064): messages / streaming は session 単位 store から引く。
+  // pane は viewport として currentSessionId を持つだけ。
+  const currentSessionId = useChatStore(
+    (s) => s.panes[paneId]?.currentSessionId ?? null
   );
-  const streaming = useChatStore((s) => s.panes[paneId]?.streaming ?? false);
+  const messages = useChatStore((s) => selectMessagesForPane(s, paneId));
+  const streaming = useChatStore((s) =>
+    selectStreamingForSession(s, currentSessionId)
+  );
   const scrollTargetMessageId = useChatStore(
     (s) => s.panes[paneId]?.scrollTargetMessageId ?? null
   );

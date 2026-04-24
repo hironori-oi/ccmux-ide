@@ -19,42 +19,53 @@ import {
   Users,
 } from "lucide-react";
 
-import { useChatStore, DEFAULT_PANE_ID, type ChatActivity } from "@/lib/stores/chat";
+import {
+  useChatStore,
+  DEFAULT_PANE_ID,
+  selectActivityForSession,
+  type ChatActivity,
+} from "@/lib/stores/chat";
 import { cn } from "@/lib/utils";
-
-// React 19 + zustand: selector が新 object を返すと getSnapshot cache が効かず
-// infinite loop。固定参照の凍結 idle object で回避。
-const IDLE_ACTIVITY: ChatActivity = Object.freeze({ kind: "idle" }) as ChatActivity;
 
 /**
  * Claude の現在の活動状態を視覚的に明示する sticky indicator（v3.3.2 追加）。
  *
- * v3.5 Chunk B (Split Sessions): `paneId` prop を受け、当該 pane の activity を
- * 参照する。各 pane は独立した activity を持つため、片方が thinking 中でも
- * もう片方は idle のまま表示される。
+ * v1.18.0 (DEC-064): activity は session 単位 store から引く。pane は currentSessionId
+ * を経由して session 状態を購読する。pane が同じ session を指している限り、pane 切替
+ * しても activity は保持される（session 単位）。
  */
 export function ActivityIndicator({
   paneId = DEFAULT_PANE_ID,
 }: {
   paneId?: string;
 }) {
-  const activity = useChatStore(
-    (s) => s.panes[paneId]?.activity ?? IDLE_ACTIVITY
+  const currentSessionId = useChatStore(
+    (s) => s.panes[paneId]?.currentSessionId ?? null
   );
-  const setActivity = useChatStore((s) => s.setActivity);
+  const activity = useChatStore((s) =>
+    selectActivityForSession(s, currentSessionId)
+  );
+  const setSessionActivity = useChatStore((s) => s.setSessionActivity);
 
   // complete / error の自動 idle 遷移
   useEffect(() => {
+    if (!currentSessionId) return undefined;
     if (activity.kind === "complete") {
-      const t = setTimeout(() => setActivity(paneId, { kind: "idle" }), 3000);
+      const t = setTimeout(
+        () => setSessionActivity(currentSessionId, { kind: "idle" }),
+        3000
+      );
       return () => clearTimeout(t);
     }
     if (activity.kind === "error") {
-      const t = setTimeout(() => setActivity(paneId, { kind: "idle" }), 5000);
+      const t = setTimeout(
+        () => setSessionActivity(currentSessionId, { kind: "idle" }),
+        5000
+      );
       return () => clearTimeout(t);
     }
     return undefined;
-  }, [activity, setActivity, paneId]);
+  }, [activity, setSessionActivity, currentSessionId]);
 
   return (
     <div

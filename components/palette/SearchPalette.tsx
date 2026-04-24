@@ -208,7 +208,10 @@ export function SearchPalette({ open, onOpenChange }: SearchPaletteProps) {
       await useSessionStore.getState().loadSession(r.sessionId);
       // MessageList が messages を反映してから scrollIntoView するため
       // useEffect 側で追加の 120ms 待機を入れている。
-      useChatStore.getState().scrollToMessageId(r.messageId);
+      // v1.18.0 (DEC-064): scrollToMessageId は paneId を要求する。active pane に
+      // 対して jump させる (SearchPalette は active pane 経由で session を開く)。
+      const chat = useChatStore.getState();
+      chat.scrollToMessageId(chat.activePaneId, r.messageId);
     } catch (e) {
       toast.error(
         `セッションの読込に失敗: ${e instanceof Error ? e.message : String(e)}`

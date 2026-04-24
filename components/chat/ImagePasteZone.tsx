@@ -4,6 +4,7 @@ import { useHotkeys } from "react-hotkeys-hook";
 import { toast } from "sonner";
 import { callTauri } from "@/lib/tauri-api";
 import { useChatStore, DEFAULT_PANE_ID } from "@/lib/stores/chat";
+import { useSessionStore } from "@/lib/stores/session";
 
 /**
  * PM-140: Ctrl/Cmd+V でクリップボード画像を取り込む透明レイヤー（hook のみ）。
@@ -28,8 +29,6 @@ export function ImagePasteZone({
 }: {
   paneId?: string;
 }) {
-  const appendAttachment = useChatStore((s) => s.appendAttachment);
-
   useHotkeys(
     "ctrl+v, meta+v",
     async () => {
@@ -42,9 +41,24 @@ export function ImagePasteZone({
           typeof crypto !== "undefined" && "randomUUID" in crypto
             ? crypto.randomUUID()
             : `att-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        // v3.5 Chunk B: 明示 paneId を指定して追加（どの pane でも hotkey fire で
-        // 「自 pane」を対象にする、active pane fallback にはしない）。
-        appendAttachment(paneId, { id, path: savedPath });
+        // v1.18.0 (DEC-064): attachments は session 単位。当該 pane が現在
+        // 表示している session に対して append する。session 未選択なら
+        // 新規セッションを作って attach する（InputArea の drop と同じ挙動）。
+        let sid =
+          useChatStore.getState().panes[paneId]?.currentSessionId ?? null;
+        if (!sid) {
+          try {
+            const session = await useSessionStore.getState().createNewSession();
+            sid = session.id;
+            useChatStore.getState().setPaneSession(paneId, sid);
+          } catch (err) {
+            toast.error(
+              `セッション作成に失敗しました: ${err instanceof Error ? err.message : String(err)}`
+            );
+            return;
+          }
+        }
+        useChatStore.getState().appendAttachment(sid, { id, path: savedPath });
         toast.success("画像を添付しました");
       } catch (e) {
         toast.error(

@@ -8,56 +8,36 @@ import { callTauri } from "@/lib/tauri-api";
 /**
  * Chat ドメインの Zustand store。
  *
- * PM-135 で初期設計。Agent SDK sidecar から stream で流れてくる message /
- * tool_use / done イベントを appendMessage / updateStreamingMessage /
- * appendToolUse 経由で state に積む。
+ * ## v1.18.0 (DEC-064): Session 単位の message 保存に re-architect
  *
- * ## PRJ-012 v3.5 Chunk B (Split Sessions) の変更
+ * 旧構造 (v1.17.0 まで): `panes[paneId].messages` で pane 単位に messages を
+ * 保存し、sidecar event は pane を逆引きして dispatch していた。結果として、
+ * session A 送信中に pane を session B に切替えると、A の応答が B を表示中の
+ * pane に誤表示される UI 混線が発生していた (オーナー報告)。
  *
- * 背景: 1 project 内で複数 session を左右分割で同時表示したいオーナー要望。
- * 従来 singleton だった state 一式（messages / streaming / activity /
- * attachments / currentSessionId / scrollTarget / highlight）を pane ごとに
- * 分離し、`panes: Record<paneId, ChatPaneState>` + `activePaneId` で管理する。
+ * 新構造 (v1.18.0): **session 単位** の global map に変更する。
  *
- * ### 既存呼出元の互換
+ * - `sessionMessages: Record<sessionId, ChatMessage[]>` — session の messages
+ * - `sessionStreaming: Record<sessionId, boolean>`      — streaming flag
+ * - `sessionAttachments: Record<sessionId, Attachment[]>` — 入力欄 attachment
+ * - `sessionActivity: Record<sessionId, ChatActivity>`   — thinking/streaming 等
  *
- * 既存コードは `useChatStore((s) => s.messages)` や
- * `useChatStore.getState().setSessionId(...)` のように singleton API を
- * 想定している箇所が多い。これらを一斉に書き換えると影響範囲が広すぎるため、
- * 本 refactor では以下の方針で後方互換を保つ:
+ * pane は **viewport only**：`currentSessionId` / `creatingSessionId` /
+ * `scrollTargetMessageId` / `highlightedMessageId` のみ保持する。pane が
+ * どの session を表示しているかが変わるだけで、session 自身の state は
+ * pane とは完全に独立に維持される。
  *
- *   1. pane 1 件分の state（messages / streaming / ...）を`ChatPaneState` に分離。
- *   2. 既存 action は **paneId?** を第一引数とし、省略時は activePaneId を使う
- *      wrapper シグネチャに書き換える。
- *   3. 既存 selector (`s.messages` 等) も activePaneId の pane を覗く compat
- *      getter として残す。ChatPanel 系（paneId を知る component）は pane 経由
- *      で明示参照する。
- *
- * これにより Chunk B 非対応の呼出元（SearchPalette / ClearSessionDialog /
- * session store / builtin-slash 等）は `paneId` 省略の旧 API で動き続け、
- * 実質 activePane に対して作用する（= 従来と同じ挙動）。
+ * sidecar event は session_id で直接 append するため、該当 session が
+ * 現在どの pane にも表示されていなくても messages は session history として
+ * 積まれる。次回その session を pane で open した時に selector が自動で
+ * 描画する。
  *
  * ### persist
  *
- * - 永続化対象: `panes[*].currentSessionId` と `activePaneId`、`panes` の key
- *   一覧のみ。messages は揮発（session load で復元される前提）。
- * - storage key: `ccmux-ide-gui:chat-panes`。
- *
- * ## PRJ-012 v3.5.9 Chunk D (Project Switch History) の変更
- *
- * project 切替で pane の会話履歴が消え、戻っても DB load のタイムラグで
- * 空表示が見える体験を改善。`projectSnapshots` を projectId キーで保持し、
- * 切替直前に `panes` を deep copy で save、切替直後に restore することで
- * **同じ project に戻ってきた瞬間に UI が復元** される（streaming 中の
- * message も保持）。
- *
- * - persist **対象外**（揮発）。messages は DB から再 load 可能で、巨大化に
- *   よる localStorage 圧迫リスクを避ける。
- * - sidecar は project 単位で走り続ける設計（v3.3 Multi-Sidecar / DEC-033）
- *   のため、裏で発生した new message は DB に保存されており、cache hit 後に
- *   `loadSession(currentSessionId)` を追加実行して最新化する。
- * - `removeProject` 時は `clearProjectSnapshot(projectId)` で該当スナップショット
- *   を破棄する（`useProjectStore.subscribe` で自動検知）。
+ * - 永続化対象: `activePaneId` と pane viewport (`currentSessionId` 等) のみ
+ * - sessionMessages / sessionStreaming / sessionAttachments / sessionActivity は
+ *   **全て揮発**（DB が source of truth、session を open すれば load される）
+ * - persist version +1 (2)、migrate で旧 shape を破棄
  */
 
 /** 添付画像 1 件分 */
@@ -107,18 +87,14 @@ export type ChatActivity =
   | { kind: "error"; message?: string };
 
 /**
- * 1 pane 分の chat 状態。pane ごとに独立。
+ * 1 pane 分の viewport 状態（messages / streaming 等は持たない）。
+ *
+ * v1.18.0 (DEC-064) 以降、messages / streaming / attachments / activity は
+ * session 単位の global map に移設された。pane は「この viewport が現在
+ * 表示している session」の identity のみ保持する。
  */
 export interface ChatPaneState {
-  /** セッション内の全メッセージ（時系列） */
-  messages: ChatMessage[];
-  /** 送信〜done までのフラグ */
-  streaming: boolean;
-  /** Claude の現在の活動状態 */
-  activity: ChatActivity;
-  /** 現在の入力欄に添付されている画像（送信でクリア） */
-  attachments: Attachment[];
-  /** SQLite セッション ID（load 中の session、mutable） */
+  /** SQLite セッション ID（表示中の session、mutable） */
   currentSessionId: string | null;
   /** SearchPalette 等からスクロール要求された message id */
   scrollTargetMessageId: string | null;
@@ -126,9 +102,6 @@ export interface ChatPaneState {
   highlightedMessageId: string | null;
   /**
    * PM-979: 作成時にアクティブだった session id（immutable、Tray フィルタ用）。
-   * `currentSessionId` は session 切替で変化するため「pane がどの session に
-   * 属するか」判定には使えない。pane 作成時の session を tag として保持する。
-   * null は「session なし時 / main pane / legacy」で、filter で弾かれない。
    */
   creatingSessionId?: string | null;
 }
@@ -136,183 +109,132 @@ export interface ChatPaneState {
 /** 最初の pane id（必ず存在する = 互換のための固定 id） */
 export const DEFAULT_PANE_ID = "main";
 
-/**
- * 同時に開ける最大 pane 数。
- * v3.5 Step 1 は 2 固定だったが、PM-937 (2026-04-20) で 4 pane (2x2 grid) 対応。
- */
+/** 同時に開ける最大 pane 数。 */
 export const MAX_PANES = 4;
 
+/** 空の session-level activity（default "idle"）。 */
+const IDLE_ACTIVITY: ChatActivity = { kind: "idle" };
+
 interface ChatState {
-  /** pane ごとの state（初期は main 1 件） */
+  /** pane ごとの viewport（初期は main 1 件） */
   panes: Record<string, ChatPaneState>;
-  /** フォーカス中の pane id（入力 / 送信 / SearchPalette jump のデフォルトターゲット） */
+  /** フォーカス中の pane id */
   activePaneId: string;
 
   /**
-   * PRJ-012 v3.5.9 Chunk D (Project Switch History): project 切替時の pane state
-   * スナップショット。activeProjectId 変化を ChatPanel 側が検知し、切替直前の panes
-   * をここに save → 切替後に project 別 snapshot を restore することで、同じ
-   * project に戻ってきた時に messages / streaming / activity / currentSessionId /
-   * attachments が **タイムラグなし** で復元される。
-   *
-   * - 構造: `projectSnapshots[projectId][paneId] = ChatPaneState`
-   * - 永続化: **しない**（partialize で除外）。messages は DB から復元可能で、
-   *   巨大化で localStorage を圧迫するリスクを避ける。揮発で十分。
-   * - ライフサイクル: save は project 切替直前、restore は切替直後、clear は
-   *   `removeProject` から呼ばれる（`clearProjectSnapshot`）。
+   * v1.18.0: session 単位 message store（global map）。
+   * key = sessionId、value = messages の時系列配列。
+   * persist しない（DB が source of truth）。
+   */
+  sessionMessages: Record<string, ChatMessage[]>;
+  /**
+   * v1.18.0: session 単位 streaming flag。persist しない。
+   */
+  sessionStreaming: Record<string, boolean>;
+  /**
+   * v1.18.0: session 単位 attachment（送信前の入力欄に添付中の画像）。
+   * persist しない。
+   */
+  sessionAttachments: Record<string, Attachment[]>;
+  /**
+   * v1.18.0: session 単位 activity（Claude の現在の活動状態）。
+   * persist しない。
+   */
+  sessionActivity: Record<string, ChatActivity>;
+
+  /**
+   * PRJ-012 v3.5.9 Chunk D (Project Switch History): project 切替時の pane
+   * viewport スナップショット。panes[*] の viewport 情報のみを保存する。
+   * messages / streaming は session 単位なので保存対象外。
    */
   projectSnapshots: Record<string, Record<string, ChatPaneState>>;
 
   // --- pane lifecycle ---
-  /** 新規 pane を追加。MAX_PANES 到達時は既存 activePaneId を返して no-op。返り値は新 paneId。 */
   addPane: () => string;
-  /** pane 削除。0 件にならないよう最後の 1 件は削除不可。 */
   removePane: (paneId: string) => void;
-  /** フォーカス pane を切替 */
   setActivePane: (paneId: string) => void;
 
-  // --- v3.5.9 Chunk D: project snapshot ---
-  /**
-   * 現在の `panes` を deep copy して `projectSnapshots[projectId]` に保存する。
-   * activeProjectId 変化直前に呼ぶ。
-   */
+  // --- project snapshot ---
   saveProjectSnapshot: (projectId: string) => void;
-  /**
-   * `projectSnapshots[projectId]` があれば `panes` に復元（deep copy）する。
-   * 無ければ panes を初期 pane 1 個（DEFAULT_PANE_ID, 空 state）にリセットし、
-   * activePaneId も DEFAULT_PANE_ID に戻す。
-   *
-   * 戻り値: snapshot を hit したら true、miss（初期化）したら false。
-   * 呼出側は戻り値で「既存経路（lastSessionId から DB load）を続けるか否か」を分岐する。
-   */
   restoreProjectSnapshot: (projectId: string) => boolean;
-  /**
-   * 指定 projectId の snapshot を破棄する（removeProject 時に呼ばれる想定）。
-   */
   clearProjectSnapshot: (projectId: string) => void;
 
   /**
-   * v1.12.0 (DEC-058): 指定 session 群を chat state から一掃する。
+   * v1.12.0 (DEC-058) / v1.18.0 (DEC-064): 指定 session 群を state から一掃する。
    *
-   * - `panes[*].currentSessionId` が対象なら null に戻す（messages もクリア）
-   * - `panes[*].creatingSessionId` が対象なら null に戻す（Tray フィルタから脱落させる）
-   * - `projectSnapshots[*][*]` に同様の操作を適用
-   *
-   * project 削除 cascade で呼ばれる。`clearProjectSnapshot` と組み合わせて、
-   * project 削除後に **どの pane にも stale な sessionId が残らない** ことを
-   * 保証する。
+   * - `sessionMessages[sid]` / `sessionStreaming[sid]` / `sessionAttachments[sid]`
+   *   / `sessionActivity[sid]` を削除
+   * - `panes[*].currentSessionId` が対象なら null に戻す
+   * - `panes[*].creatingSessionId` が対象なら null に戻す
+   * - `projectSnapshots[*][*]` にも同様の処理
    */
   purgeSessions: (sessionIds: readonly string[]) => void;
 
   /**
-   * PRJ-012 v3.5.11 Chunk E (Cross-Project Events): `projectSnapshots[projectId][paneId]`
-   * を直接 update する。snapshot が無ければ初期 snapshot を作成してから update。
-   *
-   * これにより active でない project の sidecar event を受信した時、`panes` 側
-   * （= 別 project が active）を破壊せずに **裏で snapshot に蓄積** できる。
-   * project が戻ってくると `restoreProjectSnapshot` で最新状態が瞬時に復元される。
-   *
-   * - paneId が snapshot に存在しなければ no-op（v3.5.11 Step 1 では DEFAULT_PANE_ID
-   *   のみ受信、Split の second pane は v3.6 で対応予定）
-   * - updater は immutable な ChatPaneState 変換関数
+   * v1.18.0: pane viewport 1 件を updater で更新する util（messages 等は触らない）。
    */
-  updateSnapshotPane: (
-    projectId: string,
-    paneId: string,
-    updater: (pane: ChatPaneState) => ChatPaneState
-  ) => void;
+  applyToPane: (paneId: string, updater: (pane: ChatPaneState) => ChatPaneState) => void;
+
+  // --- session 単位 action ---
 
   /**
-   * PRJ-012 v3.5.11 Chunk E (Cross-Project Events): 「active project なら panes を、
-   * 非 active project なら projectSnapshots を」更新する便利な dispatcher。
-   *
-   * 全 project の sidecar event を常時購読する `useAllProjectsSidecarListener`
-   * から呼ばれる。event handler 側で activeProjectId 判定をしないでも自動振分け。
-   *
-   * - 内部で `projectId === activeProjectId` を判定
-   * - 一致 → `panes[paneId]` を updater で update（既存 `updatePane` 流用）
-   * - 不一致 → `updateSnapshotPane` で snapshot 側を update（snapshot 無ければ初期化）
+   * 指定 session に message を 1 件 append。pane は不問。
+   * user / 完成済 assistant / 完成済 tool は DB にも永続化する。
    */
-  applyToProjectPane: (
-    projectId: string,
-    paneId: string,
-    activeProjectId: string | null,
-    updater: (pane: ChatPaneState) => ChatPaneState
-  ) => void;
-
-  // --- pane 内 action（paneId 省略時は activePaneId を使う compat shim） ---
-  appendMessage: (paneIdOrMessage: string | ChatMessage, message?: ChatMessage) => void;
-  updateStreamingMessage: (
-    paneIdOrId: string,
-    idOrDelta: string,
-    delta?: string
-  ) => void;
-  setStreaming: (paneIdOrStreaming: string | boolean, streaming?: boolean) => void;
-  setActivity: (
-    paneIdOrActivity: string | ChatActivity,
-    activity?: ChatActivity
-  ) => void;
-  finalizeStreamingMessage: (paneIdOrId: string, id?: string) => void;
-  appendToolUse: (
-    paneIdOrId: string,
-    idOrEvent: string | ToolUseEvent,
-    event?: ToolUseEvent
-  ) => void;
+  appendMessage: (sessionId: string, message: ChatMessage) => void;
+  /** streaming 中 assistant message の content に delta を追記する。 */
+  updateStreamingMessage: (sessionId: string, messageId: string, delta: string) => void;
+  /** streaming 中の message を確定（streaming=false）し DB 永続化。 */
+  finalizeStreamingMessage: (sessionId: string, messageId: string) => void;
+  /** tool_use event を session の message list に追加（DB 永続化は updateToolUseStatus 時）。 */
+  appendToolUse: (sessionId: string, messageId: string, event: ToolUseEvent) => void;
+  /** tool_use status を更新（success/error で DB 永続化）。 */
   updateToolUseStatus: (
-    paneIdOrId: string,
-    idOrStatus: string | ToolUseEvent["status"],
-    statusOrOutput?: ToolUseEvent["status"] | string,
+    sessionId: string,
+    messageId: string,
+    status: ToolUseEvent["status"],
     output?: string
   ) => void;
-  appendAttachment: (
-    paneIdOrAttachment: string | Attachment,
-    attachment?: Attachment
-  ) => void;
-  removeAttachment: (paneIdOrId: string, id?: string) => void;
-  clearAttachments: (paneId?: string) => void;
-  clearSession: (paneId?: string) => void;
-  setSessionId: (paneIdOrId: string | null, id?: string | null) => void;
-  setMessages: (
-    paneIdOrMessages: string | ChatMessage[],
-    messages?: ChatMessage[]
-  ) => void;
-  scrollToMessageId: (paneIdOrId: string, id?: string) => void;
-  clearHighlight: (paneId?: string) => void;
-  clearScrollTarget: (paneId?: string) => void;
+  /** session の streaming flag を設定。 */
+  setSessionStreaming: (sessionId: string, streaming: boolean) => void;
+  /** session の activity を設定。 */
+  setSessionActivity: (sessionId: string, activity: ChatActivity) => void;
+  /** session の messages / streaming / activity を空にクリア。 */
+  clearSessionMessages: (sessionId: string) => void;
+  /** DB load 経路: session の messages を一括 set（既に永続化済 id として記録）。 */
+  hydrateSessionMessages: (sessionId: string, messages: ChatMessage[]) => void;
+
+  // --- session attachment ---
+  appendAttachment: (sessionId: string, attachment: Attachment) => void;
+  removeAttachment: (sessionId: string, attachmentId: string) => void;
+  clearAttachments: (sessionId: string) => void;
+
+  // --- pane viewport action ---
+
+  /** pane の currentSessionId を更新。project の lastSessionId も write back。 */
+  setPaneSession: (paneId: string, sessionId: string | null) => void;
+  /** pane の scroll jump 要求 */
+  scrollToMessageId: (paneId: string, messageId: string) => void;
+  clearHighlight: (paneId: string) => void;
+  clearScrollTarget: (paneId: string) => void;
+
+  /**
+   * v1.18.0 後方互換 shim: paneId 経由で現在の pane の currentSessionId を引いて
+   * `clearSessionMessages` を呼ぶ。ClearSessionDialog 等の旧呼出元向け。
+   */
+  clearSessionForPane: (paneId?: string) => void;
 }
 
-/** 空の pane state を生成する。 */
+/** 空の pane state を生成する（viewport only）。 */
 function makeEmptyPane(): ChatPaneState {
   return {
-    messages: [],
-    streaming: false,
-    activity: { kind: "idle" },
-    attachments: [],
     currentSessionId: null,
     scrollTargetMessageId: null,
     highlightedMessageId: null,
   };
 }
 
-/**
- * compat shim 用の引数解釈ヘルパ。第 1 引数が既存 paneId 一覧にあれば paneId、
- * 無ければ旧シグネチャ（paneId 省略）として activePaneId を返す。
- *
- * NOTE: paneId は crypto.randomUUID() 由来の uuid、もしくは "main" 固定。
- * ChatMessage.id / ToolUseEvent.name / "streaming" boolean 等と衝突しない。
- * ここでは panes map の key に含まれているかだけで判定する。
- */
-function resolvePaneId(
-  state: ChatState,
-  first: unknown
-): { paneId: string; usedFirstAsPaneId: boolean } {
-  if (typeof first === "string" && Object.prototype.hasOwnProperty.call(state.panes, first)) {
-    return { paneId: first, usedFirstAsPaneId: true };
-  }
-  return { paneId: state.activePaneId, usedFirstAsPaneId: false };
-}
-
-/** panes map 内の 1 pane を updater で更新する util。存在しない paneId なら no-op。 */
+/** panes map 内の 1 pane を updater で更新する util。 */
 function updatePane(
   panes: Record<string, ChatPaneState>,
   paneId: string,
@@ -320,7 +242,9 @@ function updatePane(
 ): Record<string, ChatPaneState> {
   const cur = panes[paneId];
   if (!cur) return panes;
-  return { ...panes, [paneId]: updater(cur) };
+  const next = updater(cur);
+  if (next === cur) return panes;
+  return { ...panes, [paneId]: next };
 }
 
 /** 新しい pane id を生成。 */
@@ -331,34 +255,13 @@ function newPaneId(): string {
   return `pane-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-/**
- * 1 pane 分の state を deep copy する。
- *
- * messages / attachments は配列、各 message 内の toolUse はネスト object なので
- * shared reference を断つためネストまで clone する。activity は discriminated
- * union なので shallow spread で十分。
- *
- * NOTE: JSON serialize/parse ではなく明示 clone。undefined / Map / Date が将来
- * 混ざったときに静かに壊れるのを避ける。
- */
+/** pane viewport を deep copy する（snapshot 用）。 */
 function clonePaneState(p: ChatPaneState): ChatPaneState {
   return {
-    messages: p.messages.map((m) => ({
-      ...m,
-      attachments: m.attachments ? m.attachments.map((a) => ({ ...a })) : undefined,
-      toolUse: m.toolUse
-        ? {
-            ...m.toolUse,
-            input: { ...m.toolUse.input },
-          }
-        : undefined,
-    })),
-    streaming: p.streaming,
-    activity: { ...p.activity },
-    attachments: p.attachments.map((a) => ({ ...a })),
     currentSessionId: p.currentSessionId,
     scrollTargetMessageId: p.scrollTargetMessageId,
     highlightedMessageId: p.highlightedMessageId,
+    creatingSessionId: p.creatingSessionId,
   };
 }
 
@@ -374,51 +277,23 @@ function clonePanes(
 }
 
 // ---------------------------------------------------------------------------
-// v3.5.13 crit fix: DB 永続化（append_message invoke ラッパ）
-//
-// chat store の appendMessage / finalizeStreamingMessage / appendToolUse /
-// updateToolUseStatus から「確定メッセージのみ」1 回だけ呼ばれる。
-// streaming 中の delta は都度書き込まない（パフォーマンス考慮、finalize 時に確定版を 1 回 append）。
-//
-// 二重 append を防ぐため、frontend 側で `persistedIds` セットを持ち、
-// 同一 message id で 2 回呼ばれた場合は skip する（Rust 側の message.id は
-// 別 UUID なので重複検出は frontend で完結する）。
+// DB 永続化（append_message invoke ラッパ、v3.5.13 から踏襲）
 // ---------------------------------------------------------------------------
 
 /**
- * 既に DB に永続化済の message id を記録するセット。
- * ChatMessage.id 単位でユニーク管理し、streaming → finalize → append などの
- * 多重呼出しで二重 INSERT にならないよう guard する。
- *
- * メモリ上のみ（永続化不要）。リロード後は当然 empty から始まるが、
- * その時点では過去 session の message id 体系は DB から再ロードされる
- * （DB 側が真実）ので frontend の dedup は新規書込みパスでのみ意味を持つ。
+ * DB に既に永続化済の message id セット。二重 INSERT を防ぐ。
  */
 const persistedIds: Set<string> = new Set();
 
-/** role 文字列を Rust 側（"user" / "assistant" / "tool"）に正規化する。 */
 function normalizeRoleForDb(role: ChatMessage["role"]): string {
-  // role 型は既に 3 種に絞られているため基本そのまま。
   return role;
 }
 
 /**
- * 1 message を Rust `append_message` に書き込む（DB 永続化）。
+ * 1 message を Rust `append_message` に書き込む（DB 永続化）。v3.5.13 から踏襲。
  *
- * 呼出元:
- *  - `appendMessage`            : user / assistant(完成版) / tool(完成版)
- *  - `finalizeStreamingMessage` : streaming 完了した assistant message を確定 append
- *  - `appendToolUse`            : tool event 検出時、content は tool_use JSON
- *  - `updateToolUseStatus`      : tool 完了（success/error）時、status/output 反映版を append
- *  - `useAllProjectsSidecarListener`: cross-project event で確定 assistant/tool を記録
- *
- * tool role の content は toolUse event を JSON serialize して格納する。復元時は
- * `session.ts toChatMessage` が content を parse して `toolUse` field を
- * 再構築するため（PM-880 で統合）、UI 側は structured `toolUse` を直接参照できる。
- * parse 失敗時は display 層 (`MessageList.tsx`) で最終 fallback が走る。
- *
- * 失敗は console.warn のみ（UX を止めない）。session 不在エラーは呼出側で
- * 防ぐ（InputArea が送信前に createNewSession を走らせる）。
+ * v1.18.0: sessionId は caller が直接指定する。従来は pane.currentSessionId
+ * から引いていたが、session 単位 store に移行したため呼出経路が整理された。
  */
 export async function persistMessageToDb(
   sessionId: string,
@@ -426,12 +301,10 @@ export async function persistMessageToDb(
 ): Promise<void> {
   if (!sessionId) return;
   if (persistedIds.has(message.id)) return;
-  // 先に mark することで concurrent 呼出での二重 invoke を抑止
   persistedIds.add(message.id);
 
   const role = normalizeRoleForDb(message.role);
 
-  // tool role は toolUse event の shape を JSON で格納する（UI 復元時に parse 可能）
   let content = message.content ?? "";
   if (message.role === "tool" && message.toolUse) {
     try {
@@ -442,7 +315,6 @@ export async function persistMessageToDb(
         output: message.toolUse.output ?? null,
       });
     } catch {
-      // serialize 失敗は status 文字列のみでも記録（完全 drop を避ける）
       content = `[tool ${message.toolUse.name} ${message.toolUse.status}]`;
     }
   }
@@ -460,7 +332,6 @@ export async function persistMessageToDb(
       attachments,
     });
   } catch (e) {
-    // DB 書込失敗は致命でない（UI state は既に反映済）。再送のため id を外す。
     persistedIds.delete(message.id);
     // eslint-disable-next-line no-console
     console.warn(
@@ -470,17 +341,19 @@ export async function persistMessageToDb(
   }
 }
 
-// NOTE: 将来 tool の status 変化 (pending → success/error) の「上書き append」が
-// 必要になった場合は、`persistedIds.delete(id)` を呼んでから persistMessageToDb を
-// 再呼出しすることで二重書きが可能。ただし `append_message` は id を backend で
-// 採番するため、同一 ChatMessage.id に対して DB row が 2 件生まれる点に注意。
-// v3.5.13 では tool は「完了時に 1 回だけ書く」設計で妥協し、delete API は未実装。
+// ---------------------------------------------------------------------------
+// store 本体
+// ---------------------------------------------------------------------------
 
 export const useChatStore = create<ChatState>()(
   persist(
     (set, get) => ({
       panes: { [DEFAULT_PANE_ID]: makeEmptyPane() },
       activePaneId: DEFAULT_PANE_ID,
+      sessionMessages: {},
+      sessionStreaming: {},
+      sessionAttachments: {},
+      sessionActivity: {},
       projectSnapshots: {},
 
       // --- pane lifecycle ------------------------------------------------
@@ -489,15 +362,11 @@ export const useChatStore = create<ChatState>()(
         const state = get();
         const paneIds = Object.keys(state.panes);
         if (paneIds.length >= MAX_PANES) {
-          // MAX_PANES 制限に到達、no-op + 既存 active を返す
           return state.activePaneId;
         }
         const id = newPaneId();
-        // PM-979: 新規 chat pane に作成時 session を tag 付け（tray session filter 用）
-        // session store から現在 session id を取得、なければ null で legacy 扱い
         let creatingSessionId: string | null = null;
         try {
-          // 循環依存回避のため getState() を dynamic require
           // eslint-disable-next-line @typescript-eslint/no-require-imports
           const sessionModule = require("@/lib/stores/session") as {
             useSessionStore: {
@@ -507,7 +376,7 @@ export const useChatStore = create<ChatState>()(
           creatingSessionId =
             sessionModule.useSessionStore.getState().currentSessionId;
         } catch {
-          // session store 未 init 等は null で許容
+          // silent fallback
         }
         const newPane = makeEmptyPane();
         newPane.creatingSessionId = creatingSessionId;
@@ -521,13 +390,12 @@ export const useChatStore = create<ChatState>()(
       removePane: (paneId) => {
         const state = get();
         const paneIds = Object.keys(state.panes);
-        if (paneIds.length <= 1) return; // 最後の 1 件は消さない
+        if (paneIds.length <= 1) return;
         if (!state.panes[paneId]) return;
         const { [paneId]: _removed, ...rest } = state.panes;
         void _removed;
         let nextActive = state.activePaneId;
         if (nextActive === paneId) {
-          // 削除された pane が active なら、残った中で先頭を active に
           nextActive = Object.keys(rest)[0];
         }
         set({ panes: rest, activePaneId: nextActive });
@@ -538,7 +406,7 @@ export const useChatStore = create<ChatState>()(
         set({ activePaneId: paneId });
       },
 
-      // --- v3.5.9 Chunk D: project snapshot ------------------------------
+      // --- project snapshot ---------------------------------------------
 
       saveProjectSnapshot: (projectId) => {
         if (!projectId) return;
@@ -554,9 +422,6 @@ export const useChatStore = create<ChatState>()(
         const state = get();
         const snap = projectId ? state.projectSnapshots[projectId] : undefined;
         if (snap && Object.keys(snap).length > 0) {
-          // cache hit: panes を snapshot から deep copy で復元。
-          // activePaneId は snapshot 側に保存していないため、現 activePaneId が
-          // snapshot 内に居れば維持、居なければ snapshot の最初の paneId に倒す。
           const restored = clonePanes(snap);
           const nextActive =
             restored[state.activePaneId] !== undefined
@@ -565,7 +430,6 @@ export const useChatStore = create<ChatState>()(
           set({ panes: restored, activePaneId: nextActive });
           return true;
         }
-        // cache miss: 初期 pane 1 個にリセット
         set({
           panes: { [DEFAULT_PANE_ID]: makeEmptyPane() },
           activePaneId: DEFAULT_PANE_ID,
@@ -587,28 +451,61 @@ export const useChatStore = create<ChatState>()(
         if (sessionIds.length === 0) return;
         const ids = new Set(sessionIds);
         set((state) => {
-          let changed = false;
+          // --- session-level map ---
+          let sessionMessagesChanged = false;
+          let sessionStreamingChanged = false;
+          let sessionAttachmentsChanged = false;
+          let sessionActivityChanged = false;
+
+          const nextSessionMessages: Record<string, ChatMessage[]> = {};
+          for (const [sid, msgs] of Object.entries(state.sessionMessages)) {
+            if (ids.has(sid)) {
+              sessionMessagesChanged = true;
+              continue;
+            }
+            nextSessionMessages[sid] = msgs;
+          }
+          const nextSessionStreaming: Record<string, boolean> = {};
+          for (const [sid, v] of Object.entries(state.sessionStreaming)) {
+            if (ids.has(sid)) {
+              sessionStreamingChanged = true;
+              continue;
+            }
+            nextSessionStreaming[sid] = v;
+          }
+          const nextSessionAttachments: Record<string, Attachment[]> = {};
+          for (const [sid, v] of Object.entries(state.sessionAttachments)) {
+            if (ids.has(sid)) {
+              sessionAttachmentsChanged = true;
+              continue;
+            }
+            nextSessionAttachments[sid] = v;
+          }
+          const nextSessionActivity: Record<string, ChatActivity> = {};
+          for (const [sid, v] of Object.entries(state.sessionActivity)) {
+            if (ids.has(sid)) {
+              sessionActivityChanged = true;
+              continue;
+            }
+            nextSessionActivity[sid] = v;
+          }
+
+          // --- pane viewport ---
+          let panesChanged = false;
           const transformPane = (pane: ChatPaneState): ChatPaneState => {
             const hitCurrent =
               pane.currentSessionId !== null && ids.has(pane.currentSessionId);
             const hitCreating =
               pane.creatingSessionId != null && ids.has(pane.creatingSessionId);
             if (!hitCurrent && !hitCreating) return pane;
-            changed = true;
-            if (hitCurrent) {
-              return {
-                ...pane,
-                messages: [],
-                streaming: false,
-                activity: { kind: "idle" },
-                attachments: [],
-                currentSessionId: null,
-                scrollTargetMessageId: null,
-                highlightedMessageId: null,
-                creatingSessionId: hitCreating ? null : pane.creatingSessionId,
-              };
-            }
-            return { ...pane, creatingSessionId: null };
+            panesChanged = true;
+            return {
+              ...pane,
+              currentSessionId: hitCurrent ? null : pane.currentSessionId,
+              creatingSessionId: hitCreating ? null : pane.creatingSessionId,
+              scrollTargetMessageId: hitCurrent ? null : pane.scrollTargetMessageId,
+              highlightedMessageId: hitCurrent ? null : pane.highlightedMessageId,
+            };
           };
 
           const nextPanes: Record<string, ChatPaneState> = {};
@@ -623,329 +520,279 @@ export const useChatStore = create<ChatState>()(
             }
             nextSnapshots[projId] = nextSnap;
           }
-          if (!changed) return state;
-          return { panes: nextPanes, projectSnapshots: nextSnapshots };
+
+          const anyChange =
+            sessionMessagesChanged ||
+            sessionStreamingChanged ||
+            sessionAttachmentsChanged ||
+            sessionActivityChanged ||
+            panesChanged;
+          if (!anyChange) return state;
+
+          // persistedIds からも purge 対象の message id を抜いておく
+          // (将来の二重書き込み可能性に備える。送信側で重複は発生しないが保守的)
+          for (const sid of ids) {
+            const arr = state.sessionMessages[sid];
+            if (!arr) continue;
+            for (const m of arr) {
+              persistedIds.delete(m.id);
+            }
+          }
+
+          return {
+            sessionMessages: sessionMessagesChanged
+              ? nextSessionMessages
+              : state.sessionMessages,
+            sessionStreaming: sessionStreamingChanged
+              ? nextSessionStreaming
+              : state.sessionStreaming,
+            sessionAttachments: sessionAttachmentsChanged
+              ? nextSessionAttachments
+              : state.sessionAttachments,
+            sessionActivity: sessionActivityChanged
+              ? nextSessionActivity
+              : state.sessionActivity,
+            panes: panesChanged ? nextPanes : state.panes,
+            projectSnapshots: nextSnapshots,
+          };
         });
       },
 
-      // --- v3.5.11 Chunk E: cross-project event dispatch ----------------
+      applyToPane: (paneId, updater) => {
+        if (!paneId || typeof updater !== "function") return;
+        set((state) => ({
+          panes: updatePane(state.panes, paneId, updater),
+        }));
+      },
 
-      updateSnapshotPane: (projectId, paneId, updater) => {
-        if (!projectId || !paneId || typeof updater !== "function") return;
+      // --- session 単位 action ------------------------------------------
+
+      appendMessage: (sessionId, message) => {
+        if (!sessionId || !message) return;
         set((state) => {
-          // snapshot が無ければ「default pane 1 個の空 snapshot」を作って update。
-          // これは「active 中に他 project の sidecar event が来た時に、その project
-          // の snapshot を初めて作る」ケース（= 起動直後の他 project へ送信したが
-          // ユーザは別 project を見ている、等）を吸収する。
-          const existing = state.projectSnapshots[projectId];
-          const snap: Record<string, ChatPaneState> = existing
-            ? { ...existing }
-            : { [DEFAULT_PANE_ID]: makeEmptyPane() };
-          const targetPane = snap[paneId];
-          if (!targetPane) {
-            // paneId が snapshot に存在しない場合 (Split second pane 等) は
-            // v3.5.11 Step 1 では受信対象外。silently no-op。
-            // snapshot 自体は新規作成済だが、実害なし（次回 save で正規化される）。
-            // 既存 snapshot を壊さないよう、変更がない場合は state を返さず early return。
-            if (!existing) {
-              return {
-                projectSnapshots: {
-                  ...state.projectSnapshots,
-                  [projectId]: snap,
-                },
-              };
-            }
-            return state;
-          }
-          const nextPane = updater(targetPane);
-          if (nextPane === targetPane) {
-            // updater が同一参照を返したら no-op
-            return existing
-              ? state
-              : {
-                  projectSnapshots: {
-                    ...state.projectSnapshots,
-                    [projectId]: snap,
-                  },
-                };
-          }
+          const cur = state.sessionMessages[sessionId] ?? [];
           return {
-            projectSnapshots: {
-              ...state.projectSnapshots,
-              [projectId]: { ...snap, [paneId]: nextPane },
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: [...cur, message],
+            },
+          };
+        });
+        // DB 永続化: user / 確定済 assistant / 確定済 tool のみ
+        const shouldPersistNow =
+          message.role === "user" ||
+          (message.role === "assistant" && !message.streaming);
+        if (shouldPersistNow) {
+          void persistMessageToDb(sessionId, message);
+        }
+      },
+
+      updateStreamingMessage: (sessionId, messageId, delta) => {
+        if (!sessionId || !messageId || typeof delta !== "string") return;
+        set((state) => {
+          const cur = state.sessionMessages[sessionId];
+          if (!cur) return state;
+          return {
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: cur.map((m) =>
+                m.id === messageId
+                  ? { ...m, content: m.content + delta, streaming: true }
+                  : m
+              ),
             },
           };
         });
       },
 
-      applyToProjectPane: (projectId, paneId, activeProjectId, updater) => {
-        if (!projectId || !paneId || typeof updater !== "function") return;
-        if (projectId === activeProjectId) {
-          // active project: live panes を update（既存 util 流用）
-          set((state) => ({
-            panes: updatePane(state.panes, paneId, updater),
-          }));
-          return;
-        }
-        // 非 active project: snapshot 側を update
-        get().updateSnapshotPane(projectId, paneId, updater);
-      },
-
-      // --- pane 内 actions -----------------------------------------------
-      //
-      // 以下は「第 1 引数が panes の key と一致すれば paneId、そうでなければ
-      // 旧シグネチャ」として振る舞う shim。ChatPanel 系は明示的に paneId を
-      // 渡し、互換呼出元（SearchPalette 等）は paneId 省略で activePaneId に
-      // 作用する。
-
-      appendMessage: (a, b) => {
-        let targetSessionId: string | null = null;
-        let targetMessage: ChatMessage | null = null;
-        let shouldPersistNow = false;
-        set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const message = (usedFirstAsPaneId ? b : (a as ChatMessage)) as
-            | ChatMessage
-            | undefined;
-          if (!message) return state;
-          targetMessage = message;
-          targetSessionId = state.panes[paneId]?.currentSessionId ?? null;
-          // streaming 中の assistant は finalize で append するので skip（delta 書込み防止）。
-          // tool も appendToolUse/updateToolUseStatus 側で管理するので skip。
-          // ここで即 persist するのは user と、streaming を付けない確定済み assistant/tool のみ。
-          shouldPersistNow =
-            message.role === "user" ||
-            (message.role === "assistant" && !message.streaming);
-          return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              messages: [...p.messages, message],
-            })),
-          };
-        });
-        // v3.5.13: DB 永続化（set の外で async 発火、UI の同期 set を阻害しない）
-        if (shouldPersistNow && targetSessionId && targetMessage) {
-          void persistMessageToDb(targetSessionId, targetMessage);
-        }
-      },
-
-      updateStreamingMessage: (a, b, c) => {
-        set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const id = (usedFirstAsPaneId ? b : a) as string;
-          const delta = (usedFirstAsPaneId ? c : b) as string;
-          if (!id || typeof delta !== "string") return state;
-          return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              messages: p.messages.map((m) =>
-                m.id === id
-                  ? { ...m, content: m.content + delta, streaming: true }
-                  : m
-              ),
-            })),
-          };
-        });
-      },
-
-      setStreaming: (a, b) => {
-        set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const streaming = (usedFirstAsPaneId ? b : a) as boolean;
-          if (typeof streaming !== "boolean") return state;
-          return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              streaming,
-            })),
-          };
-        });
-      },
-
-      setActivity: (a, b) => {
-        set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const activity = (usedFirstAsPaneId ? b : a) as ChatActivity;
-          if (!activity || typeof activity !== "object") return state;
-          return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              activity,
-            })),
-          };
-        });
-      },
-
-      finalizeStreamingMessage: (a, b) => {
-        let targetSessionId: string | null = null;
+      finalizeStreamingMessage: (sessionId, messageId) => {
+        if (!sessionId || !messageId) return;
         let targetMessage: ChatMessage | null = null;
         set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const id = (usedFirstAsPaneId ? b : a) as string;
-          if (!id) return state;
-          const pane = state.panes[paneId];
-          if (pane) {
-            const match = pane.messages.find((m) => m.id === id);
-            if (match) {
-              // 確定版（streaming=false）を後で persist するためにコピー
-              targetMessage = { ...match, streaming: false };
-              targetSessionId = pane.currentSessionId ?? null;
-            }
+          const cur = state.sessionMessages[sessionId];
+          if (!cur) return state;
+          const match = cur.find((m) => m.id === messageId);
+          if (match) {
+            targetMessage = { ...match, streaming: false };
           }
           return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              messages: p.messages.map((m) =>
-                m.id === id ? { ...m, streaming: false } : m
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: cur.map((m) =>
+                m.id === messageId ? { ...m, streaming: false } : m
               ),
-            })),
+            },
           };
         });
-        // v3.5.13: streaming 終了時に 1 回だけ DB 永続化（delta 時は書かない）
-        if (targetSessionId && targetMessage) {
-          void persistMessageToDb(targetSessionId, targetMessage);
+        if (targetMessage) {
+          void persistMessageToDb(sessionId, targetMessage);
         }
       },
 
-      appendToolUse: (a, b, c) => {
-        // v3.5.13: appendToolUse 自体では DB 永続化しない（pending 状態は揮発で可）。
-        // 完了時（updateToolUseStatus で success/error になった時）に 1 回だけ append する。
+      appendToolUse: (sessionId, messageId, event) => {
+        if (!sessionId || !messageId || !event) return;
         set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const id = (usedFirstAsPaneId ? b : a) as string;
-          const event = (usedFirstAsPaneId ? c : b) as ToolUseEvent;
-          if (!id || !event) return state;
+          const cur = state.sessionMessages[sessionId] ?? [];
           return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              messages: [
-                ...p.messages,
-                { id, role: "tool", content: "", toolUse: event },
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: [
+                ...cur,
+                { id: messageId, role: "tool", content: "", toolUse: event },
               ],
-            })),
+            },
           };
         });
       },
 
-      updateToolUseStatus: (a, b, c, d) => {
-        let targetSessionId: string | null = null;
+      updateToolUseStatus: (sessionId, messageId, status, output) => {
+        if (!sessionId || !messageId || !status) return;
         let targetMessage: ChatMessage | null = null;
         let statusBecameTerminal = false;
         set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const id = (usedFirstAsPaneId ? b : a) as string;
-          const status = (usedFirstAsPaneId ? c : b) as ToolUseEvent["status"];
-          const output = (usedFirstAsPaneId ? d : c) as string | undefined;
-          if (!id || !status) return state;
-          const pane = state.panes[paneId];
-          if (pane) {
-            const match = pane.messages.find((m) => m.id === id && m.toolUse);
-            if (match && match.toolUse) {
-              const nextToolUse: ToolUseEvent = {
-                ...match.toolUse,
-                status,
-                output,
-              };
-              statusBecameTerminal = status === "success" || status === "error";
-              if (statusBecameTerminal) {
-                targetMessage = { ...match, toolUse: nextToolUse };
-                targetSessionId = pane.currentSessionId ?? null;
-              }
+          const cur = state.sessionMessages[sessionId];
+          if (!cur) return state;
+          const match = cur.find((m) => m.id === messageId && m.toolUse);
+          if (match && match.toolUse) {
+            const nextToolUse: ToolUseEvent = {
+              ...match.toolUse,
+              status,
+              output,
+            };
+            statusBecameTerminal = status === "success" || status === "error";
+            if (statusBecameTerminal) {
+              targetMessage = { ...match, toolUse: nextToolUse };
             }
           }
           return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              messages: p.messages.map((m) =>
-                m.id === id && m.toolUse
+            sessionMessages: {
+              ...state.sessionMessages,
+              [sessionId]: cur.map((m) =>
+                m.id === messageId && m.toolUse
                   ? { ...m, toolUse: { ...m.toolUse, status, output } }
                   : m
               ),
-            })),
+            },
           };
         });
-        // v3.5.13: tool 完了（success/error）時に DB 永続化（1 回のみ、pending 時は書かない）
-        if (statusBecameTerminal && targetSessionId && targetMessage) {
-          void persistMessageToDb(targetSessionId, targetMessage);
+        if (statusBecameTerminal && targetMessage) {
+          void persistMessageToDb(sessionId, targetMessage);
         }
       },
 
-      appendAttachment: (a, b) => {
+      setSessionStreaming: (sessionId, streaming) => {
+        if (!sessionId) return;
         set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const attachment = (usedFirstAsPaneId ? b : (a as Attachment)) as
-            | Attachment
-            | undefined;
-          if (!attachment) return state;
+          if (state.sessionStreaming[sessionId] === streaming) return state;
           return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              attachments: [...p.attachments, attachment],
-            })),
+            sessionStreaming: {
+              ...state.sessionStreaming,
+              [sessionId]: streaming,
+            },
           };
         });
       },
 
-      removeAttachment: (a, b) => {
+      setSessionActivity: (sessionId, activity) => {
+        if (!sessionId || !activity) return;
+        set((state) => ({
+          sessionActivity: {
+            ...state.sessionActivity,
+            [sessionId]: activity,
+          },
+        }));
+      },
+
+      clearSessionMessages: (sessionId) => {
+        if (!sessionId) return;
         set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const id = (usedFirstAsPaneId ? b : a) as string;
-          if (!id) return state;
+          const next = { ...state.sessionMessages };
+          delete next[sessionId];
+          const nextStreaming = { ...state.sessionStreaming };
+          delete nextStreaming[sessionId];
+          const nextActivity = { ...state.sessionActivity };
+          delete nextActivity[sessionId];
+          const nextAttachments = { ...state.sessionAttachments };
+          delete nextAttachments[sessionId];
           return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              attachments: p.attachments.filter((at) => at.id !== id),
-            })),
+            sessionMessages: next,
+            sessionStreaming: nextStreaming,
+            sessionActivity: nextActivity,
+            sessionAttachments: nextAttachments,
           };
         });
       },
 
-      clearAttachments: (paneId) => {
+      hydrateSessionMessages: (sessionId, messages) => {
+        if (!sessionId || !Array.isArray(messages)) return;
+        // DB load 経路: 既に永続化済。以降の appendMessage 等で二重 INSERT
+        // されないよう persistedIds に登録する。
+        for (const m of messages) {
+          persistedIds.add(m.id);
+        }
+        set((state) => ({
+          sessionMessages: {
+            ...state.sessionMessages,
+            [sessionId]: messages,
+          },
+        }));
+      },
+
+      // --- session attachment --------------------------------------------
+
+      appendAttachment: (sessionId, attachment) => {
+        if (!sessionId || !attachment) return;
         set((state) => {
-          const id = paneId ?? state.activePaneId;
+          const cur = state.sessionAttachments[sessionId] ?? [];
           return {
-            panes: updatePane(state.panes, id, (p) => ({ ...p, attachments: [] })),
+            sessionAttachments: {
+              ...state.sessionAttachments,
+              [sessionId]: [...cur, attachment],
+            },
           };
         });
       },
 
-      clearSession: (paneId) => {
+      removeAttachment: (sessionId, attachmentId) => {
+        if (!sessionId || !attachmentId) return;
         set((state) => {
-          const id = paneId ?? state.activePaneId;
+          const cur = state.sessionAttachments[sessionId];
+          if (!cur) return state;
           return {
-            panes: updatePane(state.panes, id, (p) => ({
-              ...p,
-              messages: [],
-              attachments: [],
-              streaming: false,
-              // PM-910 (H4 対応): activity も idle に倒す。
-              // 旧実装は streaming: false にしていたが activity は前回値
-              // (thinking / tool_use / streaming / error) を残したままで、
-              // /clear 直後の ActivityIndicator が「思考中」を表示し続ける
-              // 体感不具合があった。/clear = 無活動状態として扱う。
-              activity: { kind: "idle" },
-              scrollTargetMessageId: null,
-              highlightedMessageId: null,
-            })),
+            sessionAttachments: {
+              ...state.sessionAttachments,
+              [sessionId]: cur.filter((a) => a.id !== attachmentId),
+            },
           };
         });
       },
 
-      setSessionId: (a, b) => {
-        const state = get();
-        const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-        const id = (usedFirstAsPaneId ? b : a) as string | null;
-        set({
+      clearAttachments: (sessionId) => {
+        if (!sessionId) return;
+        set((state) => {
+          if (!state.sessionAttachments[sessionId]) return state;
+          const next = { ...state.sessionAttachments };
+          delete next[sessionId];
+          return { sessionAttachments: next };
+        });
+      },
+
+      // --- pane viewport action -----------------------------------------
+
+      setPaneSession: (paneId, sessionId) => {
+        set((state) => ({
           panes: updatePane(state.panes, paneId, (p) => ({
             ...p,
-            currentSessionId: id ?? null,
+            currentSessionId: sessionId,
+            // session 切替で scroll/highlight はリセットする（別 session の
+            // message id を追いかけないようにする）
+            scrollTargetMessageId: null,
+            highlightedMessageId: null,
           })),
-        });
+        }));
 
-        // v5 Chunk C (DEC-030) 互換: session が紐づいたら active project の
-        // lastSessionId を最新に書き戻す。v3.5 Chunk B も同様のロジックで
-        // 動作する（activePane 経由で session load されるため）。
-        if (id && typeof window !== "undefined") {
+        // project の lastSessionId を write back（v5 Chunk C / DEC-030 互換）
+        if (sessionId && typeof window !== "undefined") {
           void import("@/lib/stores/project")
             .then((mod) => {
               const storeAny = mod.useProjectStore.getState() as unknown as {
@@ -960,7 +807,7 @@ export const useChatStore = create<ChatState>()(
                 typeof storeAny.updateProject === "function"
               ) {
                 storeAny.updateProject(storeAny.activeProjectId, {
-                  lastSessionId: id,
+                  lastSessionId: sessionId,
                 });
               }
             })
@@ -970,70 +817,51 @@ export const useChatStore = create<ChatState>()(
         }
       },
 
-      setMessages: (a, b) => {
-        set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const messages = (usedFirstAsPaneId ? b : a) as ChatMessage[];
-          if (!Array.isArray(messages)) return state;
-          // v3.5.13: loadSession 経路で DB から復元された messages は既に永続化済み。
-          // 以降の appendMessage / finalizeStreamingMessage / updateToolUseStatus で
-          // 同一 id が DB に二重 INSERT されるのを防ぐため persistedIds に登録する。
-          for (const m of messages) {
-            persistedIds.add(m.id);
-          }
-          return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              messages,
-            })),
-          };
-        });
-      },
-
-      scrollToMessageId: (a, b) => {
-        set((state) => {
-          const { paneId, usedFirstAsPaneId } = resolvePaneId(state, a);
-          const id = (usedFirstAsPaneId ? b : a) as string;
-          if (!id) return state;
-          return {
-            panes: updatePane(state.panes, paneId, (p) => ({
-              ...p,
-              scrollTargetMessageId: id,
-              highlightedMessageId: id,
-            })),
-          };
-        });
+      scrollToMessageId: (paneId, messageId) => {
+        if (!paneId || !messageId) return;
+        set((state) => ({
+          panes: updatePane(state.panes, paneId, (p) => ({
+            ...p,
+            scrollTargetMessageId: messageId,
+            highlightedMessageId: messageId,
+          })),
+        }));
       },
 
       clearHighlight: (paneId) => {
-        set((state) => {
-          const id = paneId ?? state.activePaneId;
-          return {
-            panes: updatePane(state.panes, id, (p) => ({
-              ...p,
-              highlightedMessageId: null,
-            })),
-          };
-        });
+        if (!paneId) return;
+        set((state) => ({
+          panes: updatePane(state.panes, paneId, (p) => ({
+            ...p,
+            highlightedMessageId: null,
+          })),
+        }));
       },
 
       clearScrollTarget: (paneId) => {
-        set((state) => {
-          const id = paneId ?? state.activePaneId;
-          return {
-            panes: updatePane(state.panes, id, (p) => ({
-              ...p,
-              scrollTargetMessageId: null,
-            })),
-          };
-        });
+        if (!paneId) return;
+        set((state) => ({
+          panes: updatePane(state.panes, paneId, (p) => ({
+            ...p,
+            scrollTargetMessageId: null,
+          })),
+        }));
+      },
+
+      clearSessionForPane: (paneId) => {
+        const state = get();
+        const pid = paneId ?? state.activePaneId;
+        const sid = state.panes[pid]?.currentSessionId ?? null;
+        if (sid) {
+          get().clearSessionMessages(sid);
+        }
       },
     }),
     {
       name: "ccmux-ide-gui:chat-panes",
+      version: 2, // v1.18.0 (DEC-064) で schema 更新
       storage: createJSONStorage(() => {
         if (typeof window === "undefined") {
-          // SSR / テスト用 no-op storage
           return {
             getItem: () => null,
             setItem: () => undefined,
@@ -1042,28 +870,34 @@ export const useChatStore = create<ChatState>()(
         }
         return window.localStorage;
       }),
-      // messages / attachments / activity / streaming 等は揮発。
-      // currentSessionId と pane レイアウトだけ永続化する。
-      // projectSnapshots も揮発（v3.5.9 Chunk D / Project Switch History）。
+      // v1.18.0: viewport (pane の currentSessionId / creatingSessionId) のみ persist。
+      // session-level map (messages / streaming / attachments / activity) は揮発。
       partialize: (state) => ({
         activePaneId: state.activePaneId,
         panes: Object.fromEntries(
           Object.entries(state.panes).map(([id, p]) => [
             id,
             {
-              messages: [],
-              streaming: false,
-              activity: { kind: "idle" } as ChatActivity,
-              attachments: [],
               currentSessionId: p.currentSessionId ?? null,
               scrollTargetMessageId: null,
               highlightedMessageId: null,
+              creatingSessionId: p.creatingSessionId ?? null,
             } satisfies ChatPaneState,
           ])
         ),
       }),
-      // 起動時に panes が空だった場合のフェールセーフ。
-      // Zustand persist は空 state をそのまま復元するため、ここで最低 1 pane を担保。
+      // v1.18.0: 旧 shape (v1, panes[*].messages/streaming/attachments/activity)
+      // は新構造と互換性なし。migrate で破棄して初期化する。
+      migrate: (persisted, version) => {
+        if (version < 2) {
+          // 旧 schema は panes[*] に messages 等が混在している。破棄して初期値で開始。
+          return {
+            activePaneId: DEFAULT_PANE_ID,
+            panes: { [DEFAULT_PANE_ID]: makeEmptyPane() },
+          };
+        }
+        return persisted as Partial<ChatState>;
+      },
       merge: (persisted, current) => {
         const merged = { ...current, ...(persisted as Partial<ChatState>) };
         if (!merged.panes || Object.keys(merged.panes).length === 0) {
@@ -1073,8 +907,11 @@ export const useChatStore = create<ChatState>()(
         if (!merged.panes[merged.activePaneId]) {
           merged.activePaneId = Object.keys(merged.panes)[0] ?? DEFAULT_PANE_ID;
         }
-        // v3.5.9 Chunk D: projectSnapshots は persist 対象外（揮発）なので
-        // persisted 側には存在しない。起動毎に空 map から始める。
+        // 揮発 state は常に空から開始
+        merged.sessionMessages = {};
+        merged.sessionStreaming = {};
+        merged.sessionAttachments = {};
+        merged.sessionActivity = {};
         merged.projectSnapshots = {};
         return merged;
       },
@@ -1083,10 +920,10 @@ export const useChatStore = create<ChatState>()(
 );
 
 // ---------------------------------------------------------------------------
-// 便利 helper（component 側で pane state を 1 発で引きたい時に使う）
+// Selector helpers
 // ---------------------------------------------------------------------------
 
-/** 指定 paneId の state を取得。存在しなければ undefined。 */
+/** 指定 paneId の viewport を取得。 */
 export function selectPane(
   state: ChatState,
   paneId: string
@@ -1094,13 +931,70 @@ export function selectPane(
   return state.panes[paneId];
 }
 
-/** 互換: singleton 時代の「現在の messages」を activePane から返す selector */
-export function selectActivePaneMessages(state: ChatState): ChatMessage[] {
-  return state.panes[state.activePaneId]?.messages ?? [];
+/**
+ * v1.18.0: 指定 paneId が現在表示している session の messages を返す。
+ * session 未選択 / messages 未 load の場合は空配列（固定参照ではなく毎回新規
+ * 生成なので、呼出側は memoize 用の empty 配列 fallback を別途用意する）。
+ */
+export function selectMessagesForPane(
+  state: ChatState,
+  paneId: string
+): ChatMessage[] {
+  const sid = state.panes[paneId]?.currentSessionId ?? null;
+  if (!sid) return EMPTY_MESSAGES;
+  return state.sessionMessages[sid] ?? EMPTY_MESSAGES;
 }
 
+/** v1.18.0: session 単位の messages selector。 */
+export function selectMessagesForSession(
+  state: ChatState,
+  sessionId: string | null
+): ChatMessage[] {
+  if (!sessionId) return EMPTY_MESSAGES;
+  return state.sessionMessages[sessionId] ?? EMPTY_MESSAGES;
+}
+
+/** v1.18.0: session 単位の streaming flag selector。 */
+export function selectStreamingForSession(
+  state: ChatState,
+  sessionId: string | null
+): boolean {
+  if (!sessionId) return false;
+  return state.sessionStreaming[sessionId] ?? false;
+}
+
+/** v1.18.0: session 単位の attachments selector。 */
+export function selectAttachmentsForSession(
+  state: ChatState,
+  sessionId: string | null
+): Attachment[] {
+  if (!sessionId) return EMPTY_ATTACHMENTS;
+  return state.sessionAttachments[sessionId] ?? EMPTY_ATTACHMENTS;
+}
+
+/** v1.18.0: session 単位の activity selector。 */
+export function selectActivityForSession(
+  state: ChatState,
+  sessionId: string | null
+): ChatActivity {
+  if (!sessionId) return IDLE_ACTIVITY;
+  return state.sessionActivity[sessionId] ?? IDLE_ACTIVITY;
+}
+
+/** 互換: singleton 時代の「現在の messages」を activePane から返す selector */
+export function selectActivePaneMessages(state: ChatState): ChatMessage[] {
+  return selectMessagesForPane(state, state.activePaneId);
+}
+
+// React 19 + zustand: selector が新しい配列/オブジェクトを返すと
+// getSnapshot cache が効かず "should be cached to avoid an infinite loop" になる。
+// 固定参照の空配列を selector fallback に使う。
+const EMPTY_MESSAGES: ChatMessage[] = [];
+Object.freeze(EMPTY_MESSAGES);
+const EMPTY_ATTACHMENTS: Attachment[] = [];
+Object.freeze(EMPTY_ATTACHMENTS);
+
 // v3.3 DEC-033: 旧 persist key (`ccmux-ide-gui:chat-cwd`) は以降使用しない。
-// localStorage に残っている古い値は起動時に silently 削除する（UX 阻害なし）。
 if (typeof window !== "undefined") {
   try {
     window.localStorage.removeItem("ccmux-ide-gui:chat-cwd");
@@ -1110,11 +1004,8 @@ if (typeof window !== "undefined") {
 }
 
 // ---------------------------------------------------------------------------
-// v3.5.9 Chunk D (Project Switch History): useProjectStore の projects 配列を
-// 購読し、削除された projectId の projectSnapshots を自動破棄する。
-//
-// 循環 import を避けるため top-level import ではなく動的 import + 非同期購読。
-// browser 限定（SSR は no-op）。session.ts と同じパターン。
+// v3.5.9 Chunk D: useProjectStore の projects 配列を購読し、
+// 削除された projectId の projectSnapshots を自動破棄する。
 // ---------------------------------------------------------------------------
 if (typeof window !== "undefined") {
   void (async () => {
@@ -1135,7 +1026,6 @@ if (typeof window !== "undefined") {
       store.subscribe((state: unknown) => {
         const list = (state as { projects?: Array<{ id: string }> }).projects ?? [];
         const nextIds = new Set(list.map((p) => p.id));
-        // 前回に居て今回に居ない → 削除された projectId
         for (const id of prevIds) {
           if (!nextIds.has(id)) {
             useChatStore.getState().clearProjectSnapshot(id);
@@ -1144,7 +1034,7 @@ if (typeof window !== "undefined") {
         prevIds = nextIds;
       });
     } catch {
-      // useProjectStore が未ロード / 存在しない場合は silent skip
+      // silent skip
     }
   })();
 }

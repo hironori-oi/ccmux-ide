@@ -53,10 +53,12 @@ export function StatusBar() {
   const sidecarStatusMap = useProjectStore((s) => s.sidecarStatus);
   const activeSidecarCount = countRunningSidecars(projects, sidecarStatusMap);
 
-  // v3.5 Chunk C: chat store の panes 全体の activity を集約して StatusBar に表示。
-  // read only（Chunk B 排他境界を守る）。
+  // v1.18.0 (DEC-064): activity は session 単位 store。pane 経由で関連 session の
+  // activity を引き出して StatusBar に表示。pane が session を指していない場合
+  // (起動直後 / 未選択) は idle として扱う。
   const panes = useChatStore((s) => s.panes);
   const activePaneId = useChatStore((s) => s.activePaneId);
+  const sessionActivity = useChatStore((s) => s.sessionActivity);
 
   const model = monitor?.model && monitor.model.length > 0
     ? shortModel(monitor.model)
@@ -82,8 +84,12 @@ export function StatusBar() {
         sidecarStatusMap={sidecarStatusMap}
       />
 
-      {/* 左 3: Claude activity summary (v3.5 Chunk C) */}
-      <ClaudeActivitySummary panes={panes} activePaneId={activePaneId} />
+      {/* 左 3: Claude activity summary (v3.5 Chunk C / v1.18.0 DEC-064) */}
+      <ClaudeActivitySummary
+        panes={panes}
+        activePaneId={activePaneId}
+        sessionActivity={sessionActivity}
+      />
 
       {/* PM-985: 旧「中央L: context %」（global 最新値）を撤去。
           TrayBar の TrayContextBar (session 別) が代替となるため、StatusBar
@@ -282,14 +288,21 @@ function countRunningSidecars(
 function ClaudeActivitySummary({
   panes,
   activePaneId,
+  sessionActivity,
 }: {
-  panes: Record<string, { activity: ChatActivity; currentSessionId: string | null }>;
+  panes: Record<string, { currentSessionId: string | null }>;
   activePaneId: string;
+  sessionActivity: Record<string, ChatActivity>;
 }) {
+  const IDLE: ChatActivity = { kind: "idle" };
   const paneIds = Object.keys(panes);
-  const activities = paneIds.map((id) => panes[id]?.activity).filter(
-    (a): a is ChatActivity => Boolean(a)
-  );
+  // v1.18.0 (DEC-064): pane の currentSessionId から session 単位 activity を引く。
+  const perPaneActivity: Record<string, ChatActivity> = {};
+  for (const id of paneIds) {
+    const sid = panes[id]?.currentSessionId ?? null;
+    perPaneActivity[id] = sid ? sessionActivity[sid] ?? IDLE : IDLE;
+  }
+  const activities = paneIds.map((id) => perPaneActivity[id]);
   const dominant: ActivityKind = pickDominantActivity(activities);
 
   // すべて idle / complete なら非表示（ノイズ排除）。
@@ -323,7 +336,11 @@ function ClaudeActivitySummary({
           {showPerPane ? (
             <span className="truncate text-[11px]">
               <span className="text-muted-foreground">Claude: </span>
-              <SplitPaneLabels panes={panes} activePaneId={activePaneId} />
+              <SplitPaneLabels
+                paneIds={paneIds}
+                perPaneActivity={perPaneActivity}
+                activePaneId={activePaneId}
+              />
             </span>
           ) : (
             <span className={cn("truncate text-[11px] font-medium", dominantVisual.color)}>
@@ -337,9 +354,9 @@ function ClaudeActivitySummary({
           <span className="font-semibold">Claude の状況</span>
           <ul className="flex flex-col gap-0.5 text-[10px]">
             {paneIds.map((id, i) => {
-              const pane = panes[id];
-              if (!pane) return null;
-              const v = ACTIVITY_VISUAL[pane.activity.kind];
+              const activity = perPaneActivity[id];
+              if (!activity) return null;
+              const v = ACTIVITY_VISUAL[activity.kind];
               const side = paneIds.length >= 2 ? paneLabel(i) : null;
               return (
                 <li key={id} className="flex items-center gap-1.5">
@@ -366,19 +383,20 @@ function ClaudeActivitySummary({
 
 /** 分割時の短縮ラベル: `Left 応答中 / Right 待機` 形式。 */
 function SplitPaneLabels({
-  panes,
+  paneIds,
+  perPaneActivity,
   activePaneId,
 }: {
-  panes: Record<string, { activity: ChatActivity }>;
+  paneIds: string[];
+  perPaneActivity: Record<string, ChatActivity>;
   activePaneId: string;
 }) {
-  const ids = Object.keys(panes);
   return (
     <>
-      {ids.map((id, i) => {
-        const pane = panes[id];
-        if (!pane) return null;
-        const v = ACTIVITY_VISUAL[pane.activity.kind];
+      {paneIds.map((id, i) => {
+        const activity = perPaneActivity[id];
+        if (!activity) return null;
+        const v = ACTIVITY_VISUAL[activity.kind];
         const isActive = id === activePaneId;
         return (
           <span key={id}>

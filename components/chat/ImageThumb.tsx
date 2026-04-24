@@ -22,6 +22,12 @@ export interface ImageThumbProps {
   /** true の場合、削除ボタンを表示しない（送信済みメッセージ用） */
   readOnly?: boolean;
   className?: string;
+  /**
+   * v1.18.0 (DEC-064): attachments が所属する session id。削除ボタン押下時に
+   * `removeAttachment(sessionId, attachmentId)` を呼ぶために必要。省略時は
+   * active pane の currentSessionId から解決する。
+   */
+  sessionId?: string | null;
 }
 
 /** hover Popover の誤発火防止 delay (ms)。 */
@@ -40,8 +46,18 @@ const HOVER_DELAY_MS = 200;
  *   - hover 中は右上に `Maximize2` icon を overlay（「拡大」ヒント）
  *   - 既存の × 削除ボタンと `convertFileSrc` は維持
  */
-export function ImageThumb({ attachment, readOnly, className }: ImageThumbProps) {
+export function ImageThumb({
+  attachment,
+  readOnly,
+  className,
+  sessionId,
+}: ImageThumbProps) {
   const removeAttachment = useChatStore((s) => s.removeAttachment);
+  // v1.18.0: sessionId 未指定時は active pane の currentSessionId を fallback。
+  const fallbackSessionId = useChatStore((s) => {
+    const pid = s.activePaneId;
+    return s.panes[pid]?.currentSessionId ?? null;
+  });
   const [src, setSrc] = useState<string>(attachment.preview ?? "");
 
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -165,7 +181,10 @@ export function ImageThumb({ attachment, readOnly, className }: ImageThumbProps)
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  removeAttachment(attachment.id);
+                  const sid = sessionId ?? fallbackSessionId;
+                  if (sid) {
+                    removeAttachment(sid, attachment.id);
+                  }
                 }}
                 aria-label="画像を削除"
                 className={cn(
@@ -236,6 +255,7 @@ export function ImageThumb({ attachment, readOnly, className }: ImageThumbProps)
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         attachment={attachment}
+        sessionId={sessionId ?? fallbackSessionId}
       />
     </>
   );

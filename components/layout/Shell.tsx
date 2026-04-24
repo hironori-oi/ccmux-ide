@@ -213,8 +213,7 @@ export function Shell({ children }: { children?: ReactNode }) {
             // loadSession 失敗は致命でない（空 pane のまま継続）
             const chat2 = useChatStore.getState();
             const activePaneId2 = chat2.activePaneId;
-            chat2.clearSession(activePaneId2);
-            chat2.setSessionId(activePaneId2, null);
+            chat2.setPaneSession(activePaneId2, null);
           }
         })();
       }

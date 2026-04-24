@@ -21,6 +21,11 @@ export interface ImagePreviewDialogProps {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   attachment: Attachment | null;
+  /**
+   * v1.18.0 (DEC-064): attachment が所属する session id。削除操作に必要。
+   * 省略時は active pane の currentSessionId を fallback として使う。
+   */
+  sessionId?: string | null;
 }
 
 /**
@@ -40,8 +45,13 @@ export function ImagePreviewDialog({
   open,
   onOpenChange,
   attachment,
+  sessionId,
 }: ImagePreviewDialogProps) {
   const removeAttachment = useChatStore((s) => s.removeAttachment);
+  const fallbackSessionId = useChatStore((s) => {
+    const pid = s.activePaneId;
+    return s.panes[pid]?.currentSessionId ?? null;
+  });
   const [src, setSrc] = useState<string>("");
   const [meta, setMeta] = useState<ImageMeta | null>(null);
   const [copied, setCopied] = useState(false);
@@ -90,7 +100,10 @@ export function ImagePreviewDialog({
 
   function onDelete() {
     if (!attachment) return;
-    removeAttachment(attachment.id);
+    const sid = sessionId ?? fallbackSessionId;
+    if (sid) {
+      removeAttachment(sid, attachment.id);
+    }
     onOpenChange(false);
     toast.success("画像を削除しました");
   }

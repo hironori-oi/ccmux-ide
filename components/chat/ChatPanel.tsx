@@ -145,11 +145,13 @@ export function ChatPanel({
     if (!isActivePane) return;
     mountLoadRanRef.current = true;
 
-    const sid = useChatStore.getState().panes[paneId]?.currentSessionId;
-    const messagesLen =
-      useChatStore.getState().panes[paneId]?.messages.length ?? 0;
-    if (sid && messagesLen === 0) {
-      // messages は揮発で空、session id は persist 済 → DB から復元
+    // v1.18.0 (DEC-064): messages は session 単位 store。当該 session の
+    // sessionMessages entry が空または未 load なら DB から loadSession する。
+    const chat = useChatStore.getState();
+    const sid = chat.panes[paneId]?.currentSessionId ?? null;
+    const alreadyHydrated =
+      sid !== null && chat.sessionMessages[sid] !== undefined;
+    if (sid && !alreadyHydrated) {
       void useSessionStore.getState().loadSession(sid);
     }
   }, [isActivePane, paneId]);

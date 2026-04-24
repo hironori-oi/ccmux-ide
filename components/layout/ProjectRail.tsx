@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/lib/stores/project";
 import { useChatStore, type ChatActivity } from "@/lib/stores/chat";
+import { useSessionStore } from "@/lib/stores/session";
 import {
   SIDECAR_STATUS_VISUAL,
   normalizeSidecarStatus,
@@ -98,29 +99,25 @@ export function ProjectRail() {
   // undefined になっていた（dot が全部灰色）。store の map を直接参照する。
   const sidecarStatusMap = useProjectStore((s) => s.sidecarStatus);
 
-  // v3.5 Chunk C + v3.5.10 改修: 各 project の activity を可視化。
-  // - active project: chat store の現在 panes から集約
-  // - 非 active project: chat store の projectSnapshots[projectId] から集約
-  //   （v3.5.9 で project 切替時に panes を snapshot 保存している）
-  // これにより「他のプロジェクトに切替えても、裏で思考中の dot が表示される」UX を実現。
-  const panes = useChatStore((s) => s.panes);
-  const projectSnapshots = useChatStore((s) => s.projectSnapshots);
+  // v1.18.0 (DEC-064): activity は session 単位 store へ移行。各 project に
+  // 紐づく全 session の activity を集約して 1 つの dominant dot を出す。
+  // pane / snapshot 経由の集約は廃止。project 切替と無関係に、session 自身の
+  // activity が常に正。
+  const sessionActivity = useChatStore((s) => s.sessionActivity);
+  const sessions = useSessionStore((s) => s.sessions);
 
-  /** 任意 projectId について dominant activity を返す（active なら panes、それ以外は snapshot） */
   const activityForProject = useCallback(
     (projectId: string): ActivityKind => {
-      const isActive = projectId === activeProjectId;
-      const source = isActive
-        ? panes
-        : projectSnapshots[projectId] ?? null;
-      if (!source) return "idle";
-      const activities: ChatActivity[] = Object.values(source).map(
-        (p) => p.activity
-      );
+      const activities: ChatActivity[] = [];
+      for (const s of sessions) {
+        if (s.projectId !== projectId) continue;
+        const a = sessionActivity[s.id];
+        if (a) activities.push(a);
+      }
       if (activities.length === 0) return "idle";
       return pickDominantActivity(activities);
     },
-    [panes, projectSnapshots, activeProjectId]
+    [sessionActivity, sessions]
   );
 
   const [busy, setBusy] = useState(false);

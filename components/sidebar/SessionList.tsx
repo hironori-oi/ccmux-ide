@@ -19,9 +19,11 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  AlertCircle,
   Clock,
   GripVertical,
   ListOrdered,
+  Loader2,
   MoreHorizontal,
   Pencil,
   Plus,
@@ -53,7 +55,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { useSessionStore } from "@/lib/stores/session";
+import { useSessionStore, type SessionStatus } from "@/lib/stores/session";
 import { useProjectStore } from "@/lib/stores/project";
 import { useChatStore } from "@/lib/stores/chat";
 import {
@@ -63,7 +65,6 @@ import {
 import {
   ACTIVITY_VISUAL,
   isActiveKind,
-  pickDominantActivity,
   type ActivityKind,
 } from "@/lib/activity-indicator";
 import type { SessionSummary } from "@/lib/types";
@@ -97,25 +98,28 @@ export function SessionList() {
   // null ならフィルタ無し（従来動作 = 全件）。
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
 
-  // v3.5 Chunk C: 現在 load 中の session に対する pane activity を集約する。
-  // 同一 session を複数 pane で開いている場合は dominant 選出で 1 つに畳む。
-  // read only（write はしない、Chunk B 排他）。
-  const panes = useChatStore((s) => s.panes);
+  // v1.18.0 (DEC-064): activity は session 単位 store から直接引く（pane 経由
+  // の集約は廃止）。pane 切替しても session 自身の activity は保持されるため、
+  // 思考中 session のアイコンは pane 切替に連動しない。
+  const sessionActivity = useChatStore((s) => s.sessionActivity);
   const activitiesBySession = useMemo(() => {
     const map = new Map<string, ActivityKind>();
-    // sessionId ごとに activity を寄せる
-    const bucket = new Map<string, import("@/lib/stores/chat").ChatActivity[]>();
-    for (const p of Object.values(panes)) {
-      if (!p.currentSessionId) continue;
-      const arr = bucket.get(p.currentSessionId) ?? [];
-      arr.push(p.activity);
-      bucket.set(p.currentSessionId, arr);
-    }
-    for (const [sid, arr] of bucket) {
-      map.set(sid, pickDominantActivity(arr));
+    for (const [sid, activity] of Object.entries(sessionActivity)) {
+      map.set(sid, activity.kind);
     }
     return map;
-  }, [panes]);
+  }, [sessionActivity]);
+
+  // v1.18.0 (DEC-064): session 単位 status (idle / thinking / streaming / error)。
+  // pane とは無関係、session 自身が保持する揮発状態を購読。
+  const sessionVolatile = useSessionStore((s) => s.volatile);
+  const statusBySession = useMemo(() => {
+    const map = new Map<string, SessionStatus>();
+    for (const [sid, v] of Object.entries(sessionVolatile)) {
+      map.set(sid, v.status);
+    }
+    return map;
+  }, [sessionVolatile]);
 
   const [renameTarget, setRenameTarget] = useState<SessionSummary | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -284,6 +288,7 @@ export function SessionList() {
                 onDragEnd={handleDragEnd}
                 currentSessionId={currentSessionId}
                 activitiesBySession={activitiesBySession}
+                statusBySession={statusBySession}
                 onLoad={(id) => void handleLoad(id)}
                 onRename={(s) => openRename(s)}
                 onDelete={(s) => setDeleteTarget(s)}
@@ -458,6 +463,7 @@ function SessionSection({
   onDragEnd,
   currentSessionId,
   activitiesBySession,
+  statusBySession,
   onLoad,
   onRename,
   onDelete,
@@ -471,6 +477,7 @@ function SessionSection({
   onDragEnd: (ev: DragEndEvent, targetKey: string, ids: string[]) => void;
   currentSessionId: string | null;
   activitiesBySession: Map<string, ActivityKind>;
+  statusBySession: Map<string, SessionStatus>;
   onLoad: (id: string) => void;
   onRename: (s: SessionSummary) => void;
   onDelete: (s: SessionSummary) => void;
@@ -494,6 +501,7 @@ function SessionSection({
                 session={s}
                 active={s.id === currentSessionId}
                 activity={activitiesBySession.get(s.id) ?? "idle"}
+                sessionStatus={statusBySession.get(s.id) ?? "idle"}
                 onClick={() => onLoad(s.id)}
                 onRename={() => onRename(s)}
                 onDelete={() => onDelete(s)}
@@ -523,6 +531,7 @@ function SessionSection({
               session={s}
               active={s.id === currentSessionId}
               activity={activitiesBySession.get(s.id) ?? "idle"}
+              sessionStatus={statusBySession.get(s.id) ?? "idle"}
               onClick={() => onLoad(s.id)}
               onRename={() => onRename(s)}
               onDelete={() => onDelete(s)}
@@ -541,6 +550,7 @@ function SortableSessionItem({
   session,
   active,
   activity,
+  sessionStatus,
   onClick,
   onRename,
   onDelete,
@@ -549,6 +559,7 @@ function SortableSessionItem({
   session: SessionSummary;
   active: boolean;
   activity: ActivityKind;
+  sessionStatus: SessionStatus;
   onClick: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -570,6 +581,7 @@ function SortableSessionItem({
         session={session}
         active={active}
         activity={activity}
+        sessionStatus={sessionStatus}
         onClick={onClick}
         onRename={onRename}
         onDelete={onDelete}
@@ -586,6 +598,7 @@ function SessionItem({
   session,
   active,
   activity,
+  sessionStatus,
   onClick,
   onRename,
   onDelete,
@@ -595,10 +608,16 @@ function SessionItem({
   session: SessionSummary;
   active: boolean;
   /**
-   * v3.5 Chunk C: この session に紐づく pane の Claude activity。
-   * load されていない session は `"idle"`（marker 非表示）。
+   * v3.5 Chunk C: session 単位の Claude activity。
+   * v1.18.0 (DEC-064): session 単位 store から直接引かれるため、pane 切替に
+   * 連動しない。load されていない session は `"idle"`（marker 非表示）。
    */
   activity: ActivityKind;
+  /**
+   * v1.18.0 (DEC-064): session 単位 status。pane 切替とは完全に独立に、session 自身が
+   * 保持する揮発状態。right 側のアイコン表示に使う。
+   */
+  sessionStatus: SessionStatus;
   onClick: () => void;
   onRename: () => void;
   onDelete: () => void;
@@ -606,8 +625,6 @@ function SessionItem({
   muted?: boolean;
   /**
    * PM-983: 手動並替モード時に SortableSessionItem から注入される drag handle props。
-   * 存在すれば左端に grip アイコンを表示し、そこのみドラッグ可能にする
-   * （card 本体の click はセッション読込のためドラッグから分離する）。
    */
   dragHandleProps?: React.HTMLAttributes<HTMLDivElement> & Record<string, unknown>;
 }) {
@@ -683,6 +700,9 @@ function SessionItem({
         >
           {title}
         </span>
+        {/* v1.18.0 (DEC-064): session 単位 status icon。pane 切替に連動しない。
+            sessionStatus は session 自身が保持する揮発状態。 */}
+        <SessionStatusIcon status={sessionStatus} />
         <span className="shrink-0 text-[10px] text-muted-foreground">
           {relative}
         </span>
@@ -726,6 +746,57 @@ function SessionItem({
         </DropdownMenu>
       </div>
     </div>
+  );
+}
+
+/**
+ * v1.18.0 (DEC-064): session 単位 status アイコン。
+ *
+ * - `thinking`: Loader2 + 回転アニメ + primary color（考え中）
+ * - `streaming`: Sparkles + パルスアニメ + primary color（応答中）
+ * - `error`: AlertCircle 赤（エラー）
+ * - `idle`: 非表示
+ *
+ * pane 切替で消えない: sessionStatus は session 自身が持つため、どの pane が
+ * どの session を指していても、session 自体が思考中ならアイコンは出続ける。
+ */
+function SessionStatusIcon({ status }: { status: SessionStatus }) {
+  if (status === "idle") return null;
+  const iconClass = "h-3 w-3 shrink-0";
+  if (status === "thinking") {
+    return (
+      <span
+        role="img"
+        aria-label="思考中"
+        title="思考中"
+        className="inline-flex items-center text-primary"
+      >
+        <Loader2 className={cn(iconClass, "motion-safe:animate-spin")} aria-hidden />
+      </span>
+    );
+  }
+  if (status === "streaming") {
+    return (
+      <span
+        role="img"
+        aria-label="応答中"
+        title="応答中"
+        className="inline-flex items-center text-primary"
+      >
+        <Sparkles className={cn(iconClass, "motion-safe:animate-pulse")} aria-hidden />
+      </span>
+    );
+  }
+  // error
+  return (
+    <span
+      role="img"
+      aria-label="エラー"
+      title="エラー"
+      className="inline-flex items-center text-red-500 dark:text-red-400"
+    >
+      <AlertCircle className={iconClass} aria-hidden />
+    </span>
   );
 }
 

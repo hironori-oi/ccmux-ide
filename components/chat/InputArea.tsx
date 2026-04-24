@@ -19,7 +19,13 @@ import { HelpDialog } from "@/components/chat/HelpDialog";
 import { ClearSessionDialog } from "@/components/chat/ClearSessionDialog";
 import { ModelPickerDialog } from "@/components/chat/ModelPickerDialog";
 import { EffortPickerDialog } from "@/components/chat/EffortPickerDialog";
-import { useChatStore, DEFAULT_PANE_ID, type Attachment } from "@/lib/stores/chat";
+import {
+  useChatStore,
+  DEFAULT_PANE_ID,
+  selectAttachmentsForSession,
+  selectStreamingForSession,
+  type Attachment,
+} from "@/lib/stores/chat";
 // DEC-057 v1.11.0: dialog store は session-preferences の継承源として使用しない
 // (project 間 leak 防止)。ModelPickerDialog/EffortPickerDialog/HelpDialog 等で
 // 独立に useDialogStore を参照しているため、import は本ファイルから除去して OK。
@@ -34,15 +40,13 @@ import {
   modelIdToSdkId,
 } from "@/lib/types";
 
-// React 19 + zustand: selector が新配列を返すと getSnapshot cache が効かず
-// infinite loop。固定参照の凍結空配列で回避。
-const EMPTY_ATTACHMENTS: readonly Attachment[] = Object.freeze([]);
+// v1.18.0 (DEC-064): selectAttachmentsForSession が固定参照 EMPTY_ATTACHMENTS を
+// 返すため、本 component での追加 freeze は不要。
 import { useProjectStore, findProjectById } from "@/lib/stores/project";
 import {
   useSessionStore,
   getSdkSessionIdFromCache,
 } from "@/lib/stores/session";
-import { claimNextSendForPane } from "@/hooks/useAllProjectsSidecarListener";
 import { logger } from "@/lib/logger";
 import { callTauri } from "@/lib/tauri-api";
 import { handleBuiltinSlash } from "@/lib/builtin-slash";
@@ -75,14 +79,17 @@ export function InputArea({
 }: {
   paneId?: string;
 }) {
-  const attachments = useChatStore(
-    (s) => (s.panes[paneId]?.attachments ?? EMPTY_ATTACHMENTS) as Attachment[]
+  // v1.18.0 (DEC-064): messages / streaming / attachments は session 単位 store。
+  // pane からは currentSessionId を引いて、そこから session 状態を購読する。
+  const currentSessionId = useChatStore(
+    (s) => s.panes[paneId]?.currentSessionId ?? null
   );
-  const appendAttachment = useChatStore((s) => s.appendAttachment);
-  const clearAttachments = useChatStore((s) => s.clearAttachments);
-  const appendMessage = useChatStore((s) => s.appendMessage);
-  const setStreaming = useChatStore((s) => s.setStreaming);
-  const streaming = useChatStore((s) => s.panes[paneId]?.streaming ?? false);
+  const attachments = useChatStore((s) =>
+    selectAttachmentsForSession(s, currentSessionId)
+  );
+  const streaming = useChatStore((s) =>
+    selectStreamingForSession(s, currentSessionId)
+  );
   const setActivePane = useChatStore((s) => s.setActivePane);
 
   // PRJ-012 v4 / Chunk C: 組込 slash dispatcher が router / workspaceRoot を要求する。
@@ -223,7 +230,8 @@ export function InputArea({
       try {
         const session = await useSessionStore.getState().createNewSession();
         sessionId = session.id;
-        useChatStore.getState().setSessionId(paneId, sessionId);
+        // v1.18.0: setPaneSession で pane と session を紐付け直す
+        useChatStore.getState().setPaneSession(paneId, sessionId);
       } catch (e) {
         toast.error(
           `セッション作成に失敗しました: ${e instanceof Error ? e.message : String(e)}`
@@ -243,17 +251,21 @@ export function InputArea({
         ? `${trimmed}\n\n${attachments.map((a) => `@"${a.path}"`).join("\n")}`
         : trimmed;
 
-    // 画面には user message を添付画像付きで即追加（prompt は裏で sidecar へ）
-    appendMessage(paneId, {
+    // v1.18.0 (DEC-064): session 単位 store に user message を append。
+    // pane は currentSessionId === sessionId のときに selector で描画。
+    useChatStore.getState().appendMessage(sessionId, {
       id: `${id}:u`,
       role: "user",
       content: trimmed,
       attachments: [...attachments],
     });
     setText("");
-    setStreaming(paneId, true);
+    useChatStore.getState().setSessionStreaming(sessionId, true);
     // v3.3.2 Activity: 送信直後は thinking、最初の sidecar event で streaming / tool_use に遷移
-    useChatStore.getState().setActivity(paneId, { kind: "thinking" });
+    useChatStore.getState().setSessionActivity(sessionId, { kind: "thinking" });
+    // v1.18.0: session 単位 status も thinking に。pane 切替しても保持される。
+    useSessionStore.getState().setSessionStatus(sessionId, "thinking");
+    useSessionStore.getState().touchSessionActivity(sessionId);
 
     try {
       // DEC-063 (v1.17.0): session-level lazy spawn。
@@ -265,8 +277,11 @@ export function InputArea({
       const projectCwd = project?.path ?? null;
       if (!projectCwd) {
         toast.error("プロジェクトのパスを解決できませんでした。");
-        setStreaming(paneId, false);
-        useChatStore.getState().setActivity(paneId, { kind: "idle" });
+        useChatStore.getState().setSessionStreaming(sessionId, false);
+        useChatStore
+          .getState()
+          .setSessionActivity(sessionId, { kind: "idle" });
+        useSessionStore.getState().setSessionStatus(sessionId, "idle");
         return;
       }
       // session 別 preferences から model / effort を解決して argv に渡す。
@@ -303,8 +318,11 @@ export function InputArea({
         const msg = e instanceof Error ? e.message : String(e);
         // Max 同時上限到達 or spawn 失敗の場合は toast + 送信中止。
         toast.error(`Claude の起動に失敗しました: ${msg}`);
-        setStreaming(paneId, false);
-        useChatStore.getState().setActivity(paneId, { kind: "idle" });
+        useChatStore.getState().setSessionStreaming(sessionId, false);
+        useChatStore
+          .getState()
+          .setSessionActivity(sessionId, { kind: "idle" });
+        useSessionStore.getState().setSessionStatus(sessionId, "idle");
         return;
       }
       // project-level sidecarStatus map を running に揃える (UI 整合)。
@@ -374,11 +392,8 @@ export function InputArea({
           .getState()
           .sessions.map((s) => ({ id: s.id, sdk: s.sdkSessionId })),
       );
-      // PRJ-012 PM-810 (v3.6 Step 1): 送信直前に自 paneId を pending FIFO キューに
-      // push する。sidecar からの最初の event 到着時に pop され `reqIdToPane` に
-      // 確定 mapping が作られる。以降同 requestId の event は必ず当該 pane に
-      // dispatch される (split second pane 送信時の DEFAULT_PANE_ID 誤配信を解消)。
-      claimNextSendForPane(activeProjectId, paneId);
+      // v1.18.0 (DEC-064): reqId → paneId の FIFO mapping は不要。
+      // event は session_id で直接 dispatch されるため paneId 逆引きは廃止。
 
       // v1.11.0 (DEC-057): session 別 preferences を per-query options として Rust に
       // 渡す。sidecar (handlePrompt) は req.options.{model,maxThinkingTokens,
@@ -423,10 +438,12 @@ export function InputArea({
         resume: sdkSessionId,
         options: perQueryOptions,
       });
-      clearAttachments(paneId);
+      // v1.18.0 (DEC-064): session 単位で attachments をクリア
+      useChatStore.getState().clearAttachments(sessionId);
     } catch (e) {
       toast.error(`送信に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
-      setStreaming(paneId, false);
+      useChatStore.getState().setSessionStreaming(sessionId, false);
+      useSessionStore.getState().setSessionStatus(sessionId, "error");
     }
   }
 
@@ -605,7 +622,28 @@ export function InputArea({
     }
     try {
       const saved = await saveDroppedImage(file);
-      appendAttachment(paneId, saved);
+      // v1.18.0 (DEC-064): attachments は session 単位。送信前に必ず session
+      // があるとは限らないため、ない場合は先に作成する。
+      let sid = useChatStore.getState().panes[paneId]?.currentSessionId ?? null;
+      if (!sid) {
+        if (!activeProjectId) {
+          toast.error(
+            "プロジェクトが選択されていません。画像を添付する前にプロジェクトを選択してください。"
+          );
+          return;
+        }
+        try {
+          const session = await useSessionStore.getState().createNewSession();
+          sid = session.id;
+          useChatStore.getState().setPaneSession(paneId, sid);
+        } catch (e) {
+          toast.error(
+            `セッション作成に失敗しました: ${e instanceof Error ? e.message : String(e)}`
+          );
+          return;
+        }
+      }
+      useChatStore.getState().appendAttachment(sid, saved);
       toast.success("画像を添付しました");
     } catch (err) {
       toast.error(

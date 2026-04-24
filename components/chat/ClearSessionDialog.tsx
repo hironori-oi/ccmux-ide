@@ -102,30 +102,16 @@ export function ClearSessionDialog() {
       //     + useProjectStore.lastSessionId を新 session に書き戻し
       const newSession = await useSessionStore.getState().createNewSession();
 
-      // 2) PM-910 (H1 対応): projectSnapshots 側の活性 pane も明示的に空状態で
-      // 上書きする。project 切替 → 戻りで `restoreProjectSnapshot` が走った時に
-      // 古い messages が復活するのを防ぐ二重 safety net。activeProjectId が
-      // null (未選択) の場合は snapshot も存在しないので skip。
-      if (activeProjectId) {
-        const chatState = useChatStore.getState();
-        const targetPaneId = chatState.activePaneId;
-        chatState.updateSnapshotPane(activeProjectId, targetPaneId, (p) => ({
-          ...p,
-          messages: [],
-          attachments: [],
-          streaming: false,
-          activity: { kind: "idle" },
-          currentSessionId: newSession.id,
-          scrollTargetMessageId: null,
-          highlightedMessageId: null,
-        }));
-        // NOTE: split pane 時 (main + pane-xxx) は active pane のみ上書き。
-        // 他 pane の独立 session はそのまま。updateSnapshotPane は存在しない
-        // paneId の場合 no-op なので保守的。
-      }
-
-      // 念のため attachments もクリア（createNewSession → clearSession は attachments も空にするが保険）
-      useChatStore.getState().clearAttachments();
+      // v1.18.0 (DEC-064): messages / attachments / streaming / activity は
+      // session 単位 store に移行したため、snapshot 側に残留する問題はなくなった。
+      // (createNewSession が hydrateSessionMessages([]) で新 session の空 entry を
+      //  既に作成している。他 pane が指している旧 session はそのまま保持される)。
+      //
+      // 念のため新 session の attachments を明示的に空にする（hydrate 時点で
+      // clearAttachments と同等状態になるが、send 中に発生した attachment の
+      // 取りこぼし対策として冪等に走らせる）。
+      useChatStore.getState().clearAttachments(newSession.id);
+      void activeProjectId; // reserved: project 単位の cleanup が必要になった場合に使用
 
       // 3) PM-910 (H3 対応): sidecar プロセスを silent 再起動して Claude 側
       // context を完全消去する。resume=undefined で送っても CLI / SDK の

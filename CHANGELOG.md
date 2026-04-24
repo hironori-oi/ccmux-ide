@@ -11,6 +11,57 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.18.0] - 2026-04-24
+
+**セッション単位 message store への re-architect** — v1.17 までは
+`panes[paneId].messages` で pane 単位に会話を保持し、sidecar event は reqId
+逆引きで pane を特定して dispatch していた。結果として、session A 送信後に
+別 session B を表示する pane に切り替えると、A の応答が B の pane に誤表示
+される UI 混線や、思考中の session を別 pane に動かすとアイコンが消える
+不具合が発生していた (DEC-064)。v1.18.0 では messages / streaming / attachments
+/ activity をすべて **session 単位の global map** に移し、event は session_id
+で直接 dispatch する構造に変更。pane は現在表示中の session を指す viewport
+として機能するだけになり、pane 切替は session 状態と完全独立に動作する。
+
+### Fixed
+
+- 異なるセッションの応答が別セッションの pane に表示される混線を完全修正
+  (DEC-064)。event は session_id で直接 dispatch されるため、pane 切替や
+  分割状態にかかわらず、当該 session を表示している pane のみに描画される
+- 思考中にセッションを移動するとアイコンが消える不具合を修正。status は
+  session 自身が持つ揮発状態として保持され、pane 切替と完全独立
+
+### Added
+
+- SessionList に状態アイコンを追加（思考中 Loader2 / 応答中 Sparkles /
+  エラー AlertCircle）。pane 切替しても、当該 session が思考中の間はアイコンが
+  表示され続ける
+- `useChatStore` に `sessionMessages` / `sessionStreaming` / `sessionAttachments` /
+  `sessionActivity` を追加、session 単位で全 chat state を保持
+- `useSessionStore` に volatile な `status` / `lastActivityAt` を追加、
+  `setSessionStatus` / `touchSessionActivity` action で更新
+
+### Changed
+
+- message 保存を pane 単位から session 単位に移行、event routing を session_id で
+  直接 append する方式に変更。reqId ベースの FIFO mapping は廃止
+- `panes[*]` から messages / streaming / attachments / activity を剥がし、
+  pane は viewport（currentSessionId / creatingSessionId / scrollTarget /
+  highlight のみ）として機能する構造に refactor
+- `appendMessage` / `updateStreamingMessage` / `finalizeStreamingMessage` /
+  `appendToolUse` / `updateToolUseStatus` / `setSessionStreaming` /
+  `setSessionActivity` / `appendAttachment` / `removeAttachment` /
+  `clearAttachments` の署名を `(sessionId, ...)` に統一
+- `setSessionId` → `setPaneSession(paneId, sessionId)`、`scrollToMessageId` /
+  `clearHighlight` / `clearScrollTarget` は paneId 必須に
+- persist schema を更新（version 2）、旧 v1 形式は migration で破棄（DB が
+  source of truth、次回 session open で復元）
+- `useAllProjectsSidecarListener.claimNextSendForPane` は no-op 化（legacy 互換
+  用に残置）。内部の `reqIdToPane` / `pendingSendsByProject` / `findPaneIdForSession`
+  は撤去
+- ProjectRail / StatusBar / SessionList の activity 集約を session 単位 selector に
+  切り替え。pane / snapshot 経由の集約は廃止
+
 ## [v1.17.0] - 2026-04-24
 
 **session-level sidecar アーキテクチャに移行** — v1.16 までは
