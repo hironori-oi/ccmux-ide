@@ -22,8 +22,6 @@ export const metadata: Metadata = {
     "墨",
     "Claude Code",
     "Claude",
-    "ccmux",
-    "ccmux-ide",
     "Tauri",
     "Desktop",
     "日本語",

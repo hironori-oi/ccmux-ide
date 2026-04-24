@@ -2,23 +2,23 @@ type Mark = "yes" | "no" | "partial";
 
 const rows: Array<{
   label: string;
-  ccmuxIde: Mark;
+  sumi: Mark;
   claudeDesktop: Mark;
   cursor: Mark;
-  ccmux: Mark;
+  warp: Mark;
 }> = [
-  { label: "日本語 UI", ccmuxIde: "yes", claudeDesktop: "no", cursor: "partial", ccmux: "no" },
-  { label: "おしゃれな見た目", ccmuxIde: "yes", claudeDesktop: "partial", cursor: "yes", ccmux: "no" },
-  { label: "壁紙背景", ccmuxIde: "yes", claudeDesktop: "no", cursor: "no", ccmux: "no" },
+  { label: "日本語 UI", sumi: "yes", claudeDesktop: "no", cursor: "partial", warp: "no" },
+  { label: "おしゃれな見た目", sumi: "yes", claudeDesktop: "partial", cursor: "yes", warp: "yes" },
+  { label: "壁紙背景", sumi: "yes", claudeDesktop: "no", cursor: "no", warp: "no" },
   {
-    label: "Slash / Skills / Plugins / MCP 対応",
-    ccmuxIde: "yes",
+    label: "Claude Code の Slash / Skills / Plugins / MCP 対応",
+    sumi: "yes",
     claudeDesktop: "partial",
     cursor: "partial",
-    ccmux: "yes",
+    warp: "partial",
   },
-  { label: "ローカル永続化", ccmuxIde: "yes", claudeDesktop: "no", cursor: "no", ccmux: "yes" },
-  { label: "無料", ccmuxIde: "yes", claudeDesktop: "yes", cursor: "partial", ccmux: "yes" },
+  { label: "ローカル永続化（会話履歴 SQLite + FTS5）", sumi: "yes", claudeDesktop: "no", cursor: "no", warp: "partial" },
+  { label: "無料で全機能利用（OSS / MIT）", sumi: "yes", claudeDesktop: "yes", cursor: "partial", warp: "no" },
 ];
 
 function Cell({ value, highlight = false }: { value: Mark; highlight?: boolean }) {
@@ -58,7 +58,7 @@ export function CompareTable() {
                   Claude Code Desktop
                 </th>
                 <th className="px-5 py-4 text-center font-medium">Cursor</th>
-                <th className="px-5 py-4 text-center font-medium">ccmux (TUI)</th>
+                <th className="px-5 py-4 text-center font-medium">Warp</th>
               </tr>
             </thead>
             <tbody>
@@ -73,7 +73,7 @@ export function CompareTable() {
                 >
                   <td className="px-5 py-4 font-medium text-zinc-100">{row.label}</td>
                   <td className="px-5 py-4 text-center">
-                    <Cell value={row.ccmuxIde} highlight />
+                    <Cell value={row.sumi} highlight />
                   </td>
                   <td className="px-5 py-4 text-center">
                     <Cell value={row.claudeDesktop} />
@@ -82,7 +82,7 @@ export function CompareTable() {
                     <Cell value={row.cursor} />
                   </td>
                   <td className="px-5 py-4 text-center">
-                    <Cell value={row.ccmux} />
+                    <Cell value={row.warp} />
                   </td>
                 </tr>
               ))}
@@ -93,6 +93,39 @@ export function CompareTable() {
         <p className="mt-4 text-center text-xs text-zinc-500">
           ✓ 対応　△ 部分対応　—  非対応 / 不明
         </p>
+
+        <div className="mt-10 grid grid-cols-1 gap-4 text-sm text-zinc-400 md:grid-cols-2">
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-5">
+            <h3 className="text-sm font-semibold text-zinc-100">
+              Warp（Agentic Terminal）との違い
+            </h3>
+            <p className="mt-2 leading-relaxed">
+              <a
+                href="https://www.warp.dev/"
+                target="_blank"
+                rel="noreferrer"
+                className="text-brand-fg hover:underline"
+              >
+                Warp
+              </a>
+              {" "}は Rust 製のモダンターミナル + エージェント環境で、英語圏の一般開発者を主対象に
+              独自 AI（Build $20/月など）を提供します。Sumi は「Claude Code 公式 CLI をフル機能で
+              そのまま GUI 化する」ことに絞った OSS クライアントで、日本語 UI・壁紙背景・MIT 無料・
+              Slash / Skills / Plugins / MCP の完全対応に振り切っています。
+            </p>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/30 p-5">
+            <h3 className="text-sm font-semibold text-zinc-100">
+              Sumi が向いている人
+            </h3>
+            <ul className="mt-2 list-disc space-y-1 pl-5 leading-relaxed">
+              <li>日本語で Claude Code を毎日使いたい</li>
+              <li>会話履歴をローカル端末のみに保持したい（外部送信ゼロ）</li>
+              <li>Slash / Skills / MCP を GUI で一覧・編集したい</li>
+              <li>無料かつ OSS（MIT）で導入・改造したい</li>
+            </ul>
+          </div>
+        </div>
       </div>
     </section>
   );

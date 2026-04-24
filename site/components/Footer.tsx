@@ -73,17 +73,6 @@ export function Footer() {
               <h4 className="font-medium text-sumi-paper">Legal</h4>
               <ul className="mt-3 space-y-2 text-sumi-mist">
                 <li>MIT License</li>
-                <li>
-                  Based on{" "}
-                  <a
-                    href="https://github.com/Shin-sibainu/ccmux"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hover:text-sumi-paper"
-                  >
-                    ccmux by @Shin-sibainu
-                  </a>
-                </li>
               </ul>
             </div>
           </div>

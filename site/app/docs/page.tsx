@@ -33,13 +33,10 @@ export default function DocsIndexPage() {
         （Slash コマンド、Skills、Plugins、MCP）をそのまま扱えます。
       </p>
       <p>
-        Sumi は OSS プロジェクト <a href="https://github.com/Shin-sibainu/ccmux" target="_blank" rel="noreferrer">ccmux</a>
-        （MIT, @Shin-sibainu）の Rust モジュール
-        （<code>image_paste</code>, <code>memory_tree</code>, <code>worktree</code>,{" "}
-        <code>config</code>, <code>search_fts</code>, <code>claude_monitor</code>,{" "}
-        <code>slash_palette</code>）を再利用しています。ccmux が TUI のターミナル
-        マルチプレクサであるのに対し、Sumi はフル機能の GUI IDE であり、カテゴリ
-        としては別製品です。
+        Sumi は GUI IDE に特化したデスクトップクライアントです。Rust バックエンド、
+        Tauri 2 の軽量 WebView、Node.js sidecar の 3 層構成で、Claude Code 本体の
+        エコシステム（Slash / Skills / Plugins / MCP）をそのまま GUI から扱えます。
+        詳細な内部構成は <Link href="/docs/architecture">アーキテクチャ</Link> を参照してください。
       </p>
 
       <h2 id="why">なぜ Sumi？</h2>

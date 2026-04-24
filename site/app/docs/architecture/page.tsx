@@ -3,7 +3,7 @@ import { DocsLayout } from "@/components/DocsLayout";
 export const metadata = {
   title: "アーキテクチャ",
   description:
-    "Sumi の 3 層アーキテクチャ（Tauri 2 フロント + Rust バックエンド + Node.js sidecar）と Rust モジュールの出自。",
+    "Sumi の 3 層アーキテクチャ（Tauri 2 フロント + Rust バックエンド + Node.js sidecar）と Rust モジュールの概要。",
 };
 
 const toc = [
@@ -15,60 +15,49 @@ const toc = [
   { id: "data", label: "データ保存とプライバシー" },
 ];
 
-const modules: Array<{ name: string; origin: "ccmux" | "sumi"; desc: string }> = [
+const modules: Array<{ name: string; desc: string }> = [
   {
     name: "image_paste",
-    origin: "ccmux",
     desc: "クリップボード画像の取得・PNG/JPEG 正規化。Ctrl+V ペーストに使用。",
   },
   {
     name: "memory_tree",
-    origin: "ccmux",
     desc: "Global / Project 2 スコープの CLAUDE.md ツリー構築と読み書き。",
   },
   {
     name: "worktree",
-    origin: "ccmux",
     desc: "Git worktree 一覧 / 切替 / 作成。sidecar 再起動トリガを発火。",
   },
   {
     name: "config",
-    origin: "ccmux",
     desc: "ユーザー設定 / プロジェクト設定の読み書き・マイグレーション。",
   },
   {
     name: "search_fts",
-    origin: "ccmux",
     desc: "SQLite FTS5 による会話履歴 / ファイル / Skills の横断検索。",
   },
   {
     name: "claude_monitor",
-    origin: "ccmux",
     desc: "Claude CLI プロセスの監視。`~/.claude/` 配下の変更検知を含む。",
   },
   {
     name: "slash_palette",
-    origin: "ccmux",
     desc: "project / global の Slash コマンドをスキャンしてパレットに供給。",
   },
   {
     name: "keyring_auth",
-    origin: "sumi",
     desc: "OS keyring（Credential Manager / Keychain / Secret Service）経由で API Key を保管。",
   },
   {
     name: "sidecar_supervisor",
-    origin: "sumi",
     desc: "Claude Agent SDK の Node.js sidecar プロセスを起動・cwd 連動で再起動。",
   },
   {
     name: "pty_terminal",
-    origin: "sumi",
     desc: "Rust PTY。xterm.js と双方向ブリッジし組込ターミナルを実現。",
   },
   {
     name: "updater_channel",
-    origin: "sumi",
     desc: "tauri-plugin-updater のラッパー。GitHub Release `latest.json` ポーリング。",
   },
 ];
@@ -112,10 +101,9 @@ export default function ArchitecturePage() {
 
       <h2 id="backend">Rust バックエンド</h2>
       <p>
-        Tauri 2 を中核に、ccmux 由来のモジュールと Sumi 独自モジュールを
-        組み合わせています。OS ネイティブ機能（keyring、PTY、ファイル監視、
-        クリップボード画像）は Rust 側で実装し、フロントエンドには Tauri の
-        コマンド / イベントブリッジ経由で公開します。
+        Tauri 2 を中核に、OS ネイティブ機能（keyring、PTY、ファイル監視、
+        クリップボード画像、FTS5 検索）を Rust 側で実装し、フロントエンドには
+        Tauri のコマンド / イベントブリッジ経由で公開します。
       </p>
 
       <h2 id="sidecar">Node.js sidecar</h2>
@@ -127,15 +115,11 @@ export default function ArchitecturePage() {
       </p>
 
       <h2 id="rust-modules">Rust モジュール一覧</h2>
-      <p>
-        下表は Rust 側の主要モジュールと、その出自（ccmux 由来か Sumi 独自か）
-        の対応表です。
-      </p>
+      <p>下表は Rust 側の主要モジュールとその役割です。</p>
       <table>
         <thead>
           <tr>
             <th>モジュール</th>
-            <th>出自</th>
             <th>説明</th>
           </tr>
         </thead>
@@ -144,13 +128,6 @@ export default function ArchitecturePage() {
             <tr key={m.name}>
               <td>
                 <code>{m.name}</code>
-              </td>
-              <td>
-                {m.origin === "ccmux" ? (
-                  <span className="text-zinc-400">ccmux 由来</span>
-                ) : (
-                  <span className="text-brand-fg">Sumi 独自</span>
-                )}
               </td>
               <td>{m.desc}</td>
             </tr>
