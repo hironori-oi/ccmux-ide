@@ -11,6 +11,30 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.18.1] - 2026-04-24
+
+**updater 誤判定と Release notes fallback の同時 fix** — v1.18.0 で観測された
+「同一バージョン同士で『新しいバージョンが利用可能』と誤表示される」バグと、
+GitHub Release body が「自動生成された Release です」の fallback 文字列に
+落ちる awk 抽出バグを同時に修正（DEC-065）。
+
+### Fixed
+
+- 同一バージョン同士で UpdateDialog が「新しいバージョンが利用可能です」と
+  誤表示されるバグを修正。UpdateNotifier に `getVersion()` + `isNewerVersion()`
+  の defensive check を追加し、`current >= latest` の場合は `status="idle"` を
+  維持して toast / dialog を抑制する
+- GitHub Release 作成時に `.github/workflows/release.yml` が CHANGELOG.md から
+  該当バージョンのセクションを抽出できず fallback notes に落ちるバグを修正。
+  `awk -v tag="[$TAG_NAME]"` + `$0 ~ "^## " tag` は regex match で `[...]` が
+  character class として解釈され literal match しなかったため、
+  `index($0, "## [$TAG_NAME]") == 1` の literal 先頭一致に切り替え
+
+### Added
+
+- `lib/utils/semver.ts` に軽量 `compareVersion` / `isNewerVersion` helper を追加。
+  MAJOR.MINOR.PATCH を数値比較し、pre-release suffix は現状無視して core のみを見る
+
 ## [v1.18.0] - 2026-04-24
 
 **セッション単位 message store への re-architect** — v1.17 までは

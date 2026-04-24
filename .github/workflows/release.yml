@@ -293,12 +293,17 @@ jobs:
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          # CHANGELOG.md から `## [v0.1.0]` 〜 次の `## [` 直前までを awk で抽出
+          # CHANGELOG.md から `## [v1.18.0] - 2026-04-24` 〜 次の `## [` 直前までを
+          # awk で抽出。v1.18.1 fix: `awk -v tag="[v1.18.0]"` + `$0 ~ "^## " tag` で
+          # regex match させると `[v1.18.0]` が character class として解釈され
+          # literal match しなくなるバグがあった（fallback notes に落ちる原因）。
+          # `index($0, "## " tag) == 1` で先頭一致の literal match に変更し、
+          # 終了条件は `substr($0, 1, 4) == "## ["` で次の見出しを判定する。
           NOTES_FILE="release-notes.md"
-          awk -v tag="[$TAG_NAME]" '
-            $0 ~ "^## " tag {flag=1; print; next}
-            flag && /^## \[/ {flag=0}
-            flag {print}
+          awk -v header="## [$TAG_NAME]" '
+            index($0, header) == 1 { flag = 1; print; next }
+            flag && substr($0, 1, 4) == "## [" { flag = 0 }
+            flag { print }
           ' CHANGELOG.md > "$NOTES_FILE"
 
           if [ ! -s "$NOTES_FILE" ]; then

@@ -33,11 +33,13 @@
  */
 
 import { useCallback, useEffect, useRef } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { toast } from "sonner";
 
 import { useUpdaterStore } from "@/lib/stores/updater";
+import { isNewerVersion } from "@/lib/utils/semver";
 
 const STARTUP_CHECK_DELAY_MS = 3_000;
 const CHECK_UPDATE_EVENT = "ccmux:check-update";
@@ -214,7 +216,35 @@ export function UpdateNotifier() {
         return;
       }
 
-      const version = update.version ?? "(不明)";
+      // v1.18.1 DEC-065 defensive check:
+      // tauri-plugin-updater が latest.json の比較ミスや古い cache で
+      // `available=true` を返してしまうケースに備え、current version と
+      // latest version を MAJOR.MINOR.PATCH で数値比較して
+      // `current >= latest` なら通知を抑制する（v1.18.0 で observed: 同一
+      // バージョン同士で Dialog が誤表示されるバグ対策）。
+      const remoteVersion = update.version ?? "";
+      let currentVersion = "";
+      try {
+        currentVersion = await getVersion();
+      } catch (err) {
+        console.warn("[updater] getVersion failed", err);
+      }
+
+      if (!remoteVersion || !isNewerVersion(currentVersion, remoteVersion)) {
+        console.info(
+          `[updater] suppress notification: current=${currentVersion} >= latest=${remoteVersion}`
+        );
+        setStatus("idle");
+        setLatestVersion(null);
+        latestUpdateRef = null;
+        if (opts.manual) {
+          toast.info("現在のバージョンは最新です");
+        }
+        busyRef.current = false;
+        return;
+      }
+
+      const version = remoteVersion || "(不明)";
       latestUpdateRef = update;
       setLatestVersion(version);
       setStatus("available");
