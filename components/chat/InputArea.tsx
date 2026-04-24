@@ -256,47 +256,64 @@ export function InputArea({
     useChatStore.getState().setActivity(paneId, { kind: "thinking" });
 
     try {
-      // v3.5.8 (2026-04-20): 停止中 sidecar の自動起動を廃止。
-      // 旧: 送信時に sidecar が未起動でも ensureSidecarRunning で自動起動し、
-      //     ユーザーが「停止」した意図が無視されていた。
-      // 新: stopped / error の場合は送信を拒否、TitleBar「起動」ボタンを促す。
-      //     starting / stopping（遷移中）の場合のみ polling で待つ。
-      const projectStore = useProjectStore.getState();
-      const initialStatus = projectStore.getSidecarStatus(activeProjectId);
-      if (initialStatus === "stopped" || initialStatus === "error") {
-        toast.error(
-          "Claude が停止中です。画面上部の「起動」ボタンを押してから送信してください。"
-        );
-        // 表示中のユーザーメッセージは残すが、streaming / thinking 状態を解除
+      // DEC-063 (v1.17.0): session-level lazy spawn。
+      // 当該 session の sidecar が未起動なら send 直前に起動する (idempotent)。
+      // Rust 側 Max 同時 8 session 制限超過時は Err → toast でユーザに通知。
+      const project = useProjectStore.getState().projects.find(
+        (p) => p.id === activeProjectId
+      );
+      const projectCwd = project?.path ?? null;
+      if (!projectCwd) {
+        toast.error("プロジェクトのパスを解決できませんでした。");
         setStreaming(paneId, false);
         useChatStore.getState().setActivity(paneId, { kind: "idle" });
         return;
       }
-      if (initialStatus !== "running") {
-        // starting / stopping（遷移中）: running になるまで polling で待つ（最大 15s）
-        const POLL_INTERVAL_MS = 100;
-        const POLL_TIMEOUT_MS = 15_000;
-        let waited = 0;
-        while (waited < POLL_TIMEOUT_MS) {
-          const s = useProjectStore.getState().getSidecarStatus(activeProjectId);
-          if (s === "running") break;
-          if (s === "error" || s === "stopped") {
-            throw new Error(
-              "Claude が起動していません。画面上部の「起動」ボタンを押してください。"
-            );
-          }
-          await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-          waited += POLL_INTERVAL_MS;
-        }
-        const finalStatus = useProjectStore
-          .getState()
-          .getSidecarStatus(activeProjectId);
-        if (finalStatus !== "running") {
-          throw new Error(
-            `Claude プロセスが起動中です（状態: ${finalStatus}）。数秒待ってから再送信してください。`
-          );
-        }
+      // session 別 preferences から model / effort を解決して argv に渡す。
+      // 2 回目以降の send ではすでに sidecar が立ち上がっているため Rust 側 idempotent
+      // 分岐で skip される (argv 不要、options 経由で per-query 切替)。
+      const prefStateForStart = useSessionPreferencesStore.getState();
+      const projectPrefForStart = prefStateForStart.perProject[activeProjectId] ?? null;
+      const startGlobalDefaults: SessionPreferences = {
+        model: projectPrefForStart?.model ?? null,
+        effort: projectPrefForStart?.effort ?? null,
+        permissionMode:
+          projectPrefForStart?.permissionMode ?? DEFAULT_PERMISSION_MODE,
+        allowedTools: projectPrefForStart?.allowedTools ?? [],
+        deniedTools: projectPrefForStart?.deniedTools ?? [],
+      };
+      const startPrefs = resolveSessionPreferences(
+        prefStateForStart,
+        sessionId,
+        startGlobalDefaults,
+      );
+      const startSdkModel = modelIdToSdkId(startPrefs.model);
+      const startEffortMeta = startPrefs.effort
+        ? EFFORT_CHOICES.find((e) => e.id === startPrefs.effort) ?? null
+        : null;
+      try {
+        await callTauri<void>("start_agent_sidecar", {
+          sessionId,
+          projectId: activeProjectId,
+          cwd: projectCwd,
+          model: startSdkModel ?? null,
+          thinkingTokens: startEffortMeta?.thinkingTokens ?? null,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        // Max 同時上限到達 or spawn 失敗の場合は toast + 送信中止。
+        toast.error(`Claude の起動に失敗しました: ${msg}`);
+        setStreaming(paneId, false);
+        useChatStore.getState().setActivity(paneId, { kind: "idle" });
+        return;
       }
+      // project-level sidecarStatus map を running に揃える (UI 整合)。
+      useProjectStore.setState((state) => ({
+        sidecarStatus: {
+          ...state.sidecarStatus,
+          [activeProjectId]: "running",
+        },
+      }));
 
       // v3.3 DEC-033: projectId を Rust に渡す。attachments は parallel sidecar
       // 経路で渡せるよう配列 shape で同梱（現行 Rust command は `prompt` に
@@ -398,12 +415,11 @@ export function InputArea({
       if (effortMeta) perQueryOptions.maxThinkingTokens = effortMeta.thinkingTokens;
 
       await callTauri<void>("send_agent_prompt", {
-        projectId: activeProjectId,
+        // DEC-063 (v1.17.0): sidecar は session 単位で起動されているため sessionId で特定する。
+        sessionId,
         id,
         prompt,
         attachments: attachments.map((a) => ({ path: a.path })),
-        // Rust 側は `resume: Option<String>`、null/undefined を送ると
-        // serde が None として扱う。明示的に null を渡しても same shape。
         resume: sdkSessionId,
         options: perQueryOptions,
       });

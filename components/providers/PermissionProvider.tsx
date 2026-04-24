@@ -99,6 +99,8 @@ export function PermissionProvider(): React.ReactElement {
  *   }
  */
 interface RustPermissionEventPayload {
+  // DEC-063 (v1.17.0): Rust が転送時に sessionId / projectId を両方 payload に含める。
+  sessionId: string;
   projectId: string;
   envelope: {
     type: string;
@@ -106,6 +108,7 @@ interface RustPermissionEventPayload {
     payload: {
       requestId?: string;
       sessionId?: string | null;
+      projectId?: string | null;
       toolName?: string;
       toolInput?: unknown;
     };
@@ -129,8 +132,9 @@ function extractPermissionRequest(
 
   return {
     id: p.requestId,
+    // DEC-063 (v1.17.0): Rust 側 event wrapper の sessionId を優先、envelope 側を fallback。
+    sessionId: payload.sessionId || (typeof p.sessionId === "string" ? p.sessionId : ""),
     projectId: payload.projectId,
-    sessionId: typeof p.sessionId === "string" ? p.sessionId : null,
     toolName: p.toolName,
     toolInput,
     createdAt: Date.now(),
@@ -204,7 +208,8 @@ async function sendAutoResponse(
 ): Promise<void> {
   try {
     await callTauri<void>("resolve_permission_request", {
-      projectId: req.projectId,
+      // DEC-063 (v1.17.0): sidecar は session 単位。
+      sessionId: req.sessionId,
       requestId: req.id,
       decision:
         behavior === "allow"

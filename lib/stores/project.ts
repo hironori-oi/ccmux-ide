@@ -425,10 +425,11 @@ export const useProjectStore = create<ProjectState>()(
       },
 
       removeProject: async (id) => {
-        // v3.3 (DEC-033): sidecar を先に停止してから registry から外す。
-        // stop が失敗しても（プロセス既に死んでいた等）登録解除は続行。
+        // DEC-063 (v1.17.0): project 配下の全 session sidecar を一括 kill する。
+        // Rust 側 `stop_project_sidecars(projectId)` が HashMap から当該 project_id
+        // に一致する entry を drain+kill して、killed session_id 配列を返す。
         try {
-          await get().stopSidecar(id);
+          await callTauri<string[]>("stop_project_sidecars", { projectId: id });
         } catch {
           // silent fallback: ログに残した上で registry 更新は継続
         }
@@ -571,19 +572,23 @@ export const useProjectStore = create<ProjectState>()(
           const thinkingTokens =
             EFFORT_CHOICES.find((c) => c.id === uiEffortId)?.thinkingTokens;
 
-          await callTauri<void>("start_agent_sidecar", {
-            projectId: id,
-            cwd: project.path,
-            // null / undefined は Rust 側で `Option::None` として扱われ、
-            // sidecar 起動 argv への追加がスキップされる (= SDK デフォルトに委譲)。
-            model: model ?? null,
-            thinkingTokens: thinkingTokens ?? null,
-          });
+          // DEC-063 (v1.17.0): sidecar は session 単位で起動する。
+          // ここでの「project-level の起動」は「現在 active な session の sidecar を
+          // 先行起動する」意味にマッピングする。active session が未確定なら
+          // InputArea 側の初回 send で lazy 起動される (= 安全に no-op)。
+          const sessionMod = await import("@/lib/stores/session");
+          const sid = sessionMod.useSessionStore.getState().currentSessionId;
+          if (sid) {
+            await callTauri<void>("start_agent_sidecar", {
+              sessionId: sid,
+              projectId: id,
+              cwd: project.path,
+              model: model ?? null,
+              thinkingTokens: thinkingTokens ?? null,
+            });
+          }
           set((state) => ({
             sidecarStatus: { ...state.sidecarStatus, [id]: "running" },
-            // v3.5.16 PM-840: 実起動時の model / effort を project に記録。
-            // StatusBar の ModelPickerPopover / EffortPickerPopover が本値を
-            // 表示することで「StatusBar 表示 = 実動作モデル」が一致する。
             projects: state.projects.map((p) =>
               p.id === id
                 ? {
@@ -632,11 +637,11 @@ export const useProjectStore = create<ProjectState>()(
           sidecarStatus: { ...state.sidecarStatus, [id]: "stopping" },
         }));
         try {
-          await callTauri<void>("stop_agent_sidecar", { projectId: id });
+          // DEC-063 (v1.17.0): project 単位の停止は「当該 project に属する全 session
+          // sidecar を一括 kill」にマッピングする。
+          await callTauri<string[]>("stop_project_sidecars", { projectId: id });
           set((state) => ({
             sidecarStatus: { ...state.sidecarStatus, [id]: "stopped" },
-            // v3.5.16 PM-840: 停止時は runningModel / runningEffort を null に戻す。
-            // これにより StatusBar の picker は dialog default にフォールバックする。
             projects: state.projects.map((p) =>
               p.id === id
                 ? { ...p, runningModel: null, runningEffort: null }
@@ -703,17 +708,13 @@ export const useProjectStore = create<ProjectState>()(
           sidecarStatus: { ...state.sidecarStatus, [id]: "starting" },
         }));
 
-        // 停止フェーズ: running / error なら stop_agent_sidecar で確実に kill を
+        // 停止フェーズ: running / error なら stop_project_sidecars で確実に kill を
         // 待ってから新しい sidecar を spawn する。"stopped" なら skip（既に死んでる）。
         if (current === "running" || current === "error") {
           try {
-            // HashMap からの remove を await で確実に待つ（race 対策）。
-            // stopSidecar 内部で status=stopping → stopped を遷移させるが、
-            // 既に本関数冒頭で sidecarStatus=starting に書き換えてしまっているため、
-            // 直接 Rust command を叩く。
-            await callTauri<void>("stop_agent_sidecar", { projectId: id });
+            // DEC-063 (v1.17.0): project 全 session sidecar を一括停止。
+            await callTauri<string[]>("stop_project_sidecars", { projectId: id });
           } catch (e) {
-            // stop 失敗しても spawn はリトライ可能（Rust 側 idempotent）。warn のみ。
             console.warn(
               `[project-store] restartSidecarWithModel: stop failed for ${id}:`,
               e
@@ -721,18 +722,23 @@ export const useProjectStore = create<ProjectState>()(
           }
         }
 
-        // 起動フェーズ: 新 model / effort で spawn。
+        // 起動フェーズ: 現在 active な session 向けに spawn (それ以外は lazy)。
         try {
           const sdkModel = modelIdToSdkId(model);
           const thinkingTokens = effort
             ? EFFORT_CHOICES.find((c) => c.id === effort)?.thinkingTokens
             : undefined;
-          await callTauri<void>("start_agent_sidecar", {
-            projectId: id,
-            cwd: project.path,
-            model: sdkModel ?? null,
-            thinkingTokens: thinkingTokens ?? null,
-          });
+          const sessionMod = await import("@/lib/stores/session");
+          const sid = sessionMod.useSessionStore.getState().currentSessionId;
+          if (sid) {
+            await callTauri<void>("start_agent_sidecar", {
+              sessionId: sid,
+              projectId: id,
+              cwd: project.path,
+              model: sdkModel ?? null,
+              thinkingTokens: thinkingTokens ?? null,
+            });
+          }
           set((state) => ({
             sidecarStatus: { ...state.sidecarStatus, [id]: "running" },
             projects: state.projects.map((p) =>
@@ -788,10 +794,11 @@ export const useProjectStore = create<ProjectState>()(
         }));
 
         // 停止フェーズ: running / error / starting / stopping 全て kill に寄せる。
-        // stop_agent_sidecar は Rust 側 idempotent なので HashMap に無ければ no-op。
+        // stop_project_sidecars は Rust 側 idempotent (該当なしなら空配列)。
         if (current !== "stopped") {
           try {
-            await callTauri<void>("stop_agent_sidecar", { projectId: id });
+            // DEC-063 (v1.17.0): project 全 session sidecar を一括停止。
+            await callTauri<string[]>("stop_project_sidecars", { projectId: id });
           } catch (e) {
             console.warn(
               `[project-store] restartSidecarForClear: stop failed for ${id}:`,
@@ -808,12 +815,17 @@ export const useProjectStore = create<ProjectState>()(
           const thinkingTokens = currentEffort
             ? EFFORT_CHOICES.find((c) => c.id === currentEffort)?.thinkingTokens
             : undefined;
-          await callTauri<void>("start_agent_sidecar", {
-            projectId: id,
-            cwd: project.path,
-            model: sdkModel ?? null,
-            thinkingTokens: thinkingTokens ?? null,
-          });
+          const sessionMod = await import("@/lib/stores/session");
+          const sid = sessionMod.useSessionStore.getState().currentSessionId;
+          if (sid) {
+            await callTauri<void>("start_agent_sidecar", {
+              sessionId: sid,
+              projectId: id,
+              cwd: project.path,
+              model: sdkModel ?? null,
+              thinkingTokens: thinkingTokens ?? null,
+            });
+          }
           set((state) => ({
             sidecarStatus: { ...state.sidecarStatus, [id]: "running" },
           }));
@@ -1031,20 +1043,24 @@ export const useProjectStore = create<ProjectState>()(
           const live = useProjectStore.getState();
           try {
             const { invoke } = await import("@tauri-apps/api/core");
+            // DEC-063 (v1.17.0): SidecarInfo は session 単位 ({sessionId, projectId, ...})。
+            // ここでは「当該 project に属する session sidecar が 1 つでも生きていれば
+            // project を running 扱い」にマッピングする (UI 互換)。
             interface SidecarInfo {
+              sessionId: string;
               projectId: string;
               cwd: string;
               startedAt: number;
+              pid: number;
             }
             const active = await invoke<SidecarInfo[]>("list_active_sidecars");
-            const runningIds = new Set(active.map((s) => s.projectId));
+            const runningProjectIds = new Set(active.map((s) => s.projectId));
             const statusMap: Record<string, import("@/lib/sidecar-status").SidecarStatus> = {};
             for (const p of live.projects) {
-              statusMap[p.id] = runningIds.has(p.id) ? "running" : "stopped";
+              statusMap[p.id] = runningProjectIds.has(p.id) ? "running" : "stopped";
             }
             useProjectStore.setState({ sidecarStatus: statusMap });
           } catch (e) {
-            // Tauri env でない or invoke 失敗: 全 stopped にフォールバック
             console.warn("[project-store] list_active_sidecars failed:", e);
           }
         })();

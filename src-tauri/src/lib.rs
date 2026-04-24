@@ -15,7 +15,8 @@ use commands::{
     // 新規 `send_agent_interrupt` / `list_active_sidecars` を追加登録する。
     agent::{
         list_active_sidecars, resolve_permission_request, send_agent_interrupt,
-        send_agent_prompt, start_agent_sidecar, stop_agent_sidecar, AgentState,
+        send_agent_prompt, start_agent_sidecar, stop_agent_sidecar, stop_project_sidecars,
+        AgentState,
     },
     builtin_slash::{
         builtin_init_claude_md, list_builtin_slashes, read_mcp_config, write_mcp_config,
@@ -147,6 +148,8 @@ pub fn run() {
             send_agent_prompt,
             send_agent_interrupt,
             stop_agent_sidecar,
+            // DEC-063 (v1.17.0): project 削除 cascade 用の一括 kill command。
+            stop_project_sidecars,
             list_active_sidecars,
             // PRJ-012 v1.13.0 / DEC-059 案B: ツール実行承認 UI の応答コマンド。
             // Frontend の PermissionDialog から呼ばれ、sidecar stdin に

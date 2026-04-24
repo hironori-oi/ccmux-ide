@@ -1,10 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { setupE2EPage } from "./helpers";
-import {
-  emitMockEvent,
-  FIXTURE_WITH_TEST_PROJECT,
-  AGENT_RAW_EVENT,
-} from "./fixtures";
+import { setupE2EPage, FIXTURE_WITH_ONE_SESSION } from "./helpers";
+import { emitMockEvent } from "./fixtures";
 
 /**
  * PM-290 シナリオ 5 / v3.3.1 Chunk B (S-1): Monaco Diff Viewer（Edit tool）。
@@ -20,17 +16,33 @@ import {
  */
 test.describe("Monaco Diff for Edit tool", () => {
   test.beforeEach(async ({ page }) => {
-    await setupE2EPage(page, FIXTURE_WITH_TEST_PROJECT);
+    // DEC-063 (v1.17.0): listener は session 単位 event を subscribe するため、
+    // fixture に最低 1 session を含めておく必要がある。AGENT_RAW_EVENT 相当の
+    // event は sess-existing-1 に向けて emit する。
+    await setupE2EPage(page, FIXTURE_WITH_ONE_SESSION);
   });
 
   test("Edit tool renders ToolUseCard with expandable Monaco diff", async ({
     page,
   }) => {
     await page.goto("/workspace");
+    await page.waitForTimeout(600);
+
+    // session を active pane に load しておく (listener が subscribe するのを待つ)
+    // sess-existing-1 は FIXTURE_WITH_ONE_SESSION が seed する session。
+    // SessionList の listbox option 経由で選択する (button role ではなく option role)。
+    const sessionOption = page.getByRole("option", { name: /最初のセッション/ }).first();
+    if (await sessionOption.count()) {
+      await sessionOption.click();
+    } else {
+      // fallback: listbox item を tabindex で直接クリック
+      await page.locator('[role="option"]').first().click().catch(() => {});
+    }
     await page.waitForTimeout(400);
 
-    // Edit tool の tool_use event を NDJSON で注入
+    // Edit tool の tool_use event を NDJSON で注入。DEC-063: event は session 単位。
     const id = "e2e-diff-1";
+    const sessionRawEvent = "agent:sess-existing-1:raw";
     const toolUseEvent = JSON.stringify({
       type: "message",
       id,
@@ -52,7 +64,7 @@ test.describe("Monaco Diff for Edit tool", () => {
         },
       },
     });
-    await emitMockEvent(page, AGENT_RAW_EVENT, toolUseEvent);
+    await emitMockEvent(page, sessionRawEvent, toolUseEvent);
 
     // ToolUseCard が出る
     await expect(page.getByText("ファイル編集").first()).toBeVisible({

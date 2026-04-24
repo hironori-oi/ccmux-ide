@@ -61,6 +61,23 @@ function parseProjectIdFromArgv(): string | null {
 }
 
 /**
+ * DEC-063 (v1.17.0): argv から `--session-id=<uuid>` を抽出する。
+ *
+ * v1.17.0 以降、sidecar は session 単位で起動されるため session_id が必須になった。
+ * ready / permission_request 等の outbound payload に含めて frontend 側の逆引き /
+ * 表示に使う。Legacy fallback (project-id のみ) で起動された sidecar は null を返す。
+ */
+function parseSessionIdFromArgv(): string | null {
+  for (const arg of process.argv.slice(2)) {
+    if (arg.startsWith("--session-id=")) {
+      const id = arg.slice("--session-id=".length).trim();
+      if (id.length > 0) return id;
+    }
+  }
+  return null;
+}
+
+/**
  * PM-760 / v3.4.9 Chunk A: argv から `--model=<id>` を抽出する。
  *
  * Rust 側 `start_agent_sidecar` が UI の ModelPickerPopover 選択値を
@@ -98,6 +115,8 @@ function parseThinkingTokensFromArgv(): number | null {
 }
 
 const SIDECAR_PROJECT_ID: string | null = parseProjectIdFromArgv();
+/** DEC-063: session 単位 sidecar 起動時の session UUID (v1.17.0 以降必須)。 */
+const SIDECAR_SESSION_ID: string | null = parseSessionIdFromArgv();
 /** PM-760: 起動時に選択されていた model id (`claude-opus-4-7` 等)。 */
 const SIDECAR_DEFAULT_MODEL: string | null = parseModelFromArgv();
 /**
@@ -379,10 +398,13 @@ function makeCanUseTool(reqId: string): CanUseTool {
   return async (toolName, input, options) => {
     const permId = randomUUID();
 
-    // emit するための payload を先に組む
+    // emit するための payload を先に組む。
+    // DEC-063 (v1.17.0): sessionId は SIDECAR_SESSION_ID (session-level)、
+    // projectId は別フィールドで保持 (permission dialog の scope 判定用)。
     const payload: Record<string, unknown> = {
       requestId: permId,
-      sessionId: SIDECAR_PROJECT_ID,
+      sessionId: SIDECAR_SESSION_ID,
+      projectId: SIDECAR_PROJECT_ID,
       promptRequestId: reqId,
       toolName,
       toolInput: input,
@@ -814,14 +836,18 @@ function main(): void {
     process.exit(0);
   });
 
-  // ready 通知（v3.3 DEC-033: projectId を含める）
+  // ready 通知（DEC-063: sessionId / projectId 両方を含める）
   send({
     type: "ready",
     id: "ready",
-    payload: { version: "0.1.0", projectId: SIDECAR_PROJECT_ID },
+    payload: {
+      version: "0.1.0",
+      sessionId: SIDECAR_SESSION_ID,
+      projectId: SIDECAR_PROJECT_ID,
+    },
   });
   process.stderr.write(
-    `Sumi sidecar ready (projectId=${SIDECAR_PROJECT_ID ?? "<unset>"})\n`
+    `Sumi sidecar ready (sessionId=${SIDECAR_SESSION_ID ?? "<unset>"}, projectId=${SIDECAR_PROJECT_ID ?? "<unset>"})\n`
   );
 }
 

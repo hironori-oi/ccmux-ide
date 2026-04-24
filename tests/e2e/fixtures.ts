@@ -307,36 +307,81 @@ export async function installTauriMock(
         return null;
       }
 
-      // ---------- agent sidecar (v3.3 DEC-033 Multi-Sidecar) ----------
+      // ---------- agent sidecar (DEC-063 v1.17.0 Session-Level) ----------
+      // v1.17.0: sidecar は session 単位で起動される。mock は sessionId を key に
+      // 起動状態を管理し、`list_active_sidecars` / `agent:{sessionId}:raw` 経路で
+      // frontend に event を流す。legacy key (projectId) も旧 spec 互換で seed する。
       if (cmd === "start_agent_sidecar") {
-        // v1.1.1 PM-946: sidecar 起動を mock。以降 `list_active_sidecars` は
-        // 本 projectId を "running" として返す (= sidecarStatus map が `running`
-        // に rebuild され、InputArea の送信 guard を通過する)。
+        const sid = (args?.sessionId as string) ?? null;
         const pid = (args?.projectId as string) ?? null;
-        if (pid) mockState.runningSidecarIds.add(pid);
+        if (sid) {
+          mockState.runningSidecarIds.add(sid);
+          (mockState as { sidecarSessionToProject?: Record<string, string> })
+            .sidecarSessionToProject = {
+            ...((mockState as {
+              sidecarSessionToProject?: Record<string, string>;
+            }).sidecarSessionToProject ?? {}),
+            [sid]: pid ?? "",
+          };
+        }
+        if (pid) mockState.runningSidecarIds.add(pid); // legacy
         return null;
       }
       if (cmd === "stop_agent_sidecar") {
+        const sid = (args?.sessionId as string) ?? null;
+        if (sid) mockState.runningSidecarIds.delete(sid);
+        return null;
+      }
+      if (cmd === "stop_project_sidecars") {
         const pid = (args?.projectId as string) ?? null;
         if (pid) mockState.runningSidecarIds.delete(pid);
-        return null;
+        // session 側 map もクリア
+        const map = (mockState as {
+          sidecarSessionToProject?: Record<string, string>;
+        }).sidecarSessionToProject ?? {};
+        const killed: string[] = [];
+        for (const [sid, owner] of Object.entries(map)) {
+          if (owner === pid) {
+            killed.push(sid);
+            mockState.runningSidecarIds.delete(sid);
+          }
+        }
+        return killed;
       }
       if (cmd === "send_agent_interrupt") return null;
       if (cmd === "list_active_sidecars") {
-        // v1.1.1 PM-946: runningSidecarIds の各 id を `SidecarInfo` 形で返す。
-        // `activeProjectId` が渡された spec は mockState 初期化時に seed 済。
-        return Array.from(mockState.runningSidecarIds).map((id) => ({
-          projectId: id,
-          cwd: "/tmp/ccmux-e2e/mock-cwd",
-          startedAt: Date.now(),
-        }));
+        // v1.17.0: SidecarInfo は session 単位 shape。
+        const map = (mockState as {
+          sidecarSessionToProject?: Record<string, string>;
+        }).sidecarSessionToProject ?? {};
+        const out: Array<{
+          sessionId: string;
+          projectId: string;
+          cwd: string;
+          startedAt: number;
+          pid: number;
+        }> = [];
+        for (const sid of mockState.runningSidecarIds) {
+          // project-level legacy id は mockState 初期化時に activeProjectId として
+          // seed されるが、SidecarInfo は session shape なので session id (sid) と
+          // projectId を両方持つ entry を返す。unknown な sid は project 扱いで scan しない。
+          if (map[sid] !== undefined) {
+            out.push({
+              sessionId: sid,
+              projectId: map[sid],
+              cwd: "/tmp/ccmux-e2e/mock-cwd",
+              startedAt: Date.now(),
+              pid: 4242,
+            });
+          }
+        }
+        return out;
       }
       if (cmd === "send_agent_prompt") {
         const id = (args?.id as string) ?? "mock-id";
-        const projectId = (args?.projectId as string | undefined) ?? null;
-        // v3.3: event は `agent:{projectId}:raw` を優先、projectId 無しなら legacy
-        const rawEvent = projectId ? `agent:${projectId}:raw` : "agent:raw";
-        // 非同期で assistant 応答を mock stream
+        const sessionId = (args?.sessionId as string | undefined) ?? null;
+        // DEC-063 (v1.17.0): event は `agent:{sessionId}:raw` を使う。
+        const rawEvent = sessionId ? `agent:${sessionId}:raw` : "agent:raw";
         setTimeout(() => {
           emit(
             rawEvent,
@@ -378,6 +423,8 @@ export async function installTauriMock(
           createdAt: now,
           updatedAt: now,
           projectPath: (args?.projectPath as string | null) ?? null,
+          projectId: (args?.projectId as string | null) ?? null,
+          sdkSessionId: null,
         };
         mockState.sessions = [
           {

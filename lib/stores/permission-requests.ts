@@ -31,16 +31,15 @@ export interface PermissionRequest {
   /** sidecar 発行の UUID (permission_response の request_id として返す)。 */
   id: string;
   /**
-   * Rust 側 agent.rs が同梱する project_id (sidecar 起動時の argv
-   * `--project-id=<uuid>` 由来)。sidecar stdin に permission_response を
-   * 書き戻すときに callTauri に渡す。
+   * DEC-063 (v1.17.0): resolve_permission_request に渡す session id。
+   * 旧 (v1.16 以前) は project_id が sidecar key だったが、v1.17 から session_id
+   * が key になった。
+   */
+  sessionId: string;
+  /**
+   * 所属 project の id。Dialog の scope 表示 / session-preferences lookup で使用。
    */
   projectId: string;
-  /**
-   * UI 表示用の session バッジ。sidecar argv の project_id を echo している
-   * だけだが、将来の拡張 (session_id 伝搬) に備えて独立 field とする。
-   */
-  sessionId: string | null;
   /** SDK が呼び出そうとした tool 名 (例: "WebSearch" / "mcp__server__tool")。 */
   toolName: string;
   /** tool input (任意の shape)。Dialog 側で tool に応じた summary 整形を行う。 */
@@ -113,7 +112,8 @@ export const usePermissionRequestsStore = create<PermissionRequestsState>(
       // PermissionDialog 側で catch して表示する (循環依存を避けるため本 store
       // は toast を直接触らない)。
       await callTauri<void>("resolve_permission_request", {
-        projectId: target.projectId,
+        // DEC-063 (v1.17.0): sidecar は session 単位なので sessionId を渡す。
+        sessionId: target.sessionId,
         requestId,
         decision: buildSidecarDecision(decision, target),
       });

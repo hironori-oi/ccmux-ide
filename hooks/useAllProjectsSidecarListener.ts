@@ -15,6 +15,7 @@ import {
 } from "@/lib/stores/chat";
 import { useProjectStore } from "@/lib/stores/project";
 import { useSessionStore } from "@/lib/stores/session";
+import type { SessionSummary } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // PRJ-012 PM-810 (v3.6 Step 1): Split pane session ID routing
@@ -206,45 +207,52 @@ function releaseReqIdIfTerminal(ev: SidecarEvent): void {
  * に session_id を同梱する設計拡張で対応予定。
  */
 export function useAllProjectsSidecarListener(): void {
-  const projects = useProjectStore((s) => s.projects);
+  // DEC-063 (v1.17.0): event prefix が session 単位になったため、sessions 配列を
+  // key 化して subscribe する。session 追加 / 削除で再登録。
+  const sessions = useSessionStore((s) => s.sessions);
 
-  // projects の id 集合をキー化（配列 reference 変動に追従しない）
-  const projectIdsKey = projects
-    .map((p) => p.id)
+  const sessionIdsKey = sessions
+    .map((s) => s.id)
     .sort()
     .join("|");
 
   useEffect(() => {
     let cancelled = false;
-    // projectId -> [unlisten_raw, unlisten_stderr, unlisten_terminated]
+    // sessionId -> [unlisten_raw, unlisten_stderr, unlisten_terminated]
     const unlisteners: Record<string, Array<() => void>> = {};
 
-    const liveProjects = useProjectStore.getState().projects;
+    const liveSessions = useSessionStore.getState().sessions;
 
-    liveProjects.forEach((project) => {
-      const projectId = project.id;
-      const rawEvent = `agent:${projectId}:raw`;
-      const stderrEvent = `agent:${projectId}:stderr`;
-      const termEvent = `agent:${projectId}:terminated`;
+    const projectIdOf = (sessionId: string): string | null => {
+      const s = useSessionStore.getState().sessions.find((x: SessionSummary) => x.id === sessionId);
+      return s?.projectId ?? null;
+    };
+
+    liveSessions.forEach((session) => {
+      const sessionId = session.id;
+      const rawEvent = `agent:${sessionId}:raw`;
+      const stderrEvent = `agent:${sessionId}:stderr`;
+      const termEvent = `agent:${sessionId}:terminated`;
 
       void (async () => {
         try {
           const u1 = await onTauriEvent<string>(rawEvent, (payload) => {
             const activeProjectId =
               useProjectStore.getState().activeProjectId;
-            dispatchSidecarEvent(projectId, payload, activeProjectId);
+            const projectId = projectIdOf(sessionId);
+            if (!projectId) return;
+            dispatchSidecarEvent(projectId, sessionId, payload, activeProjectId);
           });
           const u2 = await onTauriEvent<string>(stderrEvent, (payload) => {
-            // stderr は UI state には反映しない（startup ログ等は debug のみ）。
             const trimmed = payload.trim();
             if (!trimmed) return;
             // eslint-disable-next-line no-console
-            console.warn(`[sidecar stderr:${projectId}]`, trimmed);
-            // active project かつ目立つ起動メッセージのみ toast。
-            // （cross-project では toast spam 防止のため抑制）
+            console.warn(`[sidecar stderr:${sessionId}]`, trimmed);
             const activeProjectId =
               useProjectStore.getState().activeProjectId;
+            const projectId = projectIdOf(sessionId);
             if (
+              projectId &&
               activeProjectId === projectId &&
               /ready$|sidecar starting|parent disconnected|stdin closed/i.test(
                 trimmed
@@ -256,11 +264,13 @@ export function useAllProjectsSidecarListener(): void {
           const u3 = await onTauriEvent<number | null>(termEvent, (code) => {
             const activeProjectId =
               useProjectStore.getState().activeProjectId;
-            // 当該 project の pane を「streaming false / activity idle」に
-            // 倒す（pane が active なら panes、非 active なら snapshot）。
+            const projectId = projectIdOf(sessionId);
+            if (!projectId) return;
+            // 該当 session が紐づく pane を idle に戻す (session 単位の逆引き)。
+            const paneId = findPaneIdForSession(projectId, sessionId, activeProjectId) ?? DEFAULT_PANE_ID;
             useChatStore.getState().applyToProjectPane(
               projectId,
-              DEFAULT_PANE_ID,
+              paneId,
               activeProjectId,
               (p) => ({
                 ...p,
@@ -268,25 +278,22 @@ export function useAllProjectsSidecarListener(): void {
                 activity: { kind: "idle" },
               })
             );
-            // active project の terminated のみ toast（spam 防止）。
             if (activeProjectId === projectId) {
               toast.error(`Claude sidecar が終了しました: ${code ?? "unknown"}`);
             }
           });
 
           if (cancelled) {
-            // mount 直後に unmount された場合の race 回避
             u1?.();
             u2?.();
             u3?.();
             return;
           }
-          unlisteners[projectId] = [u1, u2, u3];
+          unlisteners[sessionId] = [u1, u2, u3];
         } catch (e) {
-          // listen 失敗は致命ではない（Tauri 未起動の test 環境等）。silent log。
           // eslint-disable-next-line no-console
           console.warn(
-            `[useAllProjectsSidecarListener] listen failed for ${projectId}:`,
+            `[useAllProjectsSidecarListener] listen failed for session ${sessionId}:`,
             e
           );
         }
@@ -305,10 +312,33 @@ export function useAllProjectsSidecarListener(): void {
         }
       }
     };
-    // projects の id 集合が変化したら再登録（追加 / 削除）。
-    // 同一 id 集合での参照変動（rename / 並び替え等）では再登録しない。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectIdsKey]);
+  }, [sessionIdsKey]);
+}
+
+/**
+ * DEC-063 (v1.17.0): 該当 sessionId が紐づく paneId を逆引きする。
+ *
+ * - active project 内の panes: currentSessionId or creatingSessionId が一致する pane
+ * - 非 active project の snapshot: 同上
+ * - 見つからなければ null (呼出側は DEFAULT_PANE_ID fallback)
+ */
+function findPaneIdForSession(
+  projectId: string,
+  sessionId: string,
+  activeProjectId: string | null,
+): string | null {
+  const chatState = useChatStore.getState();
+  const paneMap: Record<string, ChatPaneState> | undefined =
+    projectId === activeProjectId
+      ? chatState.panes
+      : chatState.projectSnapshots[projectId];
+  if (!paneMap) return null;
+  for (const [paneId, pane] of Object.entries(paneMap)) {
+    if (pane.currentSessionId === sessionId) return paneId;
+    if (pane.creatingSessionId === sessionId) return paneId;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -316,11 +346,12 @@ export function useAllProjectsSidecarListener(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * sidecar の `agent:{projectId}:raw` payload (NDJSON 1〜複数行) を 1 レコード
- * ずつ parse し、`applyEventToState` 経由で chat store に反映する。
+ * DEC-063 (v1.17.0): session 単位 event `agent:{sessionId}:raw` の payload
+ * (NDJSON 1〜複数行) を 1 レコードずつ parse し、chat store に反映する。
  */
 function dispatchSidecarEvent(
   projectId: string,
+  sessionId: string,
   payload: string,
   activeProjectId: string | null
 ): void {
@@ -328,13 +359,10 @@ function dispatchSidecarEvent(
   for (const line of lines) {
     try {
       const ev = JSON.parse(line) as SidecarEvent;
-      applyEventToState(projectId, activeProjectId, ev);
-      // PM-810: terminal event (result/done/error/interrupted) 受信後に
-      // reqIdToPane を掃除してメモリ蓄積を防ぐ。applyEventToState の後に
-      // 呼ぶことで、当該 event 自体は確定した pane で dispatch される。
+      applyEventToState(projectId, sessionId, activeProjectId, ev);
       releaseReqIdIfTerminal(ev);
     } catch {
-      // 行境界またぎや非 JSON は無視（旧 ChatPanel と同挙動）
+      // 行境界またぎや非 JSON は無視
     }
   }
 }
@@ -355,13 +383,15 @@ function dispatchSidecarEvent(
  */
 function applyEventToState(
   projectId: string,
+  sessionId: string,
   activeProjectId: string | null,
   ev: SidecarEvent
 ): void {
-  // PRJ-012 PM-810: ev.payload.requestId (sidecar の sendWithReqId 経由) または
-  // pending FIFO キューから paneId を逆引きする。旧 sidecar との後方互換のため
-  // lookup 失敗時は DEFAULT_PANE_ID にフォールバック。
-  const paneId = resolvePaneForEvent(projectId, ev);
+  // DEC-063 (v1.17.0): event は session 単位で届くため、session → pane の
+  // 逆引きを第一優先にする。見つからなければ PM-810 の reqId / FIFO ベース
+  // 逆引き、それも空なら DEFAULT_PANE_ID。
+  const paneFromSession = findPaneIdForSession(projectId, sessionId, activeProjectId);
+  const paneId = paneFromSession ?? resolvePaneForEvent(projectId, ev);
 
   const apply = (updater: (p: ChatPaneState) => ChatPaneState) => {
     useChatStore.getState().applyToProjectPane(

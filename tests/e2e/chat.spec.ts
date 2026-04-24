@@ -52,17 +52,28 @@ test.describe("Chat basic flow", () => {
     const names = log.map((l) => l.cmd);
     expect(names).toContain("send_agent_prompt");
 
-    // 組込 mock が send_agent_prompt の 40ms 後に assistant message を、
-    // さらに 50ms 後に result を emit する（mock 側で projectId が argv に
-    // 含まれていれば `agent:${projectId}:raw` を選択して emit する）。
-    // 念のため fallback として、spec 側からも projectId 付き event を直接 emit。
+    // DEC-063 (v1.17.0): 組込 mock が send_agent_prompt の 40ms 後に assistant message を、
+    // さらに 50ms 後に result を emit する。event は `agent:{sessionId}:raw` で emit される。
+    // fallback として、spec 側からも sessionId / projectId 両方に向けて emit しておく。
     const id = "e2e-chat-1";
+    const sendCall = log.find((l) => l.cmd === "send_agent_prompt");
+    const sessionId =
+      (sendCall?.args as { sessionId?: string } | undefined)?.sessionId ?? null;
     await emitMockEvent(
       page,
       AGENT_RAW_EVENT,
       buildAssistantMessagePayload(id, "Claude です。テスト応答です。")
     );
     await emitMockEvent(page, AGENT_RAW_EVENT, buildResultPayload(id));
+    if (sessionId) {
+      const sessionRawEvent = `agent:${sessionId}:raw`;
+      await emitMockEvent(
+        page,
+        sessionRawEvent,
+        buildAssistantMessagePayload(id, "Claude です。テスト応答です。")
+      );
+      await emitMockEvent(page, sessionRawEvent, buildResultPayload(id));
+    }
 
     // 組込 mock / 手動 emit のいずれかが成功すれば、この文言は画面のどこかにある
     await expect(

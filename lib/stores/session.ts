@@ -327,6 +327,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   deleteSession: async (id: string) => {
     set({ isLoading: true, error: null });
     try {
+      // DEC-063 (v1.17.0): session 削除前に当該 session の sidecar も kill する
+      // (cascade kill)。失敗しても続行 (既に停止済の可能性)。
+      try {
+        await callTauri<void>("stop_agent_sidecar", { sessionId: id });
+      } catch {
+        // silent fallback
+      }
       await callTauri<void>("delete_session", { sessionId: id });
       // 現在の project filter を維持したまま再取得
       const projectId = await readActiveProjectId();
@@ -374,6 +381,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   purgeSessions: (sessionIds) => {
     if (sessionIds.length === 0) return;
+    // DEC-063 (v1.17.0): purge 対象の各 session の sidecar も cascade kill する。
+    // (project 削除 cascade で呼ばれる場合、既に stop_project_sidecars 経由で
+    // 停止済の可能性があるが、session-level stop は idempotent なので二重呼出でも安全)。
+    for (const sid of sessionIds) {
+      void callTauri<void>("stop_agent_sidecar", { sessionId: sid }).catch(() => {
+        // silent fallback
+      });
+    }
     const ids = new Set(sessionIds);
     const state = get();
     const nextSessions = state.sessions.filter((s) => !ids.has(s.id));

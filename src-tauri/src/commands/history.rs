@@ -244,6 +244,32 @@ fn migrate_sessions_sdk_session_id(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// DEC-063 (v1.17.0) の schema migration: `sidecar_pid` / `sidecar_started_at` 列を追加。
+///
+/// - 既存 DB には `ALTER TABLE ADD COLUMN` を発行
+/// - 新規 DB は apply_ddl の CREATE TABLE で既に列が入っているため no-op
+/// - 2 回以上呼んでも冪等（列が存在すれば skip）
+///
+/// 本列は debug / ops 用。Rust 側 `start_agent_sidecar` / `stop_agent_sidecar` が
+/// spawn / 終了時に UPDATE する。既存行は NULL のまま。
+fn migrate_sessions_sidecar_meta(conn: &Connection) -> Result<()> {
+    if !sessions_has_column(conn, "sidecar_pid")? {
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN sidecar_pid INTEGER DEFAULT NULL",
+            [],
+        )
+        .context("ALTER TABLE sessions ADD COLUMN sidecar_pid 失敗")?;
+    }
+    if !sessions_has_column(conn, "sidecar_started_at")? {
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN sidecar_started_at INTEGER DEFAULT NULL",
+            [],
+        )
+        .context("ALTER TABLE sessions ADD COLUMN sidecar_started_at 失敗")?;
+    }
+    Ok(())
+}
+
 /// DDL を 1 発で流す。IF NOT EXISTS なので繰り返し呼んでも無害。
 fn apply_ddl(conn: &Connection) -> Result<()> {
     // foreign_keys は接続単位の PRAGMA なので都度 ON にする。
@@ -259,7 +285,9 @@ fn apply_ddl(conn: &Connection) -> Result<()> {
             updated_at INTEGER,
             project_path TEXT,
             project_id TEXT DEFAULT NULL,
-            sdk_session_id TEXT DEFAULT NULL
+            sdk_session_id TEXT DEFAULT NULL,
+            sidecar_pid INTEGER DEFAULT NULL,
+            sidecar_started_at INTEGER DEFAULT NULL
         );
 
         CREATE TABLE IF NOT EXISTS messages(
@@ -319,6 +347,9 @@ fn apply_ddl(conn: &Connection) -> Result<()> {
     // 既存 DB の sdk_session_id 列が無ければ ALTER で追加、新規 DB は CREATE TABLE
     // 側に既に含まれているため no-op。
     migrate_sessions_sdk_session_id(conn)?;
+
+    // DEC-063 (v1.17.0): session-level sidecar の debug / 監視用 2 列の migration（冪等）。
+    migrate_sessions_sidecar_meta(conn)?;
 
     // project_id での filter を効かせるため index を追加（idempotent）。
     conn.execute(

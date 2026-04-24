@@ -11,6 +11,45 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.17.0] - 2026-04-24
+
+**session-level sidecar アーキテクチャに移行** — v1.16 までは
+`HashMap<project_id, SidecarHandle>` で「1 project = 1 sidecar」を維持していたため、
+同一 project 内で 2 session を並列実行すると Claude Code プロセスが共有され
+会話 context が混線していた (DEC-063)。v1.17.0 からは
+`HashMap<session_id, SidecarHandle>` に切り替え、session ごとに独立した
+Claude Code CLI プロセスで動作するようにした。Lazy spawn (初回送信で起動)、
+cascade kill (session/project 削除時)、Max 同時 8 session (超過時 toast reject)、
+plansDirectory の session 単位細分化までを一括で実装。
+
+### Changed
+
+- sidecar ライフサイクルを project 単位から session 単位に変更、各セッションが
+  独立した Claude Code プロセスで動作するようになった (DEC-063)
+- Lazy spawn 方式を採用。セッション初回の送信で sidecar を起動、以降は reuse
+- セッション削除 / プロジェクト削除で該当 sidecar も cascade kill
+- 同時起動可能セッションの上限を 8 に設定、超過時は toast 通知
+- plansDirectory を `{cwd}/.claude/plans/<session-id>` に細分化してセッション間の
+  書込競合を回避
+- Frontend event routing を session 単位に拡張、`agent:{sessionId}:raw` 等の
+  session prefix event を subscribe、session → pane の直接逆引きで split pane
+  独立 streaming を強化
+- Tauri command signature 変更: `start_agent_sidecar(sessionId, projectId, cwd, ...)` /
+  `send_agent_prompt(sessionId, ...)` / `stop_agent_sidecar(sessionId)` /
+  新規 `stop_project_sidecars(projectId)` / `resolve_permission_request(sessionId, ...)`
+
+### Fixed
+
+- 同一 project 内で複数セッションを並列実行した際、異なるセッションの応答が
+  混線する問題を修正 (DEC-063 の核心)
+
+### Added
+
+- sessions テーブルに `sidecar_pid` / `sidecar_started_at` カラムを追加（debug
+  / 監視用、ADD COLUMN IF NOT EXISTS 互換 migration）
+- `stop_project_sidecars(projectId)` Tauri command: project 削除時の cascade kill 用
+- 2 session 同時指示の E2E テストを `tests/e2e/session-isolation.spec.ts` に追加
+
 ## [v1.16.1] - 2026-04-24
 
 **E2E テスト regression 修正** — GitHub Actions で `preview-webview-window.spec.ts`
