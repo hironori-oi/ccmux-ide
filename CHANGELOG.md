@@ -11,6 +11,26 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.16.1] - 2026-04-24
+
+**E2E テスト regression 修正** — GitHub Actions で `preview-webview-window.spec.ts`
+の 2 テストが timeout 失敗していた。v1.8.0 (PM-982: TrayBar Fixed 3 chips +
+ドラッグ配置 UI) と v1.10.0 (DEC-056: localhost iframe / external 別ウィンドウ
+分岐) で preview UI が大幅に変更されていたにもかかわらず、E2E テストが旧 UI
+(「プレビューを配置」明示ボタン + 「アプリ内で開く」「ブラウザで開く」ラベル)
+前提のまま放置されていた regression を修正。
+
+### Fixed
+
+- `tests/e2e/preview-webview-window.spec.ts` を現行 UI に追従 — 「プレビューを
+  配置」明示ボタンは v1.8 で廃止されたので、TrayBar の Preview chip を Playwright
+  の mouse events で空 slot にドラッグ & ドロップする方式に書き換え
+- テストを「external URL → spawn_preview_window」「localhost URL → iframe
+  レンダリング (spawn は発火しない)」「external URL → plugin:shell|open」
+  の 3 経路に分離し、DEC-056 の分岐仕様を E2E で網羅
+- ボタン aria-label を v1.10.0 で変更された `別ウィンドウで開く` /
+  `外部ブラウザで開く` に合わせる
+
 ## [v1.16.0] - 2026-04-24
 
 **自動更新機能の再有効化 + UX 強化** — M3 MVP 時に React error #185 容疑で
