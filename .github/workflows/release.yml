@@ -119,6 +119,13 @@ jobs:
       # 渡り、tauri-cli は warning を出して unsigned bundle を生成する
       # (fork PR でも build は通る)。本家 main の tag release では必ず Secret
       # が登録されている前提で .sig が artifact に並ぶ。
+      #
+      # v1.20.2 (PM-284): PASSWORD が未登録 (Secret 欠落) でも空文字が default
+      # で渡るよう明示。tauri-cli は空 password を前提に動くが、Secret 自体が
+      # `${{ secrets.X }}` で未定義だと undefined/null 注入になり得るため、
+      # `||`相当を workflow 側で保証する意図で `|| ''` 表記を検討したが、
+      # Actions の expression syntax では `${{ secrets.X }}` が未登録だと
+      # 空文字になるため、明示的な default 挿入は不要（GitHub 仕様）。
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       NPM_CONFIG_LEGACY_PEER_DEPS: 'true'
@@ -273,6 +280,91 @@ jobs:
             Write-Host "TAURI_SIGNING_PRIVATE_KEY is set. Building signed bundle."
             "SUMI_BUILD_SIGNED=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           }
+
+      # ------------------------------------------------------------------
+      # 8b. 署名鍵の FORMAT 検証 (v1.20.2 / PM-284)
+      #
+      #    v1.20.0 〜 v1.20.1 で `.sig` 不生成の silent fallback 事故が続いた
+      #    原因調査の結果、tauri-cli は Secret 値を以下の順で解釈する:
+      #      1. 値が既存 file path なら file content を読む
+      #      2. それ以外は literal content として base64 decode を試みる
+      #      3. decode 結果が rsign encrypted format でない場合は fallback
+      #    Secret に貼った値が 1 行 base64 ではなく、CRLF / trailing whitespace /
+      #    改行混入で壊れていると (2) の decode が silently fail して unsigned
+      #    build になる。ここで **build 開始前に Secret 値が rsign encrypted
+      #    format にパース可能か** を verify して、壊れていたら即 fail する。
+      #
+      #    検証:
+      #      - base64 decode した結果の先頭行が `untrusted comment:` で始まり
+      #        `rsign encrypted secret key` を含むこと
+      #      - 2 行目が base64 body として non-empty であること
+      #
+      #    tag release でのみ strict に検証、PR や workflow_dispatch ではスキップ。
+      # ------------------------------------------------------------------
+      - name: Verify TAURI_SIGNING_PRIVATE_KEY format (POSIX)
+        if: runner.os != 'Windows' && env.SUMI_BUILD_SIGNED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          # Secret を tmpfile に書き出し (stdout には出さない、漏洩防止)
+          TMPKEY="$(mktemp)"
+          trap 'rm -f "$TMPKEY"' EXIT
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$TMPKEY"
+
+          # 1 行 base64 形式を想定。CRLF を LF に正規化して decode。
+          DECODED="$(tr -d '\r' < "$TMPKEY" | base64 -d 2>/dev/null || true)"
+          if [ -z "$DECODED" ]; then
+            # 1 行 base64 decode 失敗 → multi-line raw 形式かもしれないので生を採用
+            DECODED="$(tr -d '\r' < "$TMPKEY")"
+          fi
+
+          FIRST_LINE="$(printf '%s\n' "$DECODED" | head -1)"
+          SECOND_LINE="$(printf '%s\n' "$DECODED" | sed -n '2p')"
+
+          echo "First line (redacted prefix only): ${FIRST_LINE:0:40}..."
+          if ! printf '%s' "$FIRST_LINE" | grep -q '^untrusted comment:'; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY format invalid: first line must start with 'untrusted comment:' (got: ${FIRST_LINE:0:60})"
+            echo "::error::hint: paste the raw content of ~/.tauri/sumi.key (single-line base64) into GitHub secret, no extra whitespace/newlines."
+            exit 1
+          fi
+          if ! printf '%s' "$FIRST_LINE" | grep -q 'rsign encrypted secret key'; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY format invalid: first line must contain 'rsign encrypted secret key' (got: ${FIRST_LINE})"
+            exit 1
+          fi
+          if [ -z "$SECOND_LINE" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY format invalid: missing base64 body on second line"
+            exit 1
+          fi
+          echo "OK: TAURI_SIGNING_PRIVATE_KEY parses as rsign encrypted secret key (first line header verified, body non-empty)."
+
+      - name: Verify TAURI_SIGNING_PRIVATE_KEY format (Windows)
+        if: runner.os == 'Windows' && env.SUMI_BUILD_SIGNED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $raw = $env:TAURI_SIGNING_PRIVATE_KEY -replace "`r",""
+          $decoded = $null
+          try {
+            $decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($raw.Trim()))
+          } catch {
+            $decoded = $raw
+          }
+          $lines = $decoded -split "`n"
+          $first = if ($lines.Count -ge 1) { $lines[0] } else { "" }
+          $second = if ($lines.Count -ge 2) { $lines[1] } else { "" }
+          Write-Host "First line (redacted prefix only): $($first.Substring(0, [Math]::Min(40, $first.Length)))..."
+          if (-not $first.StartsWith("untrusted comment:")) {
+            Write-Host "::error::TAURI_SIGNING_PRIVATE_KEY format invalid: first line must start with 'untrusted comment:' (got prefix: $($first.Substring(0, [Math]::Min(60, $first.Length))))"
+            Write-Host "::error::hint: paste the raw content of ~/.tauri/sumi.key (single-line base64) into GitHub secret, no extra whitespace/newlines."
+            exit 1
+          }
+          if ($first -notmatch "rsign encrypted secret key") {
+            Write-Host "::error::TAURI_SIGNING_PRIVATE_KEY format invalid: first line must contain 'rsign encrypted secret key' (got: $first)"
+            exit 1
+          }
+          if ([string]::IsNullOrWhiteSpace($second)) {
+            Write-Host "::error::TAURI_SIGNING_PRIVATE_KEY format invalid: missing base64 body on second line"
+            exit 1
+          }
+          Write-Host "OK: TAURI_SIGNING_PRIVATE_KEY parses as rsign encrypted secret key (first line header verified, body non-empty)."
 
       # ------------------------------------------------------------------
       # 9. Tauri build

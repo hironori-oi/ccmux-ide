@@ -11,6 +11,35 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.20.2] - 2026-04-25
+
+**Ed25519 signing key 再生成 + release workflow に鍵 format 検証 step を追加** —
+v1.20.1 で strict gate (`No .sig files were generated` fail) が発動した真因を
+調査。`C:\Users\hiron\.tauri\sumi.key` 自体は tauri-cli が生成する正規の
+base64 1 行 format であり file format は正しかったが、GitHub Secret に
+貼り付けた旧鍵値が何らかの理由 (CRLF / trailing whitespace / 改行混入) で
+tauri-cli 側で decode 失敗し、silent fallback で unsigned bundle を生成
+していた可能性が高い。
+
+### Fixed
+
+- Ed25519 signing key を再生成 (旧 pubkey id `5D84625BF5E8C949` →
+  新 `508BA2D86D3241C1`)。`tauri signer generate --password ""` で再度
+  rsign encrypted secret key を発行、`src-tauri/tauri.conf.json` の
+  `plugins.updater.pubkey` を新値に置換
+- `.github/workflows/release.yml`: build step の直前に
+  **Secret の format 検証 step** を追加。base64 decode 後の先頭行に
+  `untrusted comment:` header と `rsign encrypted secret key` が含まれ、
+  2 行目に base64 body が存在することを verify する。format 不正な場合は
+  build 開始前に即 fail し、将来同種の silent fallback を未然に防ぐ
+
+### Operations
+
+- オーナー側手動作業: GitHub Secrets の `TAURI_SIGNING_PRIVATE_KEY` を
+  新 private key で **Update** (既存削除 → 再登録)。
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` は空文字のまま。
+  詳細手順は `projects/PRJ-012/reports/pm-284-v1.20.2-ed25519-regen.md` §0 参照
+
 ## [v1.20.1] - 2026-04-25
 
 **自動更新の署名関連エラー時の手動更新 UX + release workflow signing strict 化** —
