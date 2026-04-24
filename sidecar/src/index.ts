@@ -128,6 +128,58 @@ const SIDECAR_DEFAULT_MODEL: string | null = parseModelFromArgv();
  */
 const SIDECAR_DEFAULT_THINKING_TOKENS: number | null = parseThinkingTokensFromArgv();
 
+// ---------------------------------------------------------------------------
+// DEC-068 (v1.22.0): permissionMode に応じた allowedTools 動的構成
+// ---------------------------------------------------------------------------
+// 旧 DEC-059 案A は permissionMode に関係なく Edit / Write / Bash まで含めた
+// 全許可リストを hard-code していたため、UI の「標準 = 編集ごとに確認を求める」
+// という説明と挙動が矛盾していた。本改修では、公式 Claude Code SDK の仕様
+// （default = 都度確認、acceptEdits = 編集自動承認）に整合させる。
+//
+// - READONLY_TOOLS: 情報取得系。全 mode で自動許可（dialog ノイズ削減）
+// - EDITING_TOOLS:  ファイル変更や任意コマンド実行を伴う系。
+//                   acceptEdits / bypassPermissions でのみ自動許可
+//
+// MCP tools (`mcp__*`) はどちらにも含めず、引き続き canUseTool callback
+// （DEC-059 案B の PermissionDialog）経由で明示承認を求める。
+// ---------------------------------------------------------------------------
+const READONLY_TOOLS: readonly string[] = [
+  "Read",
+  "Glob",
+  "Grep",
+  "WebSearch",
+  "WebFetch",
+];
+
+const EDITING_TOOLS: readonly string[] = [
+  "Edit",
+  "Write",
+  "NotebookEdit",
+  "TodoWrite",
+  "Bash",
+];
+
+/**
+ * DEC-068: permissionMode に応じてデフォルトの allowedTools を返す。
+ *
+ * - `default` / `plan`             : readonly のみ自動許可、編集系は canUseTool 経由
+ * - `acceptEdits` / `bypassPermissions` : 編集系も自動許可
+ *
+ * 呼び出し側 (Rust `send_agent_prompt` / Frontend) が `options.allowedTools`
+ * を明示指定した場合はそちらが優先される（本関数は fallback default）。
+ */
+function defaultAllowedToolsFor(mode: string | undefined): string[] {
+  switch (mode) {
+    case "acceptEdits":
+    case "bypassPermissions":
+      return [...READONLY_TOOLS, ...EDITING_TOOLS];
+    case "plan":
+    case "default":
+    default:
+      return [...READONLY_TOOLS];
+  }
+}
+
 // --- crash diagnostics ---
 // Tauri spawn 経由で Node.js が uncaught exception crash するケースの診断用。
 // stack trace を短く stderr に書き出し、toast 側に流す。
@@ -519,25 +571,18 @@ async function handlePrompt(req: PromptRequest): Promise<void> {
     // 有効にするためで、CLAUDE.md / .claude/settings.json / slash commands /
     // skills / MCP servers が SDK によって自動 discover される。呼び出し側
     // (Rust `send_agent_prompt`) が明示した場合はそちらを優先する。
+    const resolvedPermissionMode = req.options?.permissionMode ?? "default";
     const opts: AgentQueryOptions = {
       cwd: req.options?.cwd ?? process.cwd(),
-      permissionMode: req.options?.permissionMode ?? "default",
-      // DEC-059 案A (v1.13.0): デフォルト allowedTools に WebSearch / WebFetch /
-      // TodoWrite / NotebookEdit を追加。これらは destructive でない or 既存
-      // Edit/Write と同レベルの破壊性に留まるため、無確認許可で UX を改善する。
-      // MCP tools (`mcp__*`) は含めない（明示承認 = 案B の dialog 経由）。
-      allowedTools: req.options?.allowedTools ?? [
-        "Read",
-        "Edit",
-        "Write",
-        "Bash",
-        "Glob",
-        "Grep",
-        "WebSearch",
-        "WebFetch",
-        "TodoWrite",
-        "NotebookEdit",
-      ],
+      permissionMode: resolvedPermissionMode,
+      // DEC-068 (v1.22.0): permissionMode に応じて allowedTools を動的構成する。
+      // DEC-059 案A の hard-coded 全許可リストを撤去し、UI 説明文「編集ごとに確認を
+      // 求める」と挙動を整合させる。MCP tools (`mcp__*`) は引き続き全 mode で
+      // canUseTool dialog 経由（DEC-059 案B）。呼び出し側 (Rust / Frontend) が
+      // options.allowedTools を明示指定した場合はそちらを優先する。
+      allowedTools:
+        req.options?.allowedTools ??
+        defaultAllowedToolsFor(resolvedPermissionMode),
       settingSources: req.options?.settingSources ?? [
         "user",
         "project",

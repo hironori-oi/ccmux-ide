@@ -795,12 +795,12 @@ export const PERMISSION_MODE_CHOICES: Array<{
   {
     value: "default",
     label: "標準",
-    description: "編集ごとに確認を求める",
+    description: "読み取りは自動、編集は都度確認",
   },
   {
     value: "acceptEdits",
     label: "自動承認",
-    description: "編集を自動で承認",
+    description: "編集も自動で承認",
   },
   {
     value: "bypassPermissions",

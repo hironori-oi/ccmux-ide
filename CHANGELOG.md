@@ -11,6 +11,19 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.0] - 2026-04-25
+
+### Fixed
+
+- permissionMode が "default" でも Edit / Write / Bash 等の編集系ツールが無確認実行されていた不具合を修正 (DEC-068)
+- sidecar の allowedTools を permissionMode に応じて動的構成、UI 説明文「編集ごとに確認を求める」と整合
+
+### Changed
+
+- default / plan: 読み取り系 (Read, Glob, Grep, WebSearch, WebFetch) のみ自動許可、編集系は canUseTool で都度承認
+- acceptEdits / bypassPermissions: 編集系 (Edit, Write, NotebookEdit, TodoWrite, Bash) も自動許可
+- TrayPermissionModePicker の説明文を改訂（「標準: 読み取りは自動、編集は都度確認」「自動承認: 編集も自動で承認」）
+
 ## [v1.21.0] - 2026-04-25
 
 ### Added
