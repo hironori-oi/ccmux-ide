@@ -1,5 +1,5 @@
 # ============================================================================
-# Sumi / Multi-platform Release Build (PM-282)
+# Sumi / Multi-platform Release Build (PM-282 / DEC-065 v1.19.0)
 # ----------------------------------------------------------------------------
 # 目的:
 #   v* タグが push されたタイミングで Windows (NSIS/MSI) / macOS (DMG x64 +
@@ -17,16 +17,19 @@
 # 既存 build-windows.yml は dogfood iteration 用に workflow_dispatch で残す。
 # 本 workflow とは独立。
 #
+# DEC-065 (v1.19.0): Ed25519 署名検証ベースに移行。
+#   - v1.18.2 で試みた「signature field 省略」方針A は tauri-plugin-updater
+#     v2.10.x の ReleaseManifestPlatform.signature が serde 上 `String` 必須
+#     field のため deserialize 失敗で破綻。Ed25519 鍵ペアを発行し、各 installer
+#     に `.sig` ファイルを生成して latest.json の `signature` に埋め込む本来の
+#     運用へ切り替えた。
+#   - `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` を
+#     GitHub repository secrets に登録すると、tauri-cli が bundle 時に
+#     自動で `.sig` を生成する。secret 未登録の fork PR では警告 log を出して
+#     unsigned build で続行し、artifact は出るが updater は動かない（本家
+#     main の release では必ず signed される）。
+#
 # 注意:
-#   - tauri.conf.json の `plugins.updater.pubkey` は空文字のため updater
-#     manifest の `signature` も空だが、tauri-plugin-updater v2 (>=2.x) は
-#     signature が空文字列 "" だと minisign parser で "Invalid encoding in
-#     minisign data" エラーを返す。さらに ReleaseManifestPlatform.signature は
-#     serde 上 `String` (非 Option) のため、key を完全省略しても deserialize
-#     error になる可能性がある。短期回避として latest.json 生成時に signature
-#     key 自体を省略（jq の del でフィールド削除）し、v2 updater 側の挙動を
-#     出荷後に検証する方針（DEC 候補: v1.18.2 後の結果次第で Ed25519 鍵ペアへ
-#     移行）。
 #   - Linux は ubuntu-latest（24.04）で webkit2gtk 4.1 前提。もし 22.04 系の
 #     古い glibc 互換が必要になった場合は matrix に ubuntu-22.04 を追加する。
 # ----------------------------------------------------------------------------
@@ -69,13 +72,17 @@ jobs:
       fail-fast: false
       matrix:
         platform:
+          # DEC-065 (v1.19.0): 各 installer の `.sig` (ed25519 署名) も artifact
+          # に含める。tauri-cli は `<installer>.sig` を同一ディレクトリに出力する。
           - label: 'windows-x86_64'
             runner: windows-latest
             rust_target: x86_64-pc-windows-msvc
             tauri_args: ''
             bundle_globs: |
               src-tauri/target/release/bundle/nsis/*.exe
+              src-tauri/target/release/bundle/nsis/*.exe.sig
               src-tauri/target/release/bundle/msi/*.msi
+              src-tauri/target/release/bundle/msi/*.msi.sig
           - label: 'darwin-x86_64'
             # v1.0.1: macos-13 は GitHub で deprecated、macos-14 (Apple Silicon)
             # で x86_64-apple-darwin を cross-compile する方針に変更。
@@ -85,24 +92,35 @@ jobs:
             tauri_args: '--target x86_64-apple-darwin'
             bundle_globs: |
               src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg.sig
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - label: 'darwin-aarch64'
             runner: macos-14
             rust_target: aarch64-apple-darwin
             tauri_args: '--target aarch64-apple-darwin'
             bundle_globs: |
               src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg.sig
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
           - label: 'linux-x86_64'
             runner: ubuntu-latest
             rust_target: x86_64-unknown-linux-gnu
             tauri_args: ''
             bundle_globs: |
               src-tauri/target/release/bundle/appimage/*.AppImage
+              src-tauri/target/release/bundle/appimage/*.AppImage.sig
               src-tauri/target/release/bundle/deb/*.deb
+              src-tauri/target/release/bundle/deb/*.deb.sig
 
     env:
-      # DEC-013 継承: updater 署名鍵未発行、空文字で build pass
-      TAURI_SIGNING_PRIVATE_KEY: ''
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+      # DEC-065 (v1.19.0): Ed25519 署名付きビルド。Secret 未登録だと空文字が
+      # 渡り、tauri-cli は warning を出して unsigned bundle を生成する
+      # (fork PR でも build は通る)。本家 main の tag release では必ず Secret
+      # が登録されている前提で .sig が artifact に並ぶ。
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       NPM_CONFIG_LEGACY_PEER_DEPS: 'true'
       RUST_BACKTRACE: '1'
       TAURI_CLI_VERBOSE: '1'
@@ -211,8 +229,39 @@ jobs:
           Get-Item "sidecar/dist/index.mjs" | Select-Object Name, Length
 
       # ------------------------------------------------------------------
-      # 8. Tauri build
+      # 8. 署名鍵の有無を check (DEC-065 v1.19.0)
+      #    Secret 未登録の fork PR では空文字が渡るため、fail させずに警告
+      #    log を出して unsigned build を続行する。本家 main の tag release
+      #    では必ず signed される前提。
+      # ------------------------------------------------------------------
+      - name: Check signing key availability (POSIX)
+        if: runner.os != 'Windows'
+        run: |
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set. Building unsigned bundle (updater won't work)."
+            echo "SUMI_BUILD_SIGNED=false" >> "$GITHUB_ENV"
+          else
+            echo "TAURI_SIGNING_PRIVATE_KEY is set. Building signed bundle."
+            echo "SUMI_BUILD_SIGNED=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check signing key availability (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            Write-Host "::warning::TAURI_SIGNING_PRIVATE_KEY is not set. Building unsigned bundle (updater won't work)."
+            "SUMI_BUILD_SIGNED=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          } else {
+            Write-Host "TAURI_SIGNING_PRIVATE_KEY is set. Building signed bundle."
+            "SUMI_BUILD_SIGNED=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      # ------------------------------------------------------------------
+      # 9. Tauri build
       #    macOS のみ --target で arch を指定（x64 / aarch64 を分離 job で）。
+      #    TAURI_SIGNING_PRIVATE_KEY が設定されていれば tauri-cli が自動で
+      #    `.sig` を各 bundle 隣に生成する。
       # ------------------------------------------------------------------
       - name: Build Tauri app
         run: npm run tauri:build -- ${{ matrix.platform.tauri_args }}
@@ -220,7 +269,9 @@ jobs:
           CARGO_BUILD_JOBS: '2'
 
       # ------------------------------------------------------------------
-      # 9. Artifact upload（Release 作成用に集約）
+      # 10. Artifact upload（Release 作成用に集約）
+      #    bundle_globs に *.sig を含めているので signed build の場合は
+      #    自動的に署名ファイルも一緒に収集される。
       # ------------------------------------------------------------------
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
@@ -232,7 +283,7 @@ jobs:
           retention-days: 14
 
       # ------------------------------------------------------------------
-      # 10. 失敗時のデバッグ情報
+      # 11. 失敗時のデバッグ情報
       # ------------------------------------------------------------------
       - name: Dump bundle tree on failure (POSIX)
         if: failure() && runner.os != 'Windows'
@@ -323,27 +374,28 @@ jobs:
           cat "$NOTES_FILE"
 
       # ------------------------------------------------------------------
-      # 3. tauri-plugin-updater 用 latest.json を生成
+      # 3. tauri-plugin-updater 用 latest.json を生成 (DEC-065 v1.19.0)
       #    形式:
       #      {
-      #        "version": "0.1.0",
+      #        "version": "1.19.0",
       #        "notes": "...",
-      #        "pub_date": "2026-04-19T00:00:00Z",
+      #        "pub_date": "2026-04-24T00:00:00Z",
       #        "platforms": {
-      #          "windows-x86_64": { "url": "..." },
-      #          "darwin-x86_64":  { "url": "..." },
-      #          "darwin-aarch64": { "url": "..." },
-      #          "linux-x86_64":   { "url": "..." }
+      #          "windows-x86_64": { "url": "...", "signature": "..." },
+      #          "darwin-x86_64":  { "url": "...", "signature": "..." },
+      #          "darwin-aarch64": { "url": "...", "signature": "..." },
+      #          "linux-x86_64":   { "url": "...", "signature": "..." }
       #        }
       #      }
       #    URL は GitHub Release の安定 download URL を使う。
       #
-      #    v1.18.2 変更: signature フィールドを出力しない。
-      #    tauri-plugin-updater v2 は signature="" を minisign parse しに行き
-      #    "Invalid encoding in minisign data" で失敗するため、key 自体を
-      #    del(.platforms[].signature) で落とす。v2 の Release manifest schema
-      #    上 signature は String 型だが、jq で key を生成しないことで
-      #    updater 側が missing field として扱えるかを実機検証する。
+      #    v1.19.0 変更 (DEC-065): Ed25519 署名検証に移行。
+      #    tauri-cli が bundle 時に各 installer の隣に `<installer>.sig` を
+      #    生成しているので、それを読んで signature field に埋め込む。
+      #    signature は serde 上 String 必須 field のため、値は必須。
+      #    もし .sig が見つからない場合は unsigned build のため updater は
+      #    動かないが、latest.json は空文字でも生成して Release 自体は作る
+      #    (既存 v1.18.2 からの手動 download を妨げないため)。
       # ------------------------------------------------------------------
       - name: Generate latest.json (updater manifest)
         id: manifest
@@ -355,23 +407,35 @@ jobs:
           PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           REPO_BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}"
 
-          # 各アーティファクトファイル名を glob から取得（1 枚目のみ採用）
+          # 各アーティファクトファイル名を glob から取得（1 枚目のみ採用、
+          # .sig は除外）
           find_first() {
             local pattern="$1"
             local f
-            f="$(find artifacts -type f -name "$pattern" | head -1 || true)"
+            f="$(find artifacts -type f -name "$pattern" ! -name '*.sig' | head -1 || true)"
             if [ -n "$f" ]; then
               basename "$f"
             fi
           }
 
+          # 対応する .sig ファイルの中身（base64 1 行）を取得。
+          # 無い場合は空文字を返す（unsigned build / fork PR 用の fallback）。
+          read_sig() {
+            local installer_name="$1"
+            local f
+            f="$(find artifacts -type f -name "${installer_name}.sig" | head -1 || true)"
+            if [ -n "$f" ] && [ -s "$f" ]; then
+              cat "$f"
+            else
+              echo ""
+            fi
+          }
+
           WIN_NSIS="$(find_first '*.exe')"
-          WIN_MSI="$(find_first '*.msi')"
           # macOS は x64 / aarch64 で同じ拡張子なので、artifact dir 構造で絞り込み
-          MAC_X64="$(find artifacts -type f -name '*.dmg' | grep -i 'x86_64\|x64\|intel' | head -1 | xargs -I{} basename {} || true)"
-          MAC_ARM="$(find artifacts -type f -name '*.dmg' | grep -i 'aarch64\|arm64' | head -1 | xargs -I{} basename {} || true)"
-          # grep で絞れなかった場合のフォールバック（Tauri が productname に arch を
-          # 入れない場合は merge-multiple 後に区別できないため、手で各 1 つに）
+          MAC_X64="$(find artifacts -type f -name '*.dmg' ! -name '*.sig' | grep -i 'x86_64\|x64\|intel' | head -1 | xargs -I{} basename {} || true)"
+          MAC_ARM="$(find artifacts -type f -name '*.dmg' ! -name '*.sig' | grep -i 'aarch64\|arm64' | head -1 | xargs -I{} basename {} || true)"
+          # grep で絞れなかった場合のフォールバック
           if [ -z "$MAC_X64" ]; then
             MAC_X64="$(find_first '*_x64.dmg')"
           fi
@@ -379,57 +443,83 @@ jobs:
             MAC_ARM="$(find_first '*_aarch64.dmg')"
           fi
           LINUX_APPIMAGE="$(find_first '*.AppImage')"
-          LINUX_DEB="$(find_first '*.deb')"
 
-          # tauri-plugin-updater は Windows は NSIS の .exe、macOS は .dmg（or .app.tar.gz）、
-          # Linux は .AppImage を第一候補に取る。MSI / deb は併置のみ（updater 対象外）。
+          # tauri-plugin-updater は Windows は NSIS の .exe、macOS は .dmg、
+          # Linux は .AppImage を第一候補に取る。MSI / deb は併置のみ。
           WIN_URL=""
-          if [ -n "$WIN_NSIS" ]; then WIN_URL="${REPO_BASE}/${WIN_NSIS}"; fi
+          WIN_SIG=""
+          if [ -n "$WIN_NSIS" ]; then
+            WIN_URL="${REPO_BASE}/${WIN_NSIS}"
+            WIN_SIG="$(read_sig "$WIN_NSIS")"
+          fi
           MAC_X64_URL=""
-          if [ -n "$MAC_X64" ]; then MAC_X64_URL="${REPO_BASE}/${MAC_X64}"; fi
+          MAC_X64_SIG=""
+          if [ -n "$MAC_X64" ]; then
+            MAC_X64_URL="${REPO_BASE}/${MAC_X64}"
+            MAC_X64_SIG="$(read_sig "$MAC_X64")"
+          fi
           MAC_ARM_URL=""
-          if [ -n "$MAC_ARM" ]; then MAC_ARM_URL="${REPO_BASE}/${MAC_ARM}"; fi
+          MAC_ARM_SIG=""
+          if [ -n "$MAC_ARM" ]; then
+            MAC_ARM_URL="${REPO_BASE}/${MAC_ARM}"
+            MAC_ARM_SIG="$(read_sig "$MAC_ARM")"
+          fi
           LINUX_URL=""
-          if [ -n "$LINUX_APPIMAGE" ]; then LINUX_URL="${REPO_BASE}/${LINUX_APPIMAGE}"; fi
+          LINUX_SIG=""
+          if [ -n "$LINUX_APPIMAGE" ]; then
+            LINUX_URL="${REPO_BASE}/${LINUX_APPIMAGE}"
+            LINUX_SIG="$(read_sig "$LINUX_APPIMAGE")"
+          fi
 
           NOTES_TEXT="$(cat ${{ steps.notes.outputs.notes_path }})"
 
-          # v1.18.2: signature フィールドを platforms 各エントリから省略する。
-          # tauri-plugin-updater v2 は signature="" を受け付けず minisign parse
-          # で "Invalid encoding in minisign data" エラーになるため、
-          # `del(.platforms[].signature)` で key 自体を落として出力する。
-          # 署名検証は pubkey 空の M3 MVP 構成に準拠。
+          # v1.19.0 (DEC-065): signature field を各 platform に必須で埋め込む。
+          # tauri-plugin-updater v2.10.x の ReleaseManifestPlatform.signature は
+          # serde 上 String 必須 field のため、key 自体を省略すると deserialize
+          # 失敗する。signed build であれば .sig 内容、unsigned build であれば
+          # 空文字になる（空文字の場合 updater は minisign parse 失敗で動かないが、
+          # artifact 自体は Release に添付され手動 download 可能）。
           jq -n \
             --arg version "$VERSION" \
             --arg notes "$NOTES_TEXT" \
             --arg pub_date "$PUB_DATE" \
             --arg win_url "$WIN_URL" \
+            --arg win_sig "$WIN_SIG" \
             --arg mac_x64_url "$MAC_X64_URL" \
+            --arg mac_x64_sig "$MAC_X64_SIG" \
             --arg mac_arm_url "$MAC_ARM_URL" \
+            --arg mac_arm_sig "$MAC_ARM_SIG" \
             --arg linux_url "$LINUX_URL" \
+            --arg linux_sig "$LINUX_SIG" \
             '{
               version: $version,
               notes: $notes,
               pub_date: $pub_date,
               platforms: {
-                "windows-x86_64": { url: $win_url },
-                "darwin-x86_64":  { url: $mac_x64_url },
-                "darwin-aarch64": { url: $mac_arm_url },
-                "linux-x86_64":   { url: $linux_url }
+                "windows-x86_64": { url: $win_url, signature: $win_sig },
+                "darwin-x86_64":  { url: $mac_x64_url, signature: $mac_x64_sig },
+                "darwin-aarch64": { url: $mac_arm_url, signature: $mac_arm_sig },
+                "linux-x86_64":   { url: $linux_url, signature: $linux_sig }
               }
-            }
-            | del(.platforms[].signature)' > latest.json
+            }' > latest.json
 
           echo "=== latest.json ==="
           cat latest.json
 
-          # dry-run 的な検証: 生成された JSON を jq で parse して、signature
-          # key が存在しないことを確認する（存在したら CI を失敗させる）。
-          if jq -e '.platforms | to_entries | map(.value | has("signature")) | any' latest.json > /dev/null; then
-            echo "ERROR: latest.json still contains 'signature' key in platforms" >&2
+          # 検証: 全 platform で signature field が存在すること（空文字でも OK、
+          # key 自体が欠けていると v2.10.x updater が deserialize 失敗する）
+          if ! jq -e '.platforms | to_entries | map(.value | has("signature")) | all' latest.json > /dev/null; then
+            echo "ERROR: latest.json is missing 'signature' key in some platforms" >&2
             exit 1
           fi
-          echo "OK: no 'signature' key in platforms"
+          echo "OK: all platforms have 'signature' key"
+
+          # 追加検証: URL がある platform で signature が空なら warning を出す
+          # （fail はしない。fork PR / secret 未登録時の unsigned build を許容）
+          jq -r '.platforms | to_entries[] | select(.value.url != "" and .value.signature == "") | .key' latest.json \
+            | while read -r plat; do
+                echo "::warning::Platform $plat has URL but empty signature (unsigned build, updater will fail)"
+              done
 
       # ------------------------------------------------------------------
       # 4. GitHub Release 作成 + 全 artifact を upload

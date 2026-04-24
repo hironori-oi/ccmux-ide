@@ -11,6 +11,50 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.19.0] - 2026-04-24
+
+**updater に Ed25519 署名検証を導入** — v1.18.2 で試みた「signature field 省略」
+方針は tauri-plugin-updater v2.10.x の `ReleaseManifestPlatform.signature` が
+serde 上 `String` 必須 field のため deserialize 失敗で破綻したため、Ed25519
+署名ベースの本来運用に完全移行した (DEC-065)。v1.19.0 以降は signed
+bundle + 署名入り latest.json で updater が正常動作する。
+
+### Breaking Changes
+
+- updater に Ed25519 署名検証を導入。v1.19.0 以降は署名付き更新のみ受け付ける
+  ようになった (DEC-065)
+- **v1.18.2 以前からの自動更新は不可**。以下の GitHub Release ページから
+  v1.19.0 の installer を手動ダウンロードして上書きインストールしてください
+    - https://github.com/hironori-oi/ccmux-ide/releases/latest
+- v1.19.0 以降は自動更新が正常動作します（手動インストールが必要なのは本 1 回限り）
+
+### Fixed
+
+- tauri-plugin-updater v2.10.x の signature 必須 field 仕様に対応、
+  「Invalid encoding in minisign data」「missing field signature」両エラーの
+  根治 (DEC-065)
+- `.github/workflows/release.yml` で `TAURI_SIGNING_PRIVATE_KEY` /
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` env を参照して署名付きビルドを行い、
+  各 installer の `.sig` を artifact として収集、latest.json の各 platform
+  `signature` field に埋め込む構成に変更
+
+### Added
+
+- `src-tauri/tauri.conf.json` の `plugins.updater.pubkey` に Ed25519 public
+  key（base64）を埋め込み、updater client 側で署名検証を有効化
+- release workflow に signing key 有無の check step を追加。Secret 未登録の
+  fork PR では警告 log を出して unsigned build で続行（本家 main の tag
+  release では必ず signed される）
+- `.gitignore` に `*.key` / `*.key.pub` / `.tauri/` を追加し、private key が
+  誤って commit されない防御を追加
+
+### Notes
+
+- 本 release を成功させるには GitHub repository secrets に
+  `TAURI_SIGNING_PRIVATE_KEY` の登録が必要（登録手順は PR 報告 or docs 参照）
+- 鍵ペアは本 PR に合わせて新規発行。以後は同鍵で継続運用し、漏洩時は別 PR で
+  rotation する想定
+
 ## [v1.18.2] - 2026-04-24
 
 **自動更新の "Invalid encoding in minisign data" エラーを修正** — v1.16.0 から

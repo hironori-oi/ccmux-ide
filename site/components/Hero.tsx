@@ -2,13 +2,36 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowRight, Github } from "lucide-react";
+import { AlertTriangle, ArrowRight, Github } from "lucide-react";
 
 export function Hero() {
   return (
     <section className="relative overflow-hidden border-b border-sumi-ash/60">
       <div className="hero-glow absolute inset-0 -z-10" aria-hidden />
       <div className="grid-bg absolute inset-0 -z-10 opacity-60" aria-hidden />
+
+      {/* v1.19.0 移行バナー（DEC-065）: v1.20.0 で撤去予定 */}
+      <div
+        role="status"
+        className="border-b border-amber-500/30 bg-amber-500/10 text-amber-100"
+      >
+        <div className="mx-auto flex max-w-6xl items-start gap-3 px-4 py-3 text-sm sm:px-6">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-none text-amber-300" aria-hidden />
+          <p className="leading-relaxed">
+            <span className="font-medium text-amber-100">既存ユーザーの方へ: </span>
+            v1.18.2 以前をお使いの場合、v1.19.0 への自動更新は行われません。
+            <a
+              href="https://github.com/hironori-oi/ccmux-ide/releases/latest"
+              target="_blank"
+              rel="noreferrer"
+              className="ml-1 underline underline-offset-2 hover:text-amber-50"
+            >
+              GitHub Release ページ
+            </a>
+            から installer を手動ダウンロードして上書きインストールしてください。v1.19.0 以降は自動更新が正常動作します。
+          </p>
+        </div>
+      </div>
 
       <div className="mx-auto max-w-6xl px-4 py-24 sm:px-6 sm:py-32 lg:py-40">
         <motion.div

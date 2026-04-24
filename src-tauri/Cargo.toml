@@ -1,6 +1,6 @@
 [package]
 name = "sumi"
-version = "1.18.2"
+version = "1.19.0"
 description = "Sumi — Japanese-first Claude Code desktop client"
 edition = "2021"
 license = "MIT"
@@ -23,9 +23,11 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
-# PM-283: GitHub Release の latest.json をポーリングし、署名なし updater で
-# NSIS/MSI/DMG/AppImage/deb を自動更新する。pubkey "" のため署名検証は
-# skip される（M3 MVP 許容、将来 DEC で Ed25519 鍵発行時に差し替え）。
+# PM-283: GitHub Release の latest.json をポーリングし、Ed25519 署名検証付き
+# updater で NSIS/MSI/DMG/AppImage/deb を自動更新する。v1.19.0 (DEC-065) で
+# tauri-plugin-updater v2.10.x の signature 必須 field 仕様に対応するため、
+# tauri.conf.json に pubkey を埋め込み、release.yml で TAURI_SIGNING_PRIVATE_KEY
+# env を用いて署名付きビルド + latest.json へ .sig 埋め込みを行う運用に切り替え。
 tauri-plugin-updater = "2"
 
 # --- Serde / async ---

@@ -25,6 +25,14 @@ sidecar/dist/
 *.pem
 Thumbs.db
 
+# Tauri updater signing keys (DEC-065 / v1.19.0)
+# private key は GitHub Secrets `TAURI_SIGNING_PRIVATE_KEY` に登録して運用するため
+# repo には絶対に commit しない。public key のみ tauri.conf.json に埋め込む。
+*.key
+*.key.pub
+.tauri/
+
+
 # debug
 npm-debug.log*
 yarn-debug.log*
