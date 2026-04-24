@@ -422,7 +422,9 @@ jobs:
       # 9. Tauri build
       #    macOS のみ --target で arch を指定（x64 / aarch64 を分離 job で）。
       #    TAURI_SIGNING_PRIVATE_KEY が設定されていれば tauri-cli が自動で
-      #    `.sig` を各 bundle 隣に生成する。
+      #    `.sig` を各 bundle 隣に生成する (ただし v1.20.4 調査で判明した
+      #    env 経由 passphrase の既知 bug により silent fallback が発生し得る。
+      #    step 9b で明示 `signer sign` を走らせて二重防御する)。
       # ------------------------------------------------------------------
       - name: Build Tauri app
         run: npm run tauri:build -- ${{ matrix.platform.tauri_args }}
@@ -430,10 +432,200 @@ jobs:
           CARGO_BUILD_JOBS: '2'
 
       # ------------------------------------------------------------------
+      # 9b. 明示的に signer sign を実行 (v1.20.4 / PM-973)
+      #
+      #     真因 (v1.20.4 で確定):
+      #     tauri-cli v2 には `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` env 経由
+      #     での passphrase 渡しが silently fail する既知 bug が複数存在する
+      #     (tauri-apps/tauri #13485 / plugins-workspace #2710)。
+      #     具体的には:
+      #       - passphrase 生成時点で shell-quote 等により `!` `$` バッククォート
+      #         `\` が silently escape され、鍵が "違う password" で encrypt
+      #         されてしまう (mnardit 2026-04-04 post-mortem)
+      #       - 結果として env で渡した元の passphrase では decode 失敗
+      #       - build step は exit 0 で unsigned bundle を生成して続行
+      #     v1.20.3 の passphrase `Sumi-Updater-2026-Secure!` はまさに
+      #     末尾 `!` が escape 対象に該当し、この bug を踏んでいた。
+      #
+      #     対策:
+      #     1. passphrase を shell-safe 文字のみ (`!$\\\`` 等を除外)
+      #        で再生成する (オーナー作業 §0)
+      #     2. 本 step で build 後に明示 `signer sign` を走らせ、生成された
+      #        installer 各々に対して .sig を個別に生成する
+      #        → build step の silent fallback に依存しない
+      #
+      #     実装:
+      #       - env で key / password を渡す (v2 では CLI flag と env の
+      #         両方がサポートされる、flag を使うとログに password が残る
+      #         リスクがあるため env を継続採用)
+      #       - bundle_globs では sig 未生成時のために *.sig を除外した
+      #         installer のみを列挙し、for-loop で sign
+      #       - signer sign が stderr に "Wrong password" を出すと exit 0
+      #         で戻るため、出力を capture して pattern match、エラーなら
+      #         明示 fail する (`.sig` 0 件 verify step と合わせて二重防御)
+      # ------------------------------------------------------------------
+      - name: Explicit signer sign (POSIX)
+        if: runner.os != 'Windows' && env.SUMI_BUILD_SIGNED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BUNDLE_ROOT="src-tauri/target/${{ matrix.platform.rust_target }}/release/bundle"
+          if [ ! -d "$BUNDLE_ROOT" ]; then
+            BUNDLE_ROOT="src-tauri/target/release/bundle"
+          fi
+          echo "Bundle root: $BUNDLE_ROOT"
+
+          # 既存 .sig があれば削除 (tauri build で自動生成された古い sig を
+          # 上書きする。未生成であっても影響なし)
+          find "$BUNDLE_ROOT" -type f -name '*.sig' -print -delete || true
+
+          # sign 対象: .dmg / .AppImage / .deb / .app.tar.gz
+          # macOS は .dmg と .app.tar.gz 両方、Linux は .AppImage と .deb 両方
+          # updater は platform ごとに特定拡張子を参照するが、latest.json の
+          # 組み立てで利用する候補をここで全て sign する
+          TARGETS=$(find "$BUNDLE_ROOT" -type f \( \
+            -iname '*.dmg' -o \
+            -iname '*.AppImage' -o \
+            -iname '*.deb' -o \
+            -iname '*.app.tar.gz' \
+          \) | sort)
+
+          if [ -z "$TARGETS" ]; then
+            echo "::error::No installer artifacts found under $BUNDLE_ROOT. Build may have failed silently."
+            find "$BUNDLE_ROOT" -maxdepth 4 -type f | head -50
+            exit 1
+          fi
+
+          echo "=== sign targets ==="
+          echo "$TARGETS"
+          echo "==================="
+
+          # 各 installer を明示 sign。stderr を capture して "Wrong password"
+          # pattern を検出したら即 fail (tauri-cli の silent fallback を catch)。
+          FAIL=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            echo "Signing: $f"
+            # stdout/stderr 両方を tmp にも出し、exit code を別途確認
+            SIGN_LOG="$(mktemp)"
+            if ! npx --yes @tauri-apps/cli signer sign "$f" >"$SIGN_LOG" 2>&1; then
+              echo "::error::signer sign exited non-zero for $f"
+              cat "$SIGN_LOG"
+              FAIL=1
+              rm -f "$SIGN_LOG"
+              continue
+            fi
+            # exit 0 でも "Wrong password" が出ていれば fail (tauri-cli bug 対策)
+            if grep -qi 'wrong password' "$SIGN_LOG"; then
+              echo "::error::signer sign reported 'Wrong password' for $f (tauri-cli #13485 env passphrase bug)."
+              cat "$SIGN_LOG"
+              FAIL=1
+            fi
+            cat "$SIGN_LOG"
+            rm -f "$SIGN_LOG"
+            # 対応する .sig が実在するか verify
+            if [ ! -s "${f}.sig" ]; then
+              echo "::error::expected ${f}.sig was not generated (empty or missing)"
+              FAIL=1
+            else
+              echo "OK: ${f}.sig generated ($(wc -c <"${f}.sig") bytes)"
+            fi
+          done <<< "$TARGETS"
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "::error::One or more installers failed to sign."
+            exit 1
+          fi
+
+      - name: Explicit signer sign (Windows)
+        if: runner.os == 'Windows' && env.SUMI_BUILD_SIGNED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundleRoot = "src-tauri/target/release/bundle"
+          if (-Not (Test-Path $bundleRoot)) {
+            Write-Error "bundle dir not found: $bundleRoot"
+            exit 1
+          }
+          Write-Host "Bundle root: $bundleRoot"
+
+          # 既存 .sig は削除して自前 sign で上書き
+          Get-ChildItem -Path $bundleRoot -Recurse -Filter '*.sig' -File -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              Write-Host "Removing stale sig: $($_.FullName)"
+              Remove-Item -Force $_.FullName
+            }
+
+          # sign 対象: .exe (NSIS) / .msi
+          $targets = Get-ChildItem -Path $bundleRoot -Recurse -File -Include *.exe,*.msi -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\.sig$' } |
+            Sort-Object FullName
+
+          if (-not $targets -or $targets.Count -eq 0) {
+            Write-Host "::error::No installer artifacts found under $bundleRoot. Build may have failed silently."
+            Get-ChildItem -Path $bundleRoot -Recurse -File -ErrorAction SilentlyContinue |
+              Select-Object -First 50 |
+              ForEach-Object { Write-Host $_.FullName }
+            exit 1
+          }
+
+          Write-Host "=== sign targets ==="
+          $targets | ForEach-Object { Write-Host $_.FullName }
+          Write-Host "==================="
+
+          $fail = $false
+          foreach ($t in $targets) {
+            $path = $t.FullName
+            Write-Host "Signing: $path"
+            # stderr merge + capture (PowerShell 5.1 で 2>&1 するとエラー record になるため
+            # cmd.exe 経由で native stderr を混ぜる方が安全だが、@tauri-apps/cli は
+            # npx 経由でも stderr を stdout に混ぜて出さないため、Start-Process + file redir で対応)
+            $logFile = [System.IO.Path]::GetTempFileName()
+            $p = Start-Process -FilePath 'npx' -ArgumentList '--yes','@tauri-apps/cli','signer','sign',"`"$path`"" `
+              -NoNewWindow -Wait -PassThru `
+              -RedirectStandardOutput $logFile `
+              -RedirectStandardError "$logFile.err"
+            $stdoutLog = if (Test-Path $logFile) { Get-Content $logFile -Raw } else { "" }
+            $stderrLog = if (Test-Path "$logFile.err") { Get-Content "$logFile.err" -Raw } else { "" }
+            $combined = "$stdoutLog`n$stderrLog"
+            Write-Host $combined
+            Remove-Item -Force $logFile, "$logFile.err" -ErrorAction SilentlyContinue
+
+            if ($p.ExitCode -ne 0) {
+              Write-Host "::error::signer sign exited non-zero ($($p.ExitCode)) for $path"
+              $fail = $true
+              continue
+            }
+            if ($combined -match '(?i)wrong password') {
+              Write-Host "::error::signer sign reported 'Wrong password' for $path (tauri-cli #13485 env passphrase bug)."
+              $fail = $true
+            }
+            $sigPath = "$path.sig"
+            if (-not (Test-Path $sigPath) -or ((Get-Item $sigPath).Length -eq 0)) {
+              Write-Host "::error::expected $sigPath was not generated (empty or missing)"
+              $fail = $true
+            } else {
+              $sz = (Get-Item $sigPath).Length
+              Write-Host "OK: $sigPath generated ($sz bytes)"
+            }
+          }
+
+          if ($fail) {
+            Write-Host "::error::One or more installers failed to sign."
+            exit 1
+          }
+
+      # ------------------------------------------------------------------
       # 10a. signed build の場合、.sig が実際に生成されたかを verify (v1.20.1)
       #     tauri-cli は key フォーマット不正 / password ミス等で warning を
       #     出しつつ unsigned build にフォールバックすることがある。tag release
       #     で unsigned artifact を上流に流さないため、この step で実体確認する。
+      #     v1.20.4: 明示 signer sign step (9b) と合わせて二重防御として維持。
       # ------------------------------------------------------------------
       - name: Verify .sig files were generated (POSIX)
         if: runner.os != 'Windows' && env.SUMI_BUILD_SIGNED == 'true' && startsWith(github.ref, 'refs/tags/v')

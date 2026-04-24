@@ -11,6 +11,57 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.20.4] - 2026-04-25
+
+**tauri-cli v2 の env 経由 passphrase 既知 bug (#13485 / #2710) を回避する
+明示 signer sign step を release workflow に追加** — v1.20.3 でも
+`Found 0 .sig files` 失敗が再発。GitHub Actions run 24912129040 の jobs 解析で
+全 4 platform の build step は exit 0 success、直後の verify .sig step で
+fail していた事実を確認。WebSearch で tauri-apps/tauri #13485 と
+plugins-workspace #2710、そして mnardit (2026-04-04) の post-mortem
+"The Invisible Backslash" を精読、真因が判明:
+
+- tauri-cli v2 の signer は、passphrase が不一致でも **stderr に
+  "Wrong password for that key" を出しつつ exit code 0** を返す
+  silent fail を起こす
+- さらに key 生成時、shell-quote 等の中間 library が `!` `$`
+  バッククォート `\` といった shell metacharacter を **silently escape**
+  する既知 bug があり、実際の key は「ユーザーが入力した passphrase と
+  違う文字列」で暗号化される
+- v1.20.3 で使った passphrase `Sumi-Updater-2026-Secure!` は末尾 `!`
+  が escape 対象に該当し、この罠に落ちていた
+- 結果として env で渡した元の passphrase では decode 失敗、
+  build step は silent fallback で unsigned bundle を生成して終了
+
+### Fixed
+
+- `.github/workflows/release.yml` の build step (step 9) の直後に
+  **明示的な `signer sign` step (step 9b)** を追加。Windows /
+  macOS / Linux それぞれで、生成された installer を find / Get-ChildItem
+  で列挙し、`npx @tauri-apps/cli signer sign <file>` をループで実行
+  する。stderr を capture して `wrong password` pattern を検出、
+  または対応する `.sig` が未生成なら即 fail させる。tauri-cli の
+  silent fallback (exit 0 + no .sig) を workflow 層で強制的に catch
+  する二重防御
+- sign 前に既存 `.sig` を削除することで、build step が silent fail
+  した場合の古い sig 残骸に引きずられない。明示 step の生成物のみを
+  artifact に載せる
+- sign 対象 glob:
+  - Windows: `*.exe` (NSIS) / `*.msi`
+  - macOS: `*.dmg` / `*.app.tar.gz`
+  - Linux: `*.AppImage` / `*.deb`
+
+### Operational
+
+- **オーナー作業推奨**: passphrase を shell-safe 文字のみ
+  (`!` `$` バッククォート `\` を含まない) で再生成することで、
+  local での key 再生成時の escape 罠も回避できる。ただし
+  v1.20.4 の明示 signer sign step は現行 passphrase でも機能し得る
+  (鍵の decode が 1 回でも成功すれば .sig 生成は完走する) ため、
+  まず現行 Secrets で run を試し、`wrong password` detect で
+  fail した場合のみ鍵再生成に進む段階的対応で良い
+- 詳細は `projects/PRJ-012/reports/pm-973-v1.20.4-explicit-signer-sign.md`
+
 ## [v1.20.3] - 2026-04-25
 
 **tauri-cli signer の silent fail 挙動を passphrase 必須化で回避** —
