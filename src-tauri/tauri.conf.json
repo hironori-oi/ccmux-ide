@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Sumi",
-  "version": "1.20.2",
+  "version": "1.20.3",
   "identifier": "jp.improver.sumi",
   "build": {
     "frontendDist": "../out",
@@ -67,7 +67,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUwOEJBMkQ4NkQzMjQxQzEKUldUQlFUSnQyS0tMVU1aUTk2UFZSMmlMMUtJcEhpZ2xXQ1V0TXNZaFp6SU44bGE2SnA5U2lHSGEK",
+      "pubkey": "ZFc1MGNuVnpkR1ZrSUdOdmJXMWxiblE2SUcxcGJtbHphV2R1SUhCMVlteHBZeUJyWlhrNklFSTFORUpDUlRJMU5UWTVPREUyTmtZS1VsZFNka1p3YUZkS1lqVk1kRlJIU1V0bVdFSm5VbWRrTkhGTmMxbHhkVVUxZWtwMmRuUjJUR2RIV1RKVk1YRkhNQ3R6VTFOek9Xa0s=",
       "endpoints": [
         "https://github.com/hironori-oi/ccmux-ide/releases/latest/download/latest.json"
       ],

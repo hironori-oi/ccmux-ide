@@ -11,6 +11,44 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.20.3] - 2026-04-25
+
+**tauri-cli signer の silent fail 挙動を passphrase 必須化で回避** —
+v1.20.2 でも `Found 0 .sig files` 失敗が再発した真因を再調査。
+tauri-cli の signer sign は passphrase 不一致時に stderr に
+`Wrong password for that key` を出すが **exit code 0 を返す**
+silent fail 挙動を local 検証で確認。さらにオーナーからの
+「GitHub Secrets は Value 空を許可しない UI 仕様」の証言と
+組み合わせ、空 passphrase 鍵 + PASSWORD Secret 未登録の運用は
+構造的に成立しないと判明。passphrase 付き鍵に切り替え、
+2 Secrets 両方の登録を必須化した。
+
+### Fixed
+
+- Ed25519 signing key を passphrase 付きで再生成 (旧 pubkey id
+  `508BA2D86D3241C1` → 新 `B54BBE255698166F`)。
+  `tauri signer generate -p '<passphrase>'` で rsign encrypted
+  secret key を再発行。local で `signer sign` を通し、`.sig`
+  生成を事前確認済み
+- `src-tauri/tauri.conf.json` の `plugins.updater.pubkey` を
+  新公開鍵で更新
+- `.github/workflows/release.yml` に password presence 検証
+  step (8c) を追加。`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` が
+  空 / 未定義の場合、tag release では即 fail、非 tag では
+  warning のみ。tauri-cli の silent fail (exit 0 + no .sig)
+  を workflow 層で強制的に catch する
+
+### Operational
+
+- **オーナー作業必須**: v1.20.3 workflow が走る前に
+  GitHub repository secrets を更新する必要あり
+  - `TAURI_SIGNING_PRIVATE_KEY`: 新 private key に上書き
+    (delete → recreate、または edit で replace)
+  - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: 新 passphrase を
+    新規登録 (Add secret)
+  - 詳細は `projects/PRJ-012/reports/pm-285-v1.20.3-passphrase-signing.md`
+    の §0 を参照
+
 ## [v1.20.2] - 2026-04-25
 
 **Ed25519 signing key 再生成 + release workflow に鍵 format 検証 step を追加** —

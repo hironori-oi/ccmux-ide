@@ -126,6 +126,13 @@ jobs:
       # `||`相当を workflow 側で保証する意図で `|| ''` 表記を検討したが、
       # Actions の expression syntax では `${{ secrets.X }}` が未登録だと
       # 空文字になるため、明示的な default 挿入は不要（GitHub 仕様）。
+      #
+      # v1.20.3 (PM-285): **passphrase 付き鍵に移行**。
+      # GitHub Secrets は Value 空を許可しない UI 仕様のため、passphrase 無し
+      # 鍵 + PASSWORD Secret 無しの運用は構造的に成立しない。さらに tauri-cli
+      # signer は wrong password でも exit 0 を返す silent fail 挙動のため、
+      # passphrase を強制することで「Secret 必須 + 正しい password 必須」の
+      # 2 重保険をかける。PASSWORD Secret が空なら step 8c で即 fail。
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       NPM_CONFIG_LEGACY_PEER_DEPS: 'true'
@@ -365,6 +372,51 @@ jobs:
             exit 1
           }
           Write-Host "OK: TAURI_SIGNING_PRIVATE_KEY parses as rsign encrypted secret key (first line header verified, body non-empty)."
+
+      # ------------------------------------------------------------------
+      # 8c. 署名鍵の PASSWORD 存在検証 (v1.20.3 / PM-285)
+      #
+      #    v1.20.2 でも `.sig` 不生成が続いた真因の再推定:
+      #    tauri-cli の signer sign は passphrase が鍵と一致しない場合
+      #    **stderr に "Wrong password" を出力するが exit code 0 を返す**。
+      #    GitHub Actions の build step は exit 0 を success 扱いするため、
+      #    signing が silent fail しても unsigned bundle で build が通る。
+      #
+      #    GitHub Secrets は Value 空を許可しない UI 仕様のため、
+      #    passphrase 無し鍵 + PASSWORD Secret 無し運用は構造的に不可能。
+      #    v1.20.3 で passphrase 付き鍵に移行、PASSWORD Secret 必須化。
+      #
+      #    ここで PASSWORD env が空 or 未定義の場合は tag release では
+      #    即 fail、非 tag では warning に留める。
+      # ------------------------------------------------------------------
+      - name: Verify TAURI_SIGNING_PRIVATE_KEY_PASSWORD presence (POSIX)
+        if: runner.os != 'Windows' && env.SUMI_BUILD_SIGNED == 'true'
+        run: |
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+              echo "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is empty or unset for a tag release. v1.20.3+ uses passphrase-protected keys; signing will silently fail (exit 0, no .sig)."
+              echo "::error::hint: register the passphrase as GitHub secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD (non-empty value required)."
+              exit 1
+            fi
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is empty. If key is passphrase-protected, signing will silently fail."
+          else
+            echo "OK: TAURI_SIGNING_PRIVATE_KEY_PASSWORD is present (length redacted)."
+          fi
+
+      - name: Verify TAURI_SIGNING_PRIVATE_KEY_PASSWORD presence (Windows)
+        if: runner.os == 'Windows' && env.SUMI_BUILD_SIGNED == 'true'
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrEmpty($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            if ($env:GITHUB_REF.StartsWith("refs/tags/v")) {
+              Write-Host "::error::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is empty or unset for a tag release. v1.20.3+ uses passphrase-protected keys; signing will silently fail (exit 0, no .sig)."
+              Write-Host "::error::hint: register the passphrase as GitHub secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD (non-empty value required)."
+              exit 1
+            }
+            Write-Host "::warning::TAURI_SIGNING_PRIVATE_KEY_PASSWORD is empty. If key is passphrase-protected, signing will silently fail."
+          } else {
+            Write-Host "OK: TAURI_SIGNING_PRIVATE_KEY_PASSWORD is present (length redacted)."
+          }
 
       # ------------------------------------------------------------------
       # 9. Tauri build
