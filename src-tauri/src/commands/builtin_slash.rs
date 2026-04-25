@@ -40,9 +40,11 @@ pub struct BuiltinSlash {
 
 /// 組込スラッシュ一覧を固定で返す。順番は `/help` で表示する見た目の順序と揃える。
 ///
-/// v1.24.0 (DEC-070): `/chrome` を追加。`action: "passthrough_to_sdk"` は frontend
-/// 側 dispatcher が intercept せず、通常 prompt として sidecar に送信させるための
-/// マーカー（CLI / SDK が組み込み解釈する想定）。
+/// v1.24.2 (DEC-070 改訂): `/chrome` の action を `toggle_chrome_mode` に変更。
+/// v1.24.0 では `passthrough_to_sdk` で SDK に流す設計だったが、`/chrome` は
+/// CLI interactive mode 専用 built-in で SDK 経由では未対応 (Claude が
+/// "isn't available in this environment" を返す) と判明したため、Sumi 側で
+/// intercept する経路に修正。
 #[tauri::command]
 pub fn list_builtin_slashes() -> Vec<BuiltinSlash> {
     vec![
@@ -81,14 +83,16 @@ pub fn list_builtin_slashes() -> Vec<BuiltinSlash> {
             description: "アプリ設定画面を開く".to_string(),
             action: "open_config".to_string(),
         },
-        // PRJ-012 v1.24.0 (DEC-070): Claude Code 公式の Chrome ブラウザ操作機能。
-        // 入力すると Claude が組み込み MCP `claude-in-chrome` 経由で接続状態を案内し、
-        // 必要に応じて拡張 reconnect / status 確認を行う。Sumi 側は intercept せず、
-        // 通常 prompt として sidecar に送る（"passthrough_to_sdk" がそのマーカー）。
+        // PRJ-012 v1.24.2 (DEC-070 改訂): Claude Code 公式の Chrome ブラウザ操作。
+        // v1.24.0 では `passthrough_to_sdk` で SDK に直接流す設計だったが、
+        // `/chrome` は CLI interactive mode 専用 built-in のため SDK 経由では
+        // 「isn't available in this environment」エラーになることが判明。
+        // v1.24.2 から Sumi 側で intercept し、session の chromeEnabled を
+        // toggle + sidecar 再起動する `toggle_chrome_mode` action に変更。
         BuiltinSlash {
             name: "/chrome".to_string(),
-            description: "Chrome 接続のステータス確認・有効化・再接続".to_string(),
-            action: "passthrough_to_sdk".to_string(),
+            description: "Chrome モードを切替（次の送信で --chrome 反映）".to_string(),
+            action: "toggle_chrome_mode".to_string(),
         },
     ]
 }
@@ -325,7 +329,7 @@ mod tests {
         assert!(names.contains(&"/chrome"), "DEC-070 v1.24.0: /chrome");
         // /chrome は frontend で intercept せず passthrough する目印
         let chrome = v.iter().find(|s| s.name == "/chrome").unwrap();
-        assert_eq!(chrome.action, "passthrough_to_sdk");
+        assert_eq!(chrome.action, "toggle_chrome_mode");
     }
 
     #[test]

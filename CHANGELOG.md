@@ -11,6 +11,19 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.24.2] - 2026-04-25
+
+### Fixed
+
+- `/chrome` 入力時に Claude が「`/chrome` isn't available in this environment.」と回答していた不具合を修正 (DEC-070 改訂)
+- 真因: `/chrome` は Claude Code CLI の interactive mode 専用 built-in で、SDK 経由では未対応
+- 修正: Sumi 側で `/chrome` を intercept、session の chromeEnabled を toggle し sidecar を kill。次の送信で `--chrome` 付きで lazy spawn される設計に変更
+
+### Changed
+
+- builtin slash の `/chrome` action を `passthrough_to_sdk` から `toggle_chrome_mode` に変更
+- `/chrome` 実行時に「Chrome モードを{有効/無効}にしました」の日本語 toast 通知
+
 ## [v1.24.1] - 2026-04-25
 
 ### Fixed

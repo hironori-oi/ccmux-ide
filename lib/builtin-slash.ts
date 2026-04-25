@@ -6,6 +6,8 @@ import type { toast as toastFn } from "sonner";
 import { callTauri } from "@/lib/tauri-api";
 import { useDialogStore } from "@/lib/stores/dialog";
 import { useChatStore } from "@/lib/stores/chat";
+import { useProjectStore } from "@/lib/stores/project";
+import { useSessionStore } from "@/lib/stores/session";
 
 /**
  * PRJ-012 v4 / Chunk C / DEC-028: Claude Code 組込 slash の frontend dispatcher。
@@ -57,6 +59,7 @@ export type BuiltinAction =
   | "open_help"
   | "compact_pending"
   | "open_config"
+  | "toggle_chrome_mode"
   | "passthrough_to_sdk";
 
 /**
@@ -73,6 +76,8 @@ export const BUILTIN_SLASH_ACTIONS: Readonly<Record<string, BuiltinAction>> = {
   "/help": "open_help",
   "/compact": "compact_pending",
   "/config": "open_config",
+  // v1.24.2 (DEC-070 改訂): `/chrome` を intercept して chromeEnabled を toggle。
+  "/chrome": "toggle_chrome_mode",
 };
 
 /** dispatcher が必要とする最小コンテキスト。 */
@@ -160,6 +165,62 @@ function dispatch(action: BuiltinAction, ctx: BuiltinSlashContext): void {
     }
     case "open_config": {
       router.push("/settings");
+      return;
+    }
+    case "toggle_chrome_mode": {
+      // v1.24.2 (DEC-070 改訂): `/chrome` を Sumi 側で intercept。
+      // 現 session の chromeEnabled を toggle し、現 sidecar を kill して
+      // 次の送信で `--chrome` 付きで lazy spawn させる。
+      void (async () => {
+        try {
+          const projectStore = useProjectStore.getState();
+          const sessionStore = useSessionStore.getState();
+          const projectId = projectStore.activeProjectId;
+          const sessionId = sessionStore.currentSessionId;
+          if (!projectId || !sessionId) {
+            toast.error(
+              "プロジェクトとセッションを選択してから `/chrome` を実行してください"
+            );
+            return;
+          }
+
+          const prefMod = await import("@/lib/stores/session-preferences");
+          const prefStore = prefMod.useSessionPreferencesStore.getState();
+          const current =
+            prefMod.resolveSessionPreferences(
+              prefStore,
+              sessionId,
+              prefMod.HARD_DEFAULT_PREFERENCES,
+            ).chromeEnabled ?? false;
+          const next = !current;
+
+          prefStore.setPreference(sessionId, projectId, {
+            chromeEnabled: next,
+          });
+
+          // 現 session の sidecar を kill。次の送信で --chrome flag 付きで
+          // lazy spawn される (DEC-063)。
+          try {
+            await callTauri<void>("stop_agent_sidecar", { sessionId });
+          } catch {
+            // 既に停止済み等は silent fallback
+          }
+
+          if (next) {
+            toast.success(
+              "Chrome モードを有効にしました。次の送信で --chrome 付き起動 + Chrome 拡張に接続します"
+            );
+          } else {
+            toast.success(
+              "Chrome モードを無効にしました。次の送信から通常モードで起動します"
+            );
+          }
+        } catch (e) {
+          toast.error(
+            `/chrome の処理に失敗しました: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+      })();
       return;
     }
     case "passthrough_to_sdk": {
