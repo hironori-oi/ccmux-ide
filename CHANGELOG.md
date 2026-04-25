@@ -11,6 +11,14 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.24.3] - 2026-04-25
+
+### Fixed
+
+- ProjectTree の再読込ボタン押下で開いていたフォルダの展開状態がリセットされる不具合を修正
+- 旧実装は `key={path:reloadKey}` で RootChildren を完全 unmount → 子孫 TreeNode の expanded local state が失われていた
+- 新実装は ReloadTickContext で reloadKey を子孫に伝播し useEffect deps で再 fetch のみ発動、component instance は維持して expanded state を保持
+
 ## [v1.24.2] - 2026-04-25
 
 ### Fixed

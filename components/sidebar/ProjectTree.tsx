@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ChevronDown,
@@ -159,6 +166,16 @@ async function loadDirEntries(parentPath: string): Promise<Entry[]> {
   return entries;
 }
 
+/**
+ * v1.24.3: 再読込ボタン押下で TreeNode 階層が unmount され、開いている
+ * フォルダの expanded state がリセットされる問題を修正。reloadKey を
+ * `key={...}` で伝えて子孫を全 unmount する旧設計から、Context 経由で
+ * tick 値を伝播 → 各層が useEffect deps で再 fetch を行う設計に変更。
+ * これにより component instance は維持され、TreeNode の expanded local
+ * state が refresh 越しに保持される。
+ */
+const ReloadTickContext = createContext(0);
+
 export function ProjectTree() {
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const projects = useProjectStore((s) => s.projects);
@@ -235,12 +252,18 @@ export function ProjectTree() {
         role="tree"
         aria-label="プロジェクトファイル"
       >
-        <RootChildren
-          key={`${activeProjectPath}:${reloadKey}`}
-          path={activeProjectPath}
-          onFileClick={handleFileClick}
-          onFileDblClick={handleFileDblClick}
-        />
+        {/* v1.24.3: reloadKey は Context で子孫に伝播し useEffect deps で
+            再 fetch を起こす。key には activeProjectPath のみを使い、
+            プロジェクト切替時のみ unmount するようにして、ボタン押下では
+            expanded state を保持する。 */}
+        <ReloadTickContext.Provider value={reloadKey}>
+          <RootChildren
+            key={activeProjectPath}
+            path={activeProjectPath}
+            onFileClick={handleFileClick}
+            onFileDblClick={handleFileDblClick}
+          />
+        </ReloadTickContext.Provider>
       </div>
 
       {/*
@@ -275,12 +298,15 @@ function RootChildren({
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // v1.24.3: 再読込 tick。変化で entries を再 fetch するが entries 配列は
+  // 既存表示を維持しながら裏で差し替えるため、TreeNode の expanded state は
+  // 影響を受けない（component instance が維持されれば local state も維持）。
+  const reloadTick = useContext(ReloadTickContext);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    setEntries(null);
     (async () => {
       try {
         const built = await loadDirEntries(path);
@@ -294,7 +320,7 @@ function RootChildren({
     return () => {
       cancelled = true;
     };
-  }, [path]);
+  }, [path, reloadTick]);
 
   if (loading) {
     return (
@@ -351,6 +377,9 @@ function TreeNode({
   // v3.4.6 修正: 再入・二重 fetch を ref で制御（useEffect deps から children/loading を
   // 除去し、state update で effect が re-run される loop を断つ）。
   const fetchedRef = useRef(false);
+  // v1.24.3: 再読込 tick。変化で expanded 中のディレクトリは children を再 fetch
+  // するが、expanded local state は維持されるため UI の展開状態は保持される。
+  const reloadTick = useContext(ReloadTickContext);
 
   useEffect(() => {
     if (!entry.isDirectory) return;
@@ -383,6 +412,40 @@ function TreeNode({
       cancelled = true;
     };
   }, [expanded, entry.isDirectory, entry.path, entry.name]);
+
+  // v1.24.3: 再読込 tick が変わったら fetchedRef をリセットして次の expanded
+  // (or 既に expanded 中) で再 fetch を発動させる。effect の依存は分離して
+  // 既存の fetch loop に影響しない。
+  useEffect(() => {
+    if (!entry.isDirectory) return;
+    if (reloadTick === 0) return; // 初回 mount は skip
+    fetchedRef.current = false;
+    if (expanded) {
+      // expanded 中なら即座に再 fetch をトリガするため、children を保持しつつ
+      // ref reset 後に setExpanded を一度同値で呼び directly fetch を起動。
+      // 直接の callback で fetch を再実行する代わりに、setLoading(true) を
+      // 先に立てておき、次の render での useEffect 再評価に乗せる。
+      void (async () => {
+        try {
+          setLoading(true);
+          setError(null);
+          fetchedRef.current = true;
+          const built = await loadDirEntries(entry.path);
+          setChildren(built);
+        } catch (e) {
+          console.error(
+            `[TreeNode] reload fetch failed name=${entry.name}`,
+            e,
+          );
+          setError(String(e));
+          fetchedRef.current = false;
+        } finally {
+          setLoading(false);
+        }
+      })();
+    }
+    // expanded === false の場合は次回 expand 時に fresh fetch されるので何もしない
+  }, [reloadTick, entry.isDirectory, entry.path, entry.name, expanded]);
 
   // v3.4.6 debug: render 時の state を可視化（dogfood 後に削除）。
   // PM-746: production では logger.debug が silent。
