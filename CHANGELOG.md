@@ -11,6 +11,13 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.25.3] - 2026-04-25
+
+### Fixed
+
+- v1.25.2 で追加した自己修復 useEffect が early return より後に置かれており、React Rules of Hooks 違反で Linux CI build が失敗していた不具合を修正
+- useEffect を early return 前に移動、`pane` が null の時も hook を unconditional に評価するよう paneFiles を空配列で初期化
+
 ## [v1.25.2] - 2026-04-25
 
 ### Fixed

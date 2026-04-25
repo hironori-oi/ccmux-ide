@@ -75,34 +75,37 @@ export function EditorPaneItem({
   // 永続化は不要（リロードで edit に戻る）。pane volatile state。
   const [mdViewMode, setMdViewMode] = useState<MarkdownViewMode>("edit");
 
-  if (!pane) {
-    return null;
-  }
-
-  const paneFiles = pane.openFileIds
-    .map((id) => openFiles.find((f) => f.id === id))
-    .filter((f): f is (typeof openFiles)[number] => Boolean(f));
-
-  // v1.25.2: pane.activeFileId が paneFiles に含まれない場合の自己修復。
+  // v1.25.2 / v1.25.3: pane.activeFileId が paneFiles に含まれない場合の自己修復。
   //
   // 旧実装は `find(...) ?? paneFiles[0] ?? null` で fallback していたが、その時
-  // `pane.activeFileId` は古い id を指したまま残るため、tab UI（`isActive = f.id === pane.activeFileId`）
-  // でどのタブも active 強調されない。さらに後段の `<MarkdownEditorArea openFileId={activeFile.id}>` が
-  // 「視覚的 active タブ」と「実 activeFileId」の不整合を起こし、結果として toolbar の
-  // 表示判定（`isMarkdownPath(activeFile.path)`）が **意図したファイル以外**で評価される
-  // ケースが生まれる（複数 pane で同 .md / 異種混在 open 時に再現）。
+  // `pane.activeFileId` は古い id を指したまま残るため、tab UI でどのタブも active
+  // 強調されない。さらに後段の `<MarkdownEditorArea openFileId={activeFile.id}>` が
+  // 「視覚的 active タブ」と「実 activeFileId」の不整合を起こし、toolbar の判定で
+  // 意図したファイル以外が評価されるケースが生まれる（複数 pane / 異種混在 open 時に再現）。
   //
   // ここでは active 候補が paneFiles に居ない場合、effect で 1 回だけ
   // `setActiveFile(paneFiles[0].id, paneId)` を発火して store 側を本物の id に書き戻す。
   // 描画自体は `paneFiles[0]` を使うので画面はちらつかない。
+  //
+  // v1.25.3: Rules of Hooks 違反 (early return より前に hook 呼び出しが必要) を回避し、
+  // pane が null の時は paneFiles を空配列にした上で hook を unconditional に評価する。
+  const paneFiles = pane
+    ? pane.openFileIds
+        .map((id) => openFiles.find((f) => f.id === id))
+        .filter((f): f is (typeof openFiles)[number] => Boolean(f))
+    : [];
   const resolvedActiveFile =
-    paneFiles.find((f) => f.id === pane.activeFileId) ?? paneFiles[0] ?? null;
+    paneFiles.find((f) => f.id === pane?.activeFileId) ??
+    paneFiles[0] ??
+    null;
   const activeFileIdMatches =
     resolvedActiveFile !== null &&
-    pane.activeFileId === resolvedActiveFile.id;
+    pane?.activeFileId === resolvedActiveFile.id;
+  const resolvedActiveFileId = resolvedActiveFile?.id ?? null;
 
   useEffect(() => {
     if (
+      pane &&
       paneFiles.length > 0 &&
       resolvedActiveFile !== null &&
       !activeFileIdMatches
@@ -110,16 +113,21 @@ export function EditorPaneItem({
       // activeFileId が stale（paneFiles に存在しない id）なら paneFiles[0] に再同期。
       setActiveFile(resolvedActiveFile.id, paneId);
     }
-    // 依存は最小限に: pane.activeFileId が変化、もしくは pane の openFileIds が変化したら再評価
+    // resolvedActiveFile は object で render 毎に新規だが、id が同じなら再発火しない
+    // よう resolvedActiveFileId を依存に使う。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     paneId,
-    pane.activeFileId,
-    pane.openFileIds,
+    pane?.activeFileId,
     activeFileIdMatches,
-    resolvedActiveFile?.id,
+    resolvedActiveFileId,
     paneFiles.length,
     setActiveFile,
   ]);
+
+  if (!pane) {
+    return null;
+  }
 
   const activeFile = resolvedActiveFile;
 
