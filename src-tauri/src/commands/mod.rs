@@ -65,6 +65,13 @@ pub mod skills;
 // install / enable / disable toggle UI を追加。
 pub mod plugins;
 
+// PRJ-012 v1.23.0 / DEC-069 (2026-04-25): localhost サーバー管理機能 (Phase 1 MVP)。
+// netstat2 で LISTEN 状態の TCP socket → pid を取得し、sysinfo で pid → process
+// metadata (name / cmd / start_time / cpu / memory) を解決して frontend に返す。
+// kill 操作は SIGTERM → 3 秒待機 → SIGKILL (Unix) / `taskkill /F /T` (Windows)
+// に escalate する。Sumi 自身の pid は kill 候補から除外。
+pub mod local_servers;
+
 // PRJ-012 v1.4 / PM-955 (2026-04-20): Claude Code MCP (Model Context Protocol)
 // server discovery。Cursor 上の Claude Code と同等に github / playwright /
 // supabase / vercel / pencil / stitch 等の MCP server を ccmux-ide-gui の

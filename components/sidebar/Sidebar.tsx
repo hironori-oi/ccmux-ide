@@ -9,6 +9,7 @@ import {
   MessageSquare,
   PanelLeftClose,
   PanelLeftOpen,
+  Server,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import {
 } from "@/components/ui/tooltip";
 import { MemoryTreeView } from "@/components/inspector/MemoryTreeView";
 import { ContextGauge } from "@/components/sidebar/ContextGauge";
+import { LocalServersPanel } from "@/components/sidebar/LocalServersPanel";
 import { ProjectTree } from "@/components/sidebar/ProjectTree";
 import { SessionList } from "@/components/sidebar/SessionList";
 import { SubAgentsList } from "@/components/sidebar/SubAgentsList";
@@ -53,7 +55,13 @@ import { cn } from "@/lib/utils";
 // v3.5.3 (2026-04-20): CLAUDE.md タブを Sidebar に追加（右 Inspector を全削除したため移設）。
 // v3.5.8 (2026-04-20): オーナー要望によりタブ順を「セッション / ファイル / ルール / 実行状態」
 // に変更。default active tab も "sessions" に変更（ユーザー初回起動で最も使う導線のため）。
-export type SidebarTabId = "sessions" | "files" | "memory" | "monitor";
+// v1.23.0 (2026-04-25, DEC-069): localhost サーバー管理 tab「サーバー」を追加。
+export type SidebarTabId =
+  | "sessions"
+  | "files"
+  | "memory"
+  | "servers"
+  | "monitor";
 
 const TABS: Array<{
   id: SidebarTabId;
@@ -78,6 +86,12 @@ const TABS: Array<{
     label: "ルール",
     icon: BookText,
     tooltip: "CLAUDE.md ツリー（Global / Project / Cwd のプロジェクトルール）",
+  },
+  {
+    id: "servers",
+    label: "サーバー",
+    icon: Server,
+    tooltip: "稼働中の localhost サーバー一覧 (LISTEN 状態の TCP port)",
   },
   {
     id: "monitor",
@@ -203,7 +217,7 @@ export function Sidebar() {
             <div
               role="tablist"
               aria-label="サイドバーセクション切替"
-              className="grid shrink-0 grid-cols-4 border-b bg-background/50"
+              className="grid shrink-0 grid-cols-5 border-b bg-background/50"
             >
               {TABS.map((tab) => {
                 const isActive = activeTab === tab.id;
@@ -292,6 +306,17 @@ export function Sidebar() {
                   ) : (
                     <EmptyPanel message="プロジェクトを選択すると CLAUDE.md ツリーが表示されます" />
                   )}
+                </div>
+              )}
+
+              {activeTab === "servers" && (
+                <div
+                  id="sidebar-panel-servers"
+                  role="tabpanel"
+                  aria-labelledby="sidebar-tab-servers"
+                  className="flex min-h-0 flex-1 flex-col"
+                >
+                  <LocalServersPanel />
                 </div>
               )}
 

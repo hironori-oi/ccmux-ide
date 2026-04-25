@@ -1,6 +1,6 @@
 [package]
 name = "sumi"
-version = "1.22.9"
+version = "1.23.0"
 description = "Sumi — Japanese-first Claude Code desktop client"
 edition = "2021"
 license = "MIT"
@@ -74,6 +74,14 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-feature
 # - sidecar (Node.js) とは別ライフサイクル、AgentState の JobObject には載せず、
 #   本 module で独自に kill-on-drop を保証する。
 portable-pty = "0.8"
+
+# PRJ-012 v1.23.0 / DEC-069: localhost サーバー管理機能 (Phase 1 MVP)。
+# - sysinfo (cross-platform プロセス情報 + kill): pid → process name / cwd /
+#   started_at / cpu / memory を取得し、kill_with(Signal) で graceful + force kill。
+# - netstat2 (port → pid マッピング): LISTEN 状態の TCP socket を IPv4/IPv6 共に
+#   列挙し、pid に紐付け。Windows / Linux / macOS いずれも追加 OS dep 不要。
+sysinfo = "0.30"
+netstat2 = "0.9"
 
 # --- Windows-only: Sidecar orphan-process 対策 (DEC-033 v3.3.1 / Chunk A) ---
 # JobObject (CreateJobObjectW + AssignProcessToJobObject + JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)

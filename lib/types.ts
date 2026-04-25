@@ -816,3 +816,37 @@ export const PERMISSION_MODE_CHOICES: Array<{
 
 /** 既定 PermissionMode（初回セッション作成時の seed 値）。 */
 export const DEFAULT_PERMISSION_MODE: PermissionMode = "default";
+
+// ---------------------------------------------------------------------------
+// PRJ-012 v1.23.0 / DEC-069: localhost サーバー管理機能 (Phase 1 MVP)
+//
+// Rust `commands::local_servers::LocalServer` と 1:1 対応（camelCase）。
+// Sidebar の「サーバー」tab で、LISTEN 中の TCP port + pid + process metadata を
+// 一覧表示するための型。
+// ---------------------------------------------------------------------------
+
+/**
+ * 1 つの LISTEN 中 localhost サーバー。
+ *
+ * - `pid`: kill_local_server の引数 / row key
+ * - `port`: LISTEN port（uint16）
+ * - `host`: 代表 host（`127.0.0.1` / `0.0.0.0` / `::1` / `::` など）。同一 pid +
+ *   同一 port で IPv4/IPv6 が重複していた場合は priority で 1 つに集約済。
+ * - `processName`: プロセス名（例: `node.exe` / `python3` / `cargo`）
+ * - `commandLine`: 起動コマンドライン（取得不可なら null）
+ * - `startedAt`: プロセス起動時刻 (UNIX epoch ms)、取得不可なら null
+ * - `cpuPercent`: CPU 使用率 (%, 0.0..100.0 *コア合算ではない*)
+ * - `memoryMb`: 物理メモリ使用量 (MB, 整数)
+ * - `isSelf`: Sumi 自身の pid なら true。frontend は kill 候補から除外する判定に使う。
+ */
+export interface LocalServer {
+  pid: number;
+  port: number;
+  host: string;
+  processName: string;
+  commandLine: string | null;
+  startedAt: number | null;
+  cpuPercent: number;
+  memoryMb: number;
+  isSelf: boolean;
+}

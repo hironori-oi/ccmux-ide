@@ -58,6 +58,10 @@ use commands::{
     // process が死ぬ問題が解消せず、`WebviewWindowBuilder::data_directory` を
     // 明示指定する Rust command に切替。
     preview::spawn_preview_window,
+    // PRJ-012 v1.23.0 / DEC-069 (2026-04-25): localhost サーバー管理機能。
+    // sysinfo + netstat2 で LISTEN 状態の TCP port + pid を cross-platform に取得し、
+    // SIGTERM → 3 秒 → SIGKILL escalate でプロセスを停止する。
+    local_servers::{kill_local_server, list_local_servers},
 };
 use events::monitor::{self, MonitorHandle};
 
@@ -209,6 +213,11 @@ pub fn run() {
             // `WebviewWindowBuilder::data_directory` 付きで spawn する command。
             // frontend は `invoke("spawn_preview_window", { label, url, title })`。
             spawn_preview_window,
+            // PRJ-012 v1.23.0 / DEC-069 (2026-04-25): localhost サーバー管理機能。
+            // Sidebar の「サーバー」tab から呼ばれ、LISTEN 中の TCP port を一覧 +
+            // pid 単位で kill するための 2 command。
+            list_local_servers,
+            kill_local_server,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

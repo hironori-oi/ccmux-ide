@@ -11,6 +11,20 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.23.0] - 2026-04-25
+
+### Added
+
+- localhost サーバー管理機能を追加 (Phase 1 MVP, DEC-069)
+- Sidebar に「サーバー」tab を追加、稼働中の localhost サーバー (LISTEN 状態) を一覧表示
+- 各サーバー row で「外部ブラウザで開く / Preview に配置 / 停止」が可能
+- 5 秒間隔で polling、tab 非アクティブ時は停止
+- 停止操作は AlertDialog で確認、Sumi 自身のプロセスは kill 候補から除外
+
+### Changed
+
+- Rust 依存に sysinfo (プロセス情報 + kill) と netstat2 (port→pid) を追加
+
 ## [v1.22.9] - 2026-04-25
 
 ### Changed
