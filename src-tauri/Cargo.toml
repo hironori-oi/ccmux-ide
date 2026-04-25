@@ -1,6 +1,6 @@
 [package]
 name = "sumi"
-version = "1.24.0"
+version = "1.24.1"
 description = "Sumi — Japanese-first Claude Code desktop client"
 edition = "2021"
 license = "MIT"
@@ -81,7 +81,10 @@ portable-pty = "0.8"
 # - netstat2 (port → pid マッピング): LISTEN 状態の TCP socket を IPv4/IPv6 共に
 #   列挙し、pid に紐付け。Windows / Linux / macOS いずれも追加 OS dep 不要。
 sysinfo = "0.30"
-netstat2 = "0.9"
+# netstat2 0.9.1 (2020) は新しい libc crate (0.2.155+) と非互換 (__be16
+# 曖昧 / tcp_info.state field が tcpi_state に rename された影響)。
+# 0.11.2 (2025-08) で修正済のため、Linux CI build を通すために 0.11 系を要求する。
+netstat2 = "0.11"
 
 # --- Windows-only: Sidecar orphan-process 対策 (DEC-033 v3.3.1 / Chunk A) ---
 # JobObject (CreateJobObjectW + AssignProcessToJobObject + JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)

@@ -11,6 +11,13 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.24.1] - 2026-04-25
+
+### Fixed
+
+- Linux CI build が netstat2 0.9.1 と新しい libc crate の非互換 (`__be16` 曖昧 / `tcp_info.state` field 消失) で失敗していた不具合を修正
+- netstat2 を 0.9 → 0.11 に upgrade、API 互換性は維持されるため Sumi 側コード変更なし
+
 ## [v1.24.0] - 2026-04-25
 
 ### Added
