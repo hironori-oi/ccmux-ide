@@ -55,26 +55,43 @@ import { cn } from "@/lib/utils";
  */
 export function LocalServersPanel() {
   const [servers, setServers] = useState<LocalServer[]>([]);
+  // v1.25.0: 「初回 / 手動 refresh の in-flight」と「自動 polling 中」を区別。
+  // - loading: 初回 fetch でデータが何もない状態
+  // - manualRefreshing: 明示的な再取得ボタンが in-flight (spinner 表示用)
+  // - polling は header の緑 dot で常時可視化
   const [loading, setLoading] = useState(true);
+  const [manualRefreshing, setManualRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [killTarget, setKillTarget] = useState<LocalServer | null>(null);
   const [killing, setKilling] = useState(false);
+  const [pollingActive, setPollingActive] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 取得処理本体。手動 refresh / polling / 初回 mount で共有する。
-  const fetchServers = useCallback(async () => {
-    try {
-      const list = await invoke<LocalServer[]>("list_local_servers");
-      setServers(list);
-      setError(null);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      logger.error("[local-servers] list failed:", msg);
-      setError(msg);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  /**
+   * 取得処理本体。
+   *
+   * - `mode === "auto"` (polling): spinner は出さない、結果だけ更新
+   * - `mode === "manual"` (手動 refresh): manualRefreshing を立てて spinner 表示
+   * - `mode === "initial"` (mount): loading を立てて初回 skeleton 表示
+   */
+  const fetchServers = useCallback(
+    async (mode: "auto" | "manual" | "initial" = "auto") => {
+      if (mode === "manual") setManualRefreshing(true);
+      try {
+        const list = await invoke<LocalServer[]>("list_local_servers");
+        setServers(list);
+        setError(null);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        logger.error("[local-servers] list failed:", msg);
+        setError(msg);
+      } finally {
+        if (mode === "initial") setLoading(false);
+        if (mode === "manual") setManualRefreshing(false);
+      }
+    },
+    [],
+  );
 
   // 5 秒 polling + visibility 制御。
   useEffect(() => {
@@ -82,9 +99,10 @@ export function LocalServersPanel() {
 
     function startPolling() {
       if (intervalRef.current) return;
+      setPollingActive(true);
       intervalRef.current = setInterval(() => {
         if (cancelled) return;
-        void fetchServers();
+        void fetchServers("auto");
       }, 5000);
     }
 
@@ -93,10 +111,11 @@ export function LocalServersPanel() {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
+      setPollingActive(false);
     }
 
     // 初回 fetch & polling start (visible なときだけ)。
-    void fetchServers();
+    void fetchServers("initial");
     if (
       typeof document !== "undefined" &&
       document.visibilityState === "visible"
@@ -107,7 +126,7 @@ export function LocalServersPanel() {
     function handleVisibility() {
       if (document.visibilityState === "visible") {
         // 戻ってきたら即 fetch + polling 再開。
-        void fetchServers();
+        void fetchServers("auto");
         startPolling();
       } else {
         stopPolling();
@@ -173,8 +192,8 @@ export function LocalServersPanel() {
       });
       toast.success(`サーバー（port ${killTarget.port}）を停止しました`);
       setKillTarget(null);
-      // 即時 refresh (polling 待ちを回避)。
-      await fetchServers();
+      // 即時 refresh (polling 待ちを回避)。手動扱いで spinner を立てる。
+      await fetchServers("manual");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       toast.error(`停止に失敗しました: ${msg}`);
@@ -199,7 +218,8 @@ export function LocalServersPanel() {
         className="flex min-h-0 flex-1 flex-col"
         aria-label="localhost サーバー一覧"
       >
-        {/* ヘッダ: 件数 + 手動 refresh */}
+        {/* ヘッダ: 件数 + polling dot + 手動 refresh
+            v1.25.0: spinner は手動再取得 in-flight 時のみ。自動 polling は緑 pulse dot で常時可視化。 */}
         <header className="flex shrink-0 items-center justify-between border-b px-2 py-1.5">
           <div className="flex items-center gap-1.5 text-xs">
             <Server className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
@@ -207,6 +227,29 @@ export function LocalServersPanel() {
             <span className="tabular-nums text-muted-foreground">
               {servers.length}
             </span>
+            {/* 自動更新の活性表示。pollingActive が true の間だけ緑 dot を pulse させる。 */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  aria-label={
+                    pollingActive
+                      ? "自動更新中 (5 秒ごと)"
+                      : "自動更新は停止中"
+                  }
+                  className={cn(
+                    "ml-0.5 inline-block h-1.5 w-1.5 rounded-full",
+                    pollingActive
+                      ? "bg-emerald-500 motion-safe:animate-pulse"
+                      : "bg-muted-foreground/40",
+                  )}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {pollingActive
+                  ? "自動更新中 (5 秒ごとにサーバ一覧を再取得)"
+                  : "自動更新は停止中 (タブが非表示の間は止まります)"}
+              </TooltipContent>
+            </Tooltip>
           </div>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -214,21 +257,25 @@ export function LocalServersPanel() {
                 size="icon"
                 variant="ghost"
                 className="h-6 w-6"
-                onClick={() => void fetchServers()}
-                disabled={loading}
+                onClick={() => void fetchServers("manual")}
+                disabled={manualRefreshing || loading}
                 aria-label="再取得"
               >
                 <RefreshCw
                   className={cn(
                     "h-3 w-3",
-                    loading && "animate-spin text-muted-foreground"
+                    // v1.25.0: spinner は manual refresh in-flight 時のみ立てる。
+                    // 5 秒間隔の auto polling 中は spinner 不要 (header の緑 dot で表現)。
+                    manualRefreshing && "animate-spin text-muted-foreground",
                   )}
                   aria-hidden
                 />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
-              再取得 (5 秒ごと自動更新中)
+              {manualRefreshing
+                ? "再取得中..."
+                : "今すぐ再取得 (5 秒ごと自動更新中)"}
             </TooltipContent>
           </Tooltip>
         </header>
@@ -278,6 +325,11 @@ export function LocalServersPanel() {
                 {killTarget && (
                   <>
                     プロセス {killTarget.pid} ({killTarget.processName}) を停止します。
+                    <br />
+                    {/* v1.25.0: 接続中の URL を明示し、誤停止を防ぐ */}
+                    <span className="font-mono text-xs">
+                      接続先: {buildUrl(killTarget)}
+                    </span>
                     <br />
                     <span className="text-destructive">
                       実行中の処理は失われます。

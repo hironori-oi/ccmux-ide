@@ -76,6 +76,46 @@ const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "gif"];
 /** 大きい画像の警告閾値（byte）。10 MB 超で警告表示。 */
 const LARGE_IMAGE_WARN_BYTES = 10 * 1024 * 1024;
 
+/**
+ * v1.25.0: ネイティブ range input の PageUp/PageDown/Home/End 標準対応。
+ *
+ * Native range は矢印で 1 step 動くが、PageUp/Down は実装依存 (Chromium は
+ * 10% 動く / Firefox は 1 step) で揃わない。Home/End は実装している browser も
+ * あるが Tauri WebView2 では未対応。
+ *
+ * このヘルパは onKeyDown に bind して使い、PageUp/PageDown で +10 step / -10 step、
+ * Home/End で min/max にジャンプする挙動を提供する。
+ *
+ * @param current 現在の値 (clamping は呼び出し側で実施済前提)
+ * @param min     許容最小値
+ * @param max     許容最大値
+ * @param step    1 矢印あたりの step 量
+ * @param onChange 値変更時のコールバック (内部で min/max clamp される)
+ */
+function handleSliderKeyDown(
+  e: React.KeyboardEvent<HTMLInputElement>,
+  current: number,
+  min: number,
+  max: number,
+  step: number,
+  onChange: (next: number) => void,
+): void {
+  let next: number | null = null;
+  if (e.key === "PageUp") {
+    next = current + step * 10;
+  } else if (e.key === "PageDown") {
+    next = current - step * 10;
+  } else if (e.key === "Home") {
+    next = min;
+  } else if (e.key === "End") {
+    next = max;
+  }
+  if (next === null) return;
+  e.preventDefault();
+  const clamped = Math.max(min, Math.min(max, next));
+  onChange(clamped);
+}
+
 export function AppearanceSettings() {
   const { setTheme, theme: currentTheme, resolvedTheme } = useTheme();
   const appearance = useSettingsStore((s) => s.settings.appearance);
@@ -423,10 +463,13 @@ export function AppearanceSettings() {
           step={1}
           value={appearance.fontSize}
           onChange={(e) => setFontSize(Number(e.target.value))}
+          onKeyDown={(e) =>
+            handleSliderKeyDown(e, appearance.fontSize, 12, 16, 1, setFontSize)
+          }
           className="w-full accent-primary"
           aria-label="フォントサイズ"
         />
-        <div className="flex justify-between text-[10px] text-muted-foreground">
+        <div className="flex justify-between text-[10px] tabular-nums text-muted-foreground">
           <span>12</span>
           <span>13</span>
           <span>14</span>
@@ -546,6 +589,16 @@ export function AppearanceSettings() {
               onChange={(e) =>
                 setBackgroundImage({ opacity: Number(e.target.value) / 100 })
               }
+              onKeyDown={(e) =>
+                handleSliderKeyDown(
+                  e,
+                  Math.round(bgImage.opacity * 100),
+                  0,
+                  100,
+                  1,
+                  (v) => setBackgroundImage({ opacity: v / 100 }),
+                )
+              }
               className="w-full accent-primary disabled:opacity-50"
               aria-label="背景画像の濃さ"
             />
@@ -575,6 +628,11 @@ export function AppearanceSettings() {
               value={bgImage.blur}
               onChange={(e) =>
                 setBackgroundImage({ blur: Number(e.target.value) })
+              }
+              onKeyDown={(e) =>
+                handleSliderKeyDown(e, bgImage.blur, 0, 20, 1, (v) =>
+                  setBackgroundImage({ blur: v }),
+                )
               }
               className="w-full accent-primary disabled:opacity-50"
               aria-label="背景画像のぼかし"
@@ -607,6 +665,16 @@ export function AppearanceSettings() {
                 setBackgroundImage({
                   overlayOpacity: Number(e.target.value) / 100,
                 })
+              }
+              onKeyDown={(e) =>
+                handleSliderKeyDown(
+                  e,
+                  Math.round(bgImage.overlayOpacity * 100),
+                  0,
+                  100,
+                  1,
+                  (v) => setBackgroundImage({ overlayOpacity: v / 100 }),
+                )
               }
               className="w-full accent-primary disabled:opacity-50"
               aria-label="オーバーレイの濃さ"

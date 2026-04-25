@@ -237,3 +237,33 @@ export function getAccentChipBgClass(
 ): string {
   return ACCENT_CLASS_TABLE[normalizeAccentColor(color)].chipBg;
 }
+
+/**
+ * v1.25.0: chip swatch の明度に応じた前景色クラスを返す。
+ *
+ * `getAccentChipBgClass` は `bg-{color}-500 dark:bg-{color}-400` を返す前提なので、
+ * 500/400 の明度に応じて Check アイコンの色を切り替える。
+ *
+ * - 淡色 (yellow / lime / amber / sky / cyan / neutral): dark text (slate-900)
+ * - 濃色 (red / orange / green / blue / indigo / ...): white text
+ *
+ * Tailwind 公式 palette の L 値ベースで人手分類。
+ */
+const LIGHT_ACCENTS: ReadonlySet<AccentColor> = new Set<AccentColor>([
+  "yellow",
+  "lime",
+  "amber",
+  "sky",
+  "cyan",
+  "neutral",
+]);
+
+export function getAccentChipForegroundClass(
+  color: AccentColor | string | null | undefined
+): string {
+  const c = normalizeAccentColor(color);
+  return LIGHT_ACCENTS.has(c)
+    ? "text-slate-900 drop-shadow-sm"
+    : "text-white drop-shadow";
+}
+

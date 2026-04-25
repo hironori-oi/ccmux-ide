@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Send, Paperclip, AlertTriangle, Info } from "lucide-react";
+import { Send, Paperclip, AlertTriangle, Info, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -58,6 +58,7 @@ import { writeFile, mkdir, exists, stat } from "@tauri-apps/plugin-fs";
 import { appLocalDataDir, join } from "@tauri-apps/api/path";
 import { humanFileSize } from "@/lib/image-utils";
 import { cn } from "@/lib/utils";
+import { getModifierLabel } from "@/lib/utils/platform";
 import type { SlashCmd } from "@/lib/types";
 
 /** PRJ-012 Round E1: 「大きい画像」警告の閾値（100KB）。 */
@@ -257,6 +258,12 @@ export function InputArea({
         sessionId = session.id;
         // v1.18.0: setPaneSession で pane と session を紐付け直す
         useChatStore.getState().setPaneSession(paneId, sessionId);
+        // v1.25.0: 自動作成された session をユーザに可視化する。
+        // toast id を session id にすることで、同 session への重複通知を防ぐ。
+        toast.info(
+          "新規セッションを開始しました（タイトルは初回応答で自動生成）",
+          { id: `auto-session-${sessionId}` },
+        );
       } catch (e) {
         toast.error(
           `セッション作成に失敗しました: ${e instanceof Error ? e.message : String(e)}`
@@ -672,6 +679,11 @@ export function InputArea({
           const session = await useSessionStore.getState().createNewSession();
           sid = session.id;
           useChatStore.getState().setPaneSession(paneId, sid);
+          // v1.25.0: 画像 D&D 経由で session が自動作成された場合も同様に通知。
+          toast.info(
+            "新規セッションを開始しました（タイトルは初回応答で自動生成）",
+            { id: `auto-session-${sid}` },
+          );
         } catch (e) {
           toast.error(
             `セッション作成に失敗しました: ${e instanceof Error ? e.message : String(e)}`
@@ -798,7 +810,7 @@ export function InputArea({
                 !activeProjectId
                   ? "プロジェクトを選択してください（左のレールから ＋ で追加）"
                   : streaming
-                    ? "応答中... (Esc で停止 / 送信で停止して新しい turn)"
+                    ? `応答中... (${getModifierLabel()}+. で停止 / 送信で停止して新しい turn)`
                     : "メッセージを入力（Ctrl+Enter で送信、/ でコマンド、画像は D&D または Ctrl+V、ファイルは Files タブからドラッグ）"
               }
               // v1.21.0 (DEC-067): 応答中でも textarea を有効化し、Cursor の
@@ -826,6 +838,33 @@ export function InputArea({
               anchorRef={wrapperRef}
             />
           </div>
+          {/* v1.25.0: 応答中のみ表示する明示的「停止」ボタン。送信ボタン
+              (= 停止して送信) と独立して、入力が空でも応答を止められるようにする。
+              hotkey Cmd/Ctrl+. と等価。 */}
+          {streaming && activeProjectId && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                const sid =
+                  useChatStore.getState().panes[paneId]?.currentSessionId ??
+                  null;
+                if (!sid) return;
+                void callTauri<void>("send_agent_interrupt", {
+                  sessionId: sid,
+                }).catch((e) => {
+                  // idempotent。失敗は debug log に留める。
+                  logger.debug("[stop-button] interrupt failed", e);
+                });
+              }}
+              className="h-10 shrink-0"
+              aria-label="応答を停止"
+              title={`現在の応答を停止 (${getModifierLabel()} + .)`}
+            >
+              <Square className="h-4 w-4" aria-hidden />
+              <span className="ml-1 hidden sm:inline">停止</span>
+            </Button>
+          )}
           <Button
             onClick={handleSend}
             // v1.21.0 (DEC-067): 応答中 (streaming) も送信を許容する。送信時は
@@ -841,13 +880,14 @@ export function InputArea({
             </span>
           </Button>
         </div>
-        {/* v1.21.0 (DEC-067): 応答中のみ「Esc で停止」のヒントを表示 (Cursor 互換)。 */}
+        {/* v1.21.0 (DEC-067): 応答中のヒントを表示 (Cursor 互換)。
+            v1.25.0: 停止 hotkey を Esc から Cmd/Ctrl+. に変更 (Esc は modal 閉じる専用)。 */}
         {streaming && activeProjectId && (
           <div
             className="text-[10px] text-muted-foreground"
             aria-live="polite"
           >
-            応答中: Esc で停止 / そのまま送信すると停止して新しい turn になります
+            応答中: <kbd className="rounded border bg-background px-1 font-mono text-[10px]">{`${getModifierLabel()} + .`}</kbd> または右下の停止ボタンで停止 / そのまま送信すると停止して新しい turn になります
           </div>
         )}
       </div>

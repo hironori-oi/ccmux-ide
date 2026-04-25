@@ -34,7 +34,7 @@ import { isAbsolutePath, isPathWithinCwd } from "@/lib/utils/path";
  * - ツール入力は tool 種別ごとに最適な summary 整形を行う (Bash / Write / Edit /
  *   WebSearch / WebFetch / others)
  * - アクセシビリティ: radix-ui Dialog のフォーカストラップを活用。
- *   Enter = 今回のみ許可、Esc = 今回のみ拒否 の hotkey も binding
+ *   Enter = 今回のみ許可 の hotkey を binding (Esc は v1.25.0 で no-op に変更)
  *
  * 設計判断:
  *  - モーダル中央表示で他 UI 操作をブロック (見落とし防止)
@@ -42,6 +42,12 @@ import { isAbsolutePath, isPathWithinCwd } from "@/lib/utils/path";
  *    → `panes[activePaneId].currentSessionId` で推定。pane が close されている等の
  *    エッジケースでは session-preferences への記録のみ skip し、sidecar への応答
  *    は必ず完了させる (承認/拒否自体は project 単位で機能する)
+ *
+ * v1.25.0 (UX 摩擦修正):
+ *  - 旧: Esc 押下 = 今回拒否。反射押しで「うっかり拒否」事故が頻発していた
+ *  - 新: Esc は no-op (= 一時保留)。dialog は閉じず、明示的にボタンを押させる
+ *  - Tab 順序: 「今回拒否 → 今回許可 → 常時拒否 → 常時許可」(破壊度高ボタンを末尾に)
+ *  - 視覚は v1.22.7 の 2x2 grid を維持しつつ tabIndex で論理順序を制御
  */
 export function PermissionDialog(): React.ReactElement | null {
   const pending = usePermissionRequestsStore((s) => s.pending);
@@ -50,17 +56,17 @@ export function PermissionDialog(): React.ReactElement | null {
   const current: PermissionRequest | null = pending[0] ?? null;
   const open = current !== null;
 
-  // Enter / Esc hotkey (radix の onKeyDown に頼ると Portal 都合で拾えないため window)
+  // Enter hotkey (radix の onKeyDown に頼ると Portal 都合で拾えないため window)
+  // v1.25.0: Esc は no-op に変更 (UX 摩擦修正)。明示的にボタン押下を促す。
   useEffect(() => {
     if (!current) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Enter") {
         e.preventDefault();
         void handleClick(current, "allow", "once");
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        void handleClick(current, "deny", "once");
       }
+      // Esc はあえて何もしない (= 保留)。dialog は開いたまま、ユーザーに
+      // 明示的なボタン操作を促す。
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -128,12 +134,13 @@ export function PermissionDialog(): React.ReactElement | null {
   return (
     <Dialog open={open}>
       <DialogContent
-        // 閉じる X ボタンや overlay クリック / Esc での close は hotkey で
-        // deny-once として処理させる。Dialog 既定の close パスは意図しない
-        // 「応答なし」を招くので全て抑止する。
+        // 閉じる X ボタン / overlay クリック / Esc での close は全て抑止する。
+        // v1.25.0: 旧仕様で Esc=今回拒否 にしていたが UX 摩擦が高いため no-op に
+        // 変更。Dialog 既定の close パスは意図しない「応答なし」を招くので、
+        // ユーザーの明示ボタン押下のみで決定する。
         onEscapeKeyDown={(e) => {
           e.preventDefault();
-          void handleClick(current, "deny", "once");
+          // 何もしない (= 保留)
         }}
         onPointerDownOutside={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
@@ -206,12 +213,17 @@ export function PermissionDialog(): React.ReactElement | null {
         </div>
 
         {/* v1.22.7: 4 ボタンを 2x2 grid で配置し dialog 枠からはみ出ないよう調整。
-            左右で 拒否/許可、上下で 常時/今回 のグルーピング。 */}
+            左右で 拒否/許可、上下で 常時/今回 のグルーピング。
+            v1.25.0: 視覚位置は維持しつつ tabIndex で論理順序を
+            「今回拒否 → 今回許可 → 常時拒否 → 常時許可」に再構成。
+            破壊度の高い「常時許可/拒否」を tab 後段に置くことで誤爆を抑える。
+            autoFocus は「今回のみ許可」に維持 (Enter で即許可可)。 */}
         <DialogFooter className="grid grid-cols-2 gap-2 sm:space-x-0">
           <Button
             variant="outline"
             onClick={() => void handleClick(current, "deny", "session")}
             aria-label="このセッションで常に拒否"
+            tabIndex={3}
           >
             <X className="mr-1.5 h-4 w-4" aria-hidden />
             セッション常時拒否
@@ -220,6 +232,7 @@ export function PermissionDialog(): React.ReactElement | null {
             variant="outline"
             onClick={() => void handleClick(current, "allow", "session")}
             aria-label="このセッションで常に許可"
+            tabIndex={4}
           >
             <Check className="mr-1.5 h-4 w-4" aria-hidden />
             セッション常時許可
@@ -228,6 +241,7 @@ export function PermissionDialog(): React.ReactElement | null {
             variant="outline"
             onClick={() => void handleClick(current, "deny", "once")}
             aria-label="今回のみ拒否"
+            tabIndex={1}
           >
             今回のみ拒否
           </Button>
@@ -235,6 +249,7 @@ export function PermissionDialog(): React.ReactElement | null {
             onClick={() => void handleClick(current, "allow", "once")}
             aria-label="今回のみ許可"
             autoFocus
+            tabIndex={2}
           >
             今回のみ許可
           </Button>

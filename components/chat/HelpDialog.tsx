@@ -102,6 +102,10 @@ export function HelpDialog() {
 
           <section className="mt-6 space-y-3">
             <h3 className="text-sm font-semibold text-foreground">主なショートカット</h3>
+            <p className="text-[11px] text-muted-foreground">
+              凡例: <kbd className="rounded border bg-muted px-1 py-0.5 font-mono text-[10px]">⌘</kbd>
+              {" "}は Mac の Cmd、Windows / Linux の Ctrl と同義です。
+            </p>
             <ul className="space-y-1 text-xs text-muted-foreground">
               <li>
                 <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + Enter</kbd>{" "}
@@ -115,9 +119,14 @@ export function HelpDialog() {
                 <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + V</kbd>{" "}
                 クリップボードの画像を添付
               </li>
+              {/* v1.25.0: 応答停止 hotkey の追加 (Esc 反射押し事故の解消) */}
+              <li>
+                <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Ctrl/Cmd + .</kbd>{" "}
+                応答中の Claude を停止（右下「停止」ボタンと同等）
+              </li>
               <li>
                 <kbd className="rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px]">Esc</kbd>{" "}
-                パレットを閉じる
+                パレット / ダイアログを閉じる
               </li>
             </ul>
           </section>

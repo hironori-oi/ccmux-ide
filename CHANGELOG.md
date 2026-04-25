@@ -11,6 +11,30 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.25.0] - 2026-04-25
+
+### Fixed
+
+- PermissionDialog の Esc 押下が「即拒否」になる UX 摩擦を修正、no-op に変更
+- PermissionDialog の Tab order を「拒否（今回）→ 許可（今回）→ 拒否（常時）→ 許可（常時）」に変更し誤爆余地を削減
+- SessionList rename Dialog の入力非対称性を修正（保存 disabled + 既存タイトル全選択 + 破棄確認）
+- LocalServersPanel の RefreshCw spinner を手動再取得時のみ表示、自動 polling は緑 dot で可視化
+- ProjectRail 19 色 swatch の Check アイコン色を明度に応じて自動切替
+- ProjectRail Tooltip + Submenu の重複表示を解消（menuOpen 中 Tooltip 抑制）
+- AppearanceSettings スライダーで PageUp/Down/Home/End キー対応
+- SessionList 自動作成 session に toast 通知を追加
+
+### Added
+
+- 応答中の停止用ホットキー Cmd/Ctrl+. を新設、placeholder と HelpDialog に明記
+- ⌘表記を OS 自動切替（Windows/Linux: Ctrl、Mac: ⌘）
+- 共通 useTooltipSuppressOnMenuOpen Hook（Tooltip + DropdownMenu の重複抑制再利用用）
+
+### Changed
+
+- InputArea placeholder の停止ヒント文言を「Cmd/Ctrl+. または右下の停止ボタン」に更新
+- AppearanceSettings の単位表記を tabular-nums で統一
+
 ## [v1.24.3] - 2026-04-25
 
 ### Fixed

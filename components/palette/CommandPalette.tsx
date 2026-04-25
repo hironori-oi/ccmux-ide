@@ -35,6 +35,7 @@ import { callTauri } from "@/lib/tauri-api";
 import { useChatStore } from "@/lib/stores/chat";
 import { useSessionStore } from "@/lib/stores/session";
 import { useProjectStore } from "@/lib/stores/project";
+import { getModifierGlyph, getShiftGlyph } from "@/lib/utils/platform";
 
 /**
  * PM-171: Command Palette（Ctrl+K / Cmd+K で起動）。
@@ -64,6 +65,9 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
   const router = useRouter();
   const { theme, resolvedTheme, setTheme } = useTheme();
   const [open, setOpen] = useState(false);
+  // v1.25.0: OS 別 modifier 表記。Mac は ⌘、Windows/Linux は Ctrl。
+  const mod = getModifierGlyph();
+  const shift = getShiftGlyph();
 
   const sessions = useSessionStore((s) => s.sessions);
   // v1.18.0 (DEC-064): attachment は session 単位。active pane の currentSessionId
@@ -207,7 +211,7 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
             視覚的には見せないので sr-only で隠す。 */}
         <DialogTitle className="sr-only">コマンドパレット</DialogTitle>
         <DialogDescription className="sr-only">
-          ⌘K でコマンドパレットを開閉。キーワードで操作を検索できます。
+          {`${mod}+K でコマンドパレットを開閉。キーワードで操作を検索できます。`}
         </DialogDescription>
         <Command
           loop
@@ -236,7 +240,7 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
                     </span>
                   )}
                 </span>
-                <CommandShortcut>⌘⇧N</CommandShortcut>
+                <CommandShortcut>{`${mod}${shift}N`}</CommandShortcut>
               </CommandItem>
               {recentSessions.map((s) => {
                 const title = s.title?.trim() || "（無題のセッション）";
@@ -263,7 +267,7 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
               >
                 <ImagePlus aria-hidden />
                 <span>画像を添付（クリップボードから）</span>
-                <CommandShortcut>⌘V</CommandShortcut>
+                <CommandShortcut>{`${mod}V`}</CommandShortcut>
               </CommandItem>
             </CommandGroup>
 
@@ -286,7 +290,7 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
               >
                 <Settings aria-hidden />
                 <span>設定を開く</span>
-                <CommandShortcut>⌘,</CommandShortcut>
+                <CommandShortcut>{`${mod},`}</CommandShortcut>
               </CommandItem>
             </CommandGroup>
 
@@ -300,7 +304,7 @@ export function CommandPalette({ onOpenSearch }: CommandPaletteProps = {}) {
               >
                 <FileSearch aria-hidden />
                 <span>会話を検索</span>
-                <CommandShortcut>⌘⇧F</CommandShortcut>
+                <CommandShortcut>{`${mod}${shift}F`}</CommandShortcut>
               </CommandItem>
             </CommandGroup>
 

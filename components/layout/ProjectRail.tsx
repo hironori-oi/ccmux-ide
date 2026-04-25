@@ -34,11 +34,13 @@ import {
   ACCENT_COLORS,
   getAccentBgClass,
   getAccentChipBgClass,
+  getAccentChipForegroundClass,
   getAccentRingClass,
   getAccentTextClass,
   normalizeAccentColor,
   type AccentColor,
 } from "@/lib/utils/project-colors";
+import { useTooltipSuppressOnMenuOpen } from "@/lib/hooks/use-tooltip-suppress";
 import type { RegisteredProject } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -282,6 +284,11 @@ function ProjectRailItem({
   // 不要になった。menuOpen は右クリック起動と DropdownMenu 制御のために保持。
   const [menuOpen, setMenuOpen] = useState(false);
 
+  // v1.25.0: DropdownMenu open 中は Tooltip を強制非表示にして重複表示を解消する。
+  // useTooltipSuppressOnMenuOpen で controlled / uncontrolled を切替制御。
+  const { tooltipOpen, setTooltipOpen } =
+    useTooltipSuppressOnMenuOpen(menuOpen);
+
   const currentAccent = normalizeAccentColor(project.accentColor);
 
   const handlePickColor = useCallback(
@@ -302,7 +309,7 @@ function ProjectRailItem({
 
   return (
     <>
-      <Tooltip>
+      <Tooltip open={tooltipOpen} onOpenChange={setTooltipOpen}>
         <TooltipTrigger asChild>
           <span className="relative">
             <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
@@ -398,13 +405,23 @@ function ProjectRailItem({
                       >
                         {ACCENT_COLORS.map((c) => {
                           const selected = currentAccent === c.id;
+                          // v1.25.0: 淡色 swatch (yellow / sky 等) でも Check が見えるよう、
+                          // swatch の明度に応じて Check アイコンの色を切替える。
+                          const checkColorClass = getAccentChipForegroundClass(
+                            c.id,
+                          );
                           return (
                             <button
                               key={c.id}
                               type="button"
                               role="radio"
                               aria-checked={selected}
-                              aria-label={c.label}
+                              // v1.25.0: SR ユーザ向けに「現在選択中」を明示
+                              aria-label={
+                                selected
+                                  ? `${c.label}（現在選択中）`
+                                  : c.label
+                              }
                               title={c.label}
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -421,7 +438,7 @@ function ProjectRailItem({
                             >
                               {selected && (
                                 <Check
-                                  className="h-3.5 w-3.5 text-white drop-shadow"
+                                  className={cn("h-3.5 w-3.5", checkColorClass)}
                                   aria-hidden
                                 />
                               )}

@@ -24,6 +24,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { getModifierGlyph } from "@/lib/utils/platform";
 import type { OAuthUsageWindow, RegisteredProject } from "@/lib/types";
 
 /**
@@ -122,13 +123,14 @@ export function StatusBar() {
             <span className="max-w-[160px] truncate font-mono">{branch}</span>
           </span>
         )}
+        {/* v1.25.0: ⌘ 表記を OS 自動切替 (Mac は ⌘、Windows/Linux は Ctrl)。 */}
         <span className="ml-1 hidden items-center gap-2 md:flex">
           <kbd className="rounded border bg-background px-1 py-0.5 font-mono text-[10px]">
-            ⌘K
+            {`${getModifierGlyph()}K`}
           </kbd>
           <span>コマンド</span>
           <kbd className="rounded border bg-background px-1 py-0.5 font-mono text-[10px]">
-            ⌘/
+            {`${getModifierGlyph()}/`}
           </kbd>
           <span>ヘルプ</span>
         </span>

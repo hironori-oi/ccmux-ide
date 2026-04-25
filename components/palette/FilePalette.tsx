@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { useEditorStore } from "@/lib/stores/editor";
 import { useProjectStore, findProjectById } from "@/lib/stores/project";
+import { getModifierGlyph } from "@/lib/utils/platform";
 import {
   fetchFiles,
   rankFuzzy,
@@ -277,7 +278,7 @@ export function FilePalette({ open: controlledOpen, onOpenChange }: FilePaletteP
       >
         <DialogTitle className="sr-only">ファイルを開く</DialogTitle>
         <DialogDescription className="sr-only">
-          ⌘P / Ctrl+P でプロジェクト内のファイルを fuzzy 検索して開きます。
+          {`${getModifierGlyph()}+P でプロジェクト内のファイルを fuzzy 検索して開きます。`}
         </DialogDescription>
         <Command
           loop

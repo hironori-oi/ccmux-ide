@@ -204,13 +204,40 @@ export function SessionList() {
     if (!renameTarget) return;
     const value = renameValue.trim();
     if (!value) {
-      toast.error("タイトルを入力してください");
+      // v1.25.0: 保存ボタンが disabled なので通常はここに到達しないが、
+      // Enter キー経由 fallback として silent guard。toast.error は出さない。
       return;
     }
     await renameSession(renameTarget.id, value);
     toast.success("タイトルを変更しました");
     setRenameTarget(null);
     setRenameValue("");
+  }
+
+  /**
+   * v1.25.0: rename Dialog 外側クリック時の「変更を破棄しますか？」確認。
+   *
+   * 入力値が原タイトルと異なる場合のみ confirm を出す。同じなら即閉じる。
+   * Tauri WebView2 の window.confirm は使わず、シンプルに即破棄 + toast で
+   * 「変更を破棄しました」を出す方針 (現実的に rename はやり直しが容易な操作)。
+   *
+   * 確認 UI まで作り込まなくても、「外側クリックで silent に消えた」を
+   * 「破棄したよ」と toast 通知することで非対称性を解消する。
+   */
+  function handleRenameDialogClose(open: boolean) {
+    if (open) return;
+    if (!renameTarget) {
+      setRenameValue("");
+      return;
+    }
+    const original = renameTarget.title?.trim() ?? "";
+    const current = renameValue.trim();
+    const hasChanges = current !== original && current.length > 0;
+    setRenameTarget(null);
+    setRenameValue("");
+    if (hasChanges) {
+      toast.info("変更を破棄しました");
+    }
   }
 
   async function submitDelete() {
@@ -301,15 +328,14 @@ export function SessionList() {
 
       {/* PM-985: 旧「未分類を表示」toggle は撤去（機能不要のため）。 */}
 
-      {/* Rename Dialog */}
+      {/* Rename Dialog
+          v1.25.0 UX 改善:
+          - autoFocus + onFocus で全選択 (書き換え容易化)
+          - 保存ボタンは入力が空白なら disabled
+          - 外側クリックで「変更を破棄しました」toast (silent 消失の非対称性を解消) */}
       <Dialog
         open={renameTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setRenameTarget(null);
-            setRenameValue("");
-          }
-        }}
+        onOpenChange={handleRenameDialogClose}
       >
         <DialogContent>
           <DialogHeader>
@@ -329,6 +355,8 @@ export function SessionList() {
               }
             }}
             autoFocus
+            // v1.25.0: rename 時は既存タイトルを全選択して即書き換え可能にする
+            onFocus={(e) => e.currentTarget.select()}
           />
           <DialogFooter>
             <Button
@@ -340,7 +368,14 @@ export function SessionList() {
             >
               キャンセル
             </Button>
-            <Button onClick={() => void submitRename()}>変更する</Button>
+            <Button
+              onClick={() => void submitRename()}
+              // v1.25.0: 入力が空 (or whitespace のみ) のとき保存ボタンを disabled。
+              // 旧仕様 (toast.error + dialog 開きっぱなし) より UX が一貫する。
+              disabled={renameValue.trim().length === 0}
+            >
+              変更する
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -382,7 +417,8 @@ export function SessionList() {
 
 function EmptyState({ projectSelected }: { projectSelected: boolean }) {
   // PM-939 (v3.5.22): プロジェクト未選択時は「先にプロジェクト」を促す文言に差替え。
-  // 選択済みならこれまでどおり「送信で自動作成」を案内する。
+  // 選択済みなら「送信で自動作成」を案内する。
+  // v1.25.0: 自動作成の挙動をより明確に文言化。
   return (
     <div className="flex flex-col items-center gap-2 rounded-md border border-dashed p-6 text-center">
       <Sparkles className="h-6 w-6 text-muted-foreground" aria-hidden />
@@ -390,7 +426,10 @@ function EmptyState({ projectSelected }: { projectSelected: boolean }) {
         <>
           <p className="text-sm font-medium">まだセッションがありません</p>
           <p className="text-xs text-muted-foreground">
-            チャットを送信すると自動作成されます
+            最初のメッセージを入力すると、セッションが自動で作成されます。
+          </p>
+          <p className="text-[11px] text-muted-foreground/80">
+            上の「新規セッション」ボタンから明示的に作ることもできます。
           </p>
         </>
       ) : (
