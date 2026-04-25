@@ -90,6 +90,19 @@ export function useAllProjectsSidecarListener(): void {
             // 旧実装は "sidecar starting: mode=Bundled, entry=..." 等の英語 debug
             // メッセージをそのまま toast 表示していたが、UX 上ノイズなので console
             // のみに留める (DevTools で確認可能)。
+            //
+            // v1.24.0 (DEC-070): ただし `--chrome` 機能で発生する Chrome 拡張系
+            // エラーは UX 上致命的（ユーザーが原因に気付けない）なので例外扱い。
+            // 公知のパターン (公式 docs / 拡張実装由来) を検出して日本語 toast に
+            // 翻訳する。activeProjectId 一致時のみ通知してノイズを抑制する。
+            const activeProjectId = useProjectStore.getState().activeProjectId;
+            const projectId = projectIdOf(sessionId);
+            if (projectId === activeProjectId) {
+              const browserToast = matchBrowserAutomationError(trimmed);
+              if (browserToast) {
+                toast.error(browserToast);
+              }
+            }
             // eslint-disable-next-line no-console
             console.warn(`[sidecar stderr:${sessionId}]`, trimmed);
           });
@@ -554,6 +567,40 @@ function extractToolResults(content: unknown): Array<{
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// v1.24.0 (DEC-070): Chrome ブラウザ操作機能のエラーパターン日本語化
+// ---------------------------------------------------------------------------
+
+/**
+ * sidecar stderr 1 行から Chrome 拡張系の公知エラーを検出して、ユーザー向けの
+ * 日本語メッセージを返す。該当しなければ null（呼出側は console.warn のみ）。
+ *
+ * 検出対象は公式 docs (https://code.claude.com/docs/ja/chrome) と拡張実装で
+ * 観測された主要パターンに絞る。technical log（process spawn 等）は引き続き
+ * silent のままにし、ユーザーが対処可能なものだけ toast に持ち上げる。
+ *
+ * 同一 stderr イベントで複数行が連結されることがあるため、include 判定で
+ * 最初に hit したパターンの message を返す。
+ */
+export function matchBrowserAutomationError(line: string): string | null {
+  // 大文字小文字混在に備えて lower-case で比較
+  const lower = line.toLowerCase();
+
+  if (lower.includes("browser extension is not connected")) {
+    return "Chrome 拡張に接続できません。Chrome と Sumi を再起動して `/chrome` で再接続してください。";
+  }
+  if (lower.includes("extension not detected")) {
+    return "Chrome 拡張がインストールされていません。Settings → ブラウザ操作 から拡張をインストールしてください。";
+  }
+  if (lower.includes("no tab available")) {
+    return "Chrome タブが利用できません。新しいタブを開いて再度お試しください。";
+  }
+  if (lower.includes("receiving end does not exist")) {
+    return "Chrome 拡張のサービスワーカーがアイドル状態です。`/chrome` →「Reconnect extension」を実行してください。";
+  }
+  return null;
 }
 
 // suppress unused var lint for persistMessageToDb import retention (used by chat store)

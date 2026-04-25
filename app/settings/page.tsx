@@ -1,7 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { ArrowLeft, KeyRound, Keyboard, Palette, Plug } from "lucide-react";
+import {
+  ArrowLeft,
+  Chrome,
+  KeyRound,
+  Keyboard,
+  Palette,
+  Plug,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +20,7 @@ import {
 import { AppearanceSettings } from "@/components/settings/AppearanceSettings";
 import { ApiKeySettings } from "@/components/settings/ApiKeySettings";
 import { KeybindingsSettings } from "@/components/settings/KeybindingsSettings";
+import { BrowserAutomationSection } from "@/components/settings/BrowserAutomationSection";
 
 /**
  * Week 6 Chunk 3 / PM-210: 設定画面の親ページ。
@@ -87,6 +95,16 @@ export default function SettingsPage() {
               <Keyboard className="h-4 w-4" aria-hidden />
               キーバインド
             </TabsTrigger>
+            {/* PRJ-012 v1.24.0 (DEC-070): Chrome ブラウザ操作機能 (Phase 1 MVP) の入口。
+                Chrome 拡張インストール / デフォルト ON toggle / CLI version 検出を
+                1 tab に集約する。 */}
+            <TabsTrigger
+              value="browser-automation"
+              className="justify-start gap-2 data-[state=active]:bg-background"
+            >
+              <Chrome className="h-4 w-4" aria-hidden />
+              ブラウザ操作
+            </TabsTrigger>
             {/* PRJ-012 v4 / Chunk C / DEC-028: MCP サーバ設定への導線。
                 Tabs の TabsContent ではなく専用ルート (/settings/mcp) を持たせている
                 のは、Monaco Editor を含む重い画面を遅延 load させるため。 */}
@@ -124,6 +142,13 @@ export default function SettingsPage() {
                   description="現在のキーボードショートカット（読み取り専用）。"
                 />
                 <KeybindingsSettings />
+              </TabsContent>
+              <TabsContent value="browser-automation" className="mt-0">
+                <SectionHeading
+                  title="ブラウザ操作"
+                  description="Claude Code の /chrome 機能を使って Chrome 拡張からブラウザ操作を依頼します。"
+                />
+                <BrowserAutomationSection />
               </TabsContent>
             </div>
           </div>

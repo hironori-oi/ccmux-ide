@@ -321,6 +321,8 @@ export function InputArea({
           projectPrefForStart?.permissionMode ?? DEFAULT_PERMISSION_MODE,
         allowedTools: projectPrefForStart?.allowedTools ?? [],
         deniedTools: projectPrefForStart?.deniedTools ?? [],
+        // v1.24.0 (DEC-070): Chrome 連携の sticky 値を反映。未設定なら false。
+        chromeEnabled: projectPrefForStart?.chromeEnabled ?? false,
       };
       const startPrefs = resolveSessionPreferences(
         prefStateForStart,
@@ -438,6 +440,8 @@ export function InputArea({
         // を直接継承する（空配列 fallback で後方互換）。
         allowedTools: projectPref?.allowedTools ?? [],
         deniedTools: projectPref?.deniedTools ?? [],
+        // v1.24.0 (DEC-070): Chrome 連携の sticky 値を反映。未設定なら false。
+        chromeEnabled: projectPref?.chromeEnabled ?? false,
       };
       const resolvedPrefs = resolveSessionPreferences(
         prefState,
@@ -453,6 +457,13 @@ export function InputArea({
       };
       if (sdkModel) perQueryOptions.model = sdkModel;
       if (effortMeta) perQueryOptions.maxThinkingTokens = effortMeta.thinkingTokens;
+      // v1.24.0 (DEC-070): Chrome ブラウザ操作機能の ON/OFF を sidecar に伝える。
+      // sidecar は true のとき opts.extraArgs.chrome = null を SDK に渡し、
+      // CLI に --chrome flag が付与され、組み込み MCP claude-in-chrome 経由で
+      // Chrome 拡張に接続する。OFF の場合は通常起動。
+      if (resolvedPrefs.chromeEnabled) {
+        perQueryOptions.chromeEnabled = true;
+      }
 
       await callTauri<void>("send_agent_prompt", {
         // DEC-063 (v1.17.0): sidecar は session 単位で起動されているため sessionId で特定する。

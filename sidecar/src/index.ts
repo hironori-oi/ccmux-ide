@@ -616,6 +616,24 @@ async function handlePrompt(req: PromptRequest): Promise<void> {
       opts.maxThinkingTokens = resolvedMaxThinkingTokens;
     }
 
+    // PRJ-012 v1.24.0 (DEC-070): chromeEnabled が true なら Claude Code CLI に
+    // `--chrome` flag を渡し、組み込み MCP `claude-in-chrome` 経由で Chrome 拡張
+    // と接続する。SDK の `extraArgs: Record<string, string | null>` で `null` 値
+    // は「flag 単独」を意味する（CLI に `--chrome` がそのまま付く）。
+    //
+    // 公式仕様: https://code.claude.com/docs/ja/chrome
+    //   - Chrome 拡張「Claude in Chrome」(ID fcoeoabgfenejglbffodgkkbkcdhcgfn) が前提
+    //   - Native Messaging Host は CLI 初回起動で自動配置（Chrome 再起動が必要）
+    //   - Anthropic 直契約プラン (Pro/Max/Team/Enterprise) のみ
+    const chromeEnabled = (req.options as { chromeEnabled?: unknown } | undefined)
+      ?.chromeEnabled;
+    if (chromeEnabled === true) {
+      opts.extraArgs = { ...(opts.extraArgs ?? {}), chrome: null };
+      process.stderr.write(
+        `[sidecar] chrome enabled: --chrome flag injected via extraArgs\n`,
+      );
+    }
+
     // PM-830: resume が空文字列で渡ってきた場合は SDK にそのまま渡すと invalid に
     // なる可能性があるため未指定扱いに正規化する。req.options spread で既に opts に
     // 入っているので、空文字列のときだけ削除。

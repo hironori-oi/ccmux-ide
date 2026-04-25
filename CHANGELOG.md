@@ -11,6 +11,20 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.24.0] - 2026-04-25
+
+### Added
+
+- Chrome ブラウザ操作機能 (Phase 1, DEC-070) を統合
+- SlashPalette に /chrome を built-in 登録、入力で Claude にブラウザ接続管理を依頼
+- Settings に「ブラウザ操作」セクションを追加 (Chrome 拡張インストール / デフォルト ON toggle / CLI version 検出)
+- session-preferences に chromeEnabled (perSession + perProject) を追加、ON にすると sidecar が CLI に --chrome フラグを渡す
+- Chrome 拡張関連エラー (Browser extension is not connected 等) を日本語 toast で案内
+
+### Changed
+
+- CLI version 検出用の Tauri command claude_version を追加 (2.0.73 未満は Settings で warning 表示)
+
 ## [v1.23.0] - 2026-04-25
 
 ### Added

@@ -38,7 +38,11 @@ pub struct BuiltinSlash {
     pub action: String,
 }
 
-/// 組込 7 種を固定で返す。順番は `/help` で表示する見た目の順序と揃える。
+/// 組込スラッシュ一覧を固定で返す。順番は `/help` で表示する見た目の順序と揃える。
+///
+/// v1.24.0 (DEC-070): `/chrome` を追加。`action: "passthrough_to_sdk"` は frontend
+/// 側 dispatcher が intercept せず、通常 prompt として sidecar に送信させるための
+/// マーカー（CLI / SDK が組み込み解釈する想定）。
 #[tauri::command]
 pub fn list_builtin_slashes() -> Vec<BuiltinSlash> {
     vec![
@@ -76,6 +80,15 @@ pub fn list_builtin_slashes() -> Vec<BuiltinSlash> {
             name: "/config".to_string(),
             description: "アプリ設定画面を開く".to_string(),
             action: "open_config".to_string(),
+        },
+        // PRJ-012 v1.24.0 (DEC-070): Claude Code 公式の Chrome ブラウザ操作機能。
+        // 入力すると Claude が組み込み MCP `claude-in-chrome` 経由で接続状態を案内し、
+        // 必要に応じて拡張 reconnect / status 確認を行う。Sumi 側は intercept せず、
+        // 通常 prompt として sidecar に送る（"passthrough_to_sdk" がそのマーカー）。
+        BuiltinSlash {
+            name: "/chrome".to_string(),
+            description: "Chrome 接続のステータス確認・有効化・再接続".to_string(),
+            action: "passthrough_to_sdk".to_string(),
         },
     ]
 }
@@ -298,9 +311,9 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn list_builtin_slashes_returns_seven_items() {
+    fn list_builtin_slashes_returns_eight_items() {
         let v = list_builtin_slashes();
-        assert_eq!(v.len(), 7, "組込 7 件を返すこと");
+        assert_eq!(v.len(), 8, "組込 8 件を返すこと（DEC-070 で /chrome 追加）");
         let names: Vec<&str> = v.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"/mcp"));
         assert!(names.contains(&"/clear"));
@@ -309,6 +322,10 @@ mod tests {
         assert!(names.contains(&"/help"));
         assert!(names.contains(&"/compact"));
         assert!(names.contains(&"/config"));
+        assert!(names.contains(&"/chrome"), "DEC-070 v1.24.0: /chrome");
+        // /chrome は frontend で intercept せず passthrough する目印
+        let chrome = v.iter().find(|s| s.name == "/chrome").unwrap();
+        assert_eq!(chrome.action, "passthrough_to_sdk");
     }
 
     #[test]

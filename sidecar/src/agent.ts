@@ -194,6 +194,15 @@ export type AgentQueryOptions = Pick<
    * 取ることが可能になる。詳細は `sidecar/src/index.ts:makeCanUseTool`。
    */
   | "canUseTool"
+  /**
+   * PRJ-012 v1.24.0 (DEC-070): Claude Code CLI に追加で渡す flag / option。
+   *
+   * `Record<string, string | null>` 形式で、`null` を渡すと「flag のみ（値なし）」
+   * の意味になる。例: `{ chrome: null }` で CLI に `--chrome` が付く。
+   *
+   * 公式 docs: https://code.claude.com/docs/ja/chrome
+   */
+  | "extraArgs"
 >;
 
 /**

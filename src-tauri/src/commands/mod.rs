@@ -85,3 +85,9 @@ pub mod local_servers;
 // Phase 1 = list 表示のみ、Agent SDK の `mcpServerStatus()` / `setMcpServers()`
 // による live 接続状態 / toggle UI は v1.5+ (Phase 2/3) 申し送り。
 pub mod mcp;
+
+// PRJ-012 v1.24.0 / DEC-070 (2026-04-25): Claude Code CLI のバージョン検出。
+// Settings の「ブラウザ操作」section で `--chrome` 機能の前提条件 (CLI 2.0.73+)
+// を確認するために `claude --version` を spawn して semver を抽出する。末尾
+// append で他 module と排他。
+pub mod cli_version;

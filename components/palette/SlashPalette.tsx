@@ -621,8 +621,27 @@ export function SlashPalette({
    * - InputArea の textarea クリアは呼ばない（`/`断片がそのまま残るが、
    *   slash が intercept 相当で画面遷移 / dialog が出るため違和感は最小）。
    *   将来 `onSelect` を builtin 用に拡張したい場合は勘案。
+   *
+   * v1.24.0 (DEC-070): `passthrough_to_sdk` action（例: `/chrome`）は intercept
+   * せず、通常 prompt として送信させたいため textarea に slash 名を挿入する
+   * （カスタム slash と同じ経路、`onSelect` 呼出で `/chrome ` に置換）。
    */
   function handleBuiltinClick(item: BuiltinSlashItem) {
+    if (item.action === "passthrough_to_sdk") {
+      // textarea に slash 名を挿入して、ユーザーが Ctrl+Enter で sidecar に送る。
+      // SlashCmd 互換 shape を渡せば InputArea 側 `onSlashSelect` が適切に動く。
+      // 実際に使われるのは name のみ（replaceSlashFragment は name で置換する）。
+      const insertable: SlashCmd = {
+        name: item.name,
+        description: item.description,
+        source: "global",
+        filePath: "",
+        argumentHint: null,
+      };
+      onSelect(insertable);
+      onClose();
+      return;
+    }
     try {
       const consumed = handleBuiltinSlash(item.name, {
         router,

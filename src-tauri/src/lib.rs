@@ -62,6 +62,10 @@ use commands::{
     // sysinfo + netstat2 で LISTEN 状態の TCP port + pid を cross-platform に取得し、
     // SIGTERM → 3 秒 → SIGKILL escalate でプロセスを停止する。
     local_servers::{kill_local_server, list_local_servers},
+    // PRJ-012 v1.24.0 / DEC-070 (2026-04-25): Claude Code CLI のバージョン検出。
+    // Settings の「ブラウザ操作」section で `--chrome` 機能の前提条件 (CLI 2.0.73+)
+    // を確認するため `claude --version` を spawn して semver を抽出する。
+    cli_version::claude_version,
 };
 use events::monitor::{self, MonitorHandle};
 
@@ -218,6 +222,9 @@ pub fn run() {
             // pid 単位で kill するための 2 command。
             list_local_servers,
             kill_local_server,
+            // PRJ-012 v1.24.0 / DEC-070 (2026-04-25): Claude Code CLI のバージョン検出。
+            // Settings の「ブラウザ操作」section が起動時に呼び、2.0.73 未満なら warning。
+            claude_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -78,6 +78,18 @@ export interface SessionPreferences {
    * 処理方針は allowedTools と対称 (= 該当 tool は dialog なしで deny)。
    */
   deniedTools: string[];
+  /**
+   * PRJ-012 v1.24.0 (DEC-070): Claude `--chrome` ブラウザ操作機能の有効/無効。
+   *
+   * - true  : sidecar が CLI に `--chrome` フラグを渡し、組み込み MCP
+   *           `claude-in-chrome` 経由で Chrome 拡張に接続。Chrome 拡張側が
+   *           navigate / click / form 入力 / screenshot 等を実行できる。
+   * - false : 通常の起動（既定）。`/chrome` slash で都度 ON にする運用を推奨。
+   *
+   * DEC-057 の sticky 設計に従い setPreference 経由で perProject にも伝播し、
+   * 同 project の次回 session に継承される。
+   */
+  chromeEnabled: boolean;
 }
 
 /**
@@ -91,6 +103,8 @@ export const HARD_DEFAULT_PREFERENCES: SessionPreferences = Object.freeze({
   /** DEC-059 案B: 初期値は空配列（全ての未許可 tool は dialog 経由で確認）。 */
   allowedTools: [],
   deniedTools: [],
+  /** DEC-070 (v1.24.0): Chrome ブラウザ操作は既定 OFF。`/chrome` で都度 ON 推奨。 */
+  chromeEnabled: false,
 }) as SessionPreferences;
 
 export interface SessionPreferencesState {
@@ -199,8 +213,10 @@ const safeStorage = createJSONStorage(() => {
  *  - v2 (DEC-057 v1.11.0): perProject 追加
  *  - v3 (DEC-059 v1.13.0): SessionPreferences に `allowedTools` / `deniedTools`
  *    を追加。旧データは空配列で補完する。
+ *  - v4 (DEC-070 v1.24.0): SessionPreferences に `chromeEnabled` を追加。
+ *    旧データは `false` で補完する（Chrome ブラウザ操作は既定 OFF）。
  */
-const PERSIST_VERSION = 3;
+const PERSIST_VERSION = 4;
 
 function mergePatch(
   base: SessionPreferences,
@@ -221,6 +237,10 @@ function mergePatch(
       patch.deniedTools !== undefined
         ? patch.deniedTools
         : (base.deniedTools ?? []),
+    chromeEnabled:
+      patch.chromeEnabled !== undefined
+        ? patch.chromeEnabled
+        : (base.chromeEnabled ?? false),
   };
 }
 
@@ -251,6 +271,8 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
                 // 旧形 (v1.12.x 以前) データから seed される場合は空配列で補完。
                 allowedTools: seed.allowedTools ?? [],
                 deniedTools: seed.deniedTools ?? [],
+                // DEC-070 (v1.24.0): chromeEnabled も sticky 継承。旧データは false 補完。
+                chromeEnabled: seed.chromeEnabled ?? false,
               },
             },
           };
@@ -274,6 +296,8 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
                 // 旧形 (v1.12.x 以前) データから seed される場合は空配列で補完。
                 allowedTools: seed.allowedTools ?? [],
                 deniedTools: seed.deniedTools ?? [],
+                // DEC-070 (v1.24.0): chromeEnabled も sticky 継承。旧データは false 補完。
+                chromeEnabled: seed.chromeEnabled ?? false,
               },
             },
           };
@@ -434,9 +458,11 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
        *  - v2 (allowedTools/deniedTools 無し) → v3: 各 SessionPreferences エントリに
        *    空配列で補完 (DEC-059 案B / v1.13.0)。既存の model / effort /
        *    permissionMode はそのまま保持。
+       *  - v3 (chromeEnabled 無し) → v4: 各 SessionPreferences エントリに
+       *    `chromeEnabled: false` で補完 (DEC-070 / v1.24.0)。
        *
        * いずれの経路も破壊的な値の消失は無い（空配列 default は「未記録 = dialog で
-       * 確認」と等価）。
+       * 確認」、chromeEnabled false は「Chrome 連携 OFF」と等価）。
        */
       migrate: (persisted) => {
         if (!persisted || typeof persisted !== "object") {
@@ -461,6 +487,8 @@ export const useSessionPreferencesStore = create<SessionPreferencesState>()(
                 ? v.allowedTools
                 : [],
               deniedTools: Array.isArray(v?.deniedTools) ? v.deniedTools : [],
+              chromeEnabled:
+                typeof v?.chromeEnabled === "boolean" ? v.chromeEnabled : false,
             };
           }
           return out;
@@ -526,5 +554,10 @@ export function resolveSessionPreferences(
     // 無い場合のみ globalDefaults を採用する (sticky 上書き防止)。
     allowedTools: p.allowedTools ?? globalDefaults.allowedTools ?? [],
     deniedTools: p.deniedTools ?? globalDefaults.deniedTools ?? [],
+    // DEC-070 (v1.24.0): chromeEnabled は session 値を優先。旧データは false 補完。
+    chromeEnabled:
+      typeof p.chromeEnabled === "boolean"
+        ? p.chromeEnabled
+        : globalDefaults.chromeEnabled ?? false,
   };
 }

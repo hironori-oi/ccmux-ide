@@ -43,6 +43,10 @@ export interface BuiltinSlash {
  *
  * 新しい組込コマンドを追加する場合は backend (`builtin_slash.rs`) の
  * `list_builtin_slashes` と本 union、`dispatch` の switch を 3 箇所同時に更新する。
+ *
+ * v1.24.0 (DEC-070): `passthrough_to_sdk` は intercept せず通常 prompt として
+ * sidecar に流すマーカー（`/chrome` 等、CLI / SDK が組み込み解釈するもの）。
+ * `BUILTIN_SLASH_ACTIONS` には登録せず、`handleBuiltinSlash` は false を返す。
  */
 export type BuiltinAction =
   | "open_mcp_settings"
@@ -52,7 +56,8 @@ export type BuiltinAction =
   | "init_claude_md"
   | "open_help"
   | "compact_pending"
-  | "open_config";
+  | "open_config"
+  | "passthrough_to_sdk";
 
 /**
  * 名前 → action の lookup。`list_builtin_slashes` を呼ばずに最初から判定したい
@@ -155,6 +160,13 @@ function dispatch(action: BuiltinAction, ctx: BuiltinSlashContext): void {
     }
     case "open_config": {
       router.push("/settings");
+      return;
+    }
+    case "passthrough_to_sdk": {
+      // v1.24.0 (DEC-070): `/chrome` 等は intercept せず通常 prompt として
+      // sidecar に送る経路 (handleBuiltinSlash は false を返す)。BUILTIN_SLASH_ACTIONS
+      // にも登録していないため本来 dispatch には到達しないが、SlashPalette が
+      // 直接 dispatch を呼ぶ将来拡張に備えて no-op で受けておく。
       return;
     }
     default: {
