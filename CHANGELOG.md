@@ -11,6 +11,14 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.25.2] - 2026-04-25
+
+### Fixed
+
+- 複数 pane で .md ファイルを開いた時、特定の pane で Markdown toolbar (編集 / プレビュー / 分割) が表示されない不具合を修正
+- `isMarkdownPath` を堅牢化: ディレクトリ名に `.` を含む path（例: `C:\foo.bar\file`）での誤判定回避、path segment 単位で拡張子抽出、trim / query / fragment 除去
+- `EditorPaneItem` の active file 解決を防御化: `pane.activeFileId` が `paneFiles` に存在しない stale 状態を effect で自動修復し、tab UI と toolbar 判定の不整合を解消
+
 ## [v1.25.1] - 2026-04-25
 
 ### Added

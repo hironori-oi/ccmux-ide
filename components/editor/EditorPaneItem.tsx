@@ -82,8 +82,46 @@ export function EditorPaneItem({
   const paneFiles = pane.openFileIds
     .map((id) => openFiles.find((f) => f.id === id))
     .filter((f): f is (typeof openFiles)[number] => Boolean(f));
-  const activeFile =
+
+  // v1.25.2: pane.activeFileId が paneFiles に含まれない場合の自己修復。
+  //
+  // 旧実装は `find(...) ?? paneFiles[0] ?? null` で fallback していたが、その時
+  // `pane.activeFileId` は古い id を指したまま残るため、tab UI（`isActive = f.id === pane.activeFileId`）
+  // でどのタブも active 強調されない。さらに後段の `<MarkdownEditorArea openFileId={activeFile.id}>` が
+  // 「視覚的 active タブ」と「実 activeFileId」の不整合を起こし、結果として toolbar の
+  // 表示判定（`isMarkdownPath(activeFile.path)`）が **意図したファイル以外**で評価される
+  // ケースが生まれる（複数 pane で同 .md / 異種混在 open 時に再現）。
+  //
+  // ここでは active 候補が paneFiles に居ない場合、effect で 1 回だけ
+  // `setActiveFile(paneFiles[0].id, paneId)` を発火して store 側を本物の id に書き戻す。
+  // 描画自体は `paneFiles[0]` を使うので画面はちらつかない。
+  const resolvedActiveFile =
     paneFiles.find((f) => f.id === pane.activeFileId) ?? paneFiles[0] ?? null;
+  const activeFileIdMatches =
+    resolvedActiveFile !== null &&
+    pane.activeFileId === resolvedActiveFile.id;
+
+  useEffect(() => {
+    if (
+      paneFiles.length > 0 &&
+      resolvedActiveFile !== null &&
+      !activeFileIdMatches
+    ) {
+      // activeFileId が stale（paneFiles に存在しない id）なら paneFiles[0] に再同期。
+      setActiveFile(resolvedActiveFile.id, paneId);
+    }
+    // 依存は最小限に: pane.activeFileId が変化、もしくは pane の openFileIds が変化したら再評価
+  }, [
+    paneId,
+    pane.activeFileId,
+    pane.openFileIds,
+    activeFileIdMatches,
+    resolvedActiveFile?.id,
+    paneFiles.length,
+    setActiveFile,
+  ]);
+
+  const activeFile = resolvedActiveFile;
 
   const confirmTarget = paneFiles.find((f) => f.id === confirmCloseId) ?? null;
 
