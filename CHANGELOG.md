@@ -11,6 +11,18 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.8] - 2026-04-25
+
+### Added
+
+- ターミナルで Ctrl+V (macOS は Cmd+V) を押すとクリップボードからペーストできるようになった。Cursor / VSCode のターミナル相当。bracketed paste mode が有効ならエスケープシーケンス付きで shell に渡される
+- プレビューの iframe ロード失敗時に「localhost に接続できません」のエラー UI と「再試行 / 外部ブラウザで開く / 別ウィンドウで開く」フォールバックを追加。dev server 未起動 / X-Frame-Options DENY 等で空白になっていた状況の切り分けが容易に
+
+### Fixed
+
+- プレビューの iframe sandbox を緩和（allow-modals / allow-downloads 追加）。dev server の modal / ダウンロードリンクが動かない不具合を解消
+- CSP (frame-src / connect-src / default-src 他) に `http://0.0.0.0:*` および `http://[::1]:*` (IPv6 loopback) を追加。WSL / Docker 経由で `0.0.0.0` バインドした dev server を iframe 表示できるようになった
+
 ## [v1.22.7] - 2026-04-25
 
 ### Fixed

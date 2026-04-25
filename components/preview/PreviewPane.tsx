@@ -458,6 +458,42 @@ export function PreviewPane({ previewId }: { previewId?: string } = {}) {
     [handleOpenInApp]
   );
 
+  // v1.10.0 (DEC-056): committedUrl が localhost 系なら slot 内 iframe で表示する。
+  // CSP は tauri.conf.json で `frame-src 'self' http://localhost:* http://127.0.0.1:*
+  // http://0.0.0.0:* http://*.localhost https:` が許可済みのため追加設定不要。
+  const isInternal = isLocalUrl(committedUrl);
+
+  // v1.22.8 (PM-980): iframe のロード失敗検知。
+  // iframe は cross-origin 制約 + dev server 側の `X-Frame-Options: DENY` /
+  // `Content-Security-Policy: frame-ancestors` 等で blocked された場合、
+  // onLoad が発火しないこと / about:blank で発火することがあり、UI 側からは
+  // 単に空白が出ているように見える (今回の「localhost が表示されない」報告)。
+  // 純粋にネットワーク到達不能 (dev server 未起動) の場合も同じく無応答。
+  // - URL commit から LOAD_TIMEOUT_MS 経っても onLoad が来なければ「失敗」扱い
+  // - 失敗時はエラー UI と「外部ブラウザで開く」フォールバックを表示
+  // - ユーザー操作 (URL 再 commit / external 起動) で再試行可
+  // 注: hooks は early return より前に呼ばないと React の rules-of-hooks に違反するため、
+  //     activeProjectId 早期 return より上で宣言する必要がある。
+  const LOAD_TIMEOUT_MS = 4000;
+  const [iframeStatus, setIframeStatus] = useState<
+    "loading" | "loaded" | "error"
+  >("loading");
+
+  // committedUrl が変わったら status を loading に戻す + timeout 起動
+  useEffect(() => {
+    if (!isInternal) return;
+    setIframeStatus("loading");
+    const id = window.setTimeout(() => {
+      // 4 秒経っても onLoad が来ていなければ error 扱い。
+      // setIframeStatus は state setter なので stale でも安全 (loaded で
+      // 上書き済みなら error には戻さないように prev チェック)。
+      setIframeStatus((prev) => (prev === "loading" ? "error" : prev));
+    }, LOAD_TIMEOUT_MS);
+    return () => {
+      window.clearTimeout(id);
+    };
+  }, [committedUrl, isInternal]);
+
   if (!activeProjectId) {
     return (
       <div className="flex h-full w-full items-center justify-center text-sm text-muted-foreground">
@@ -465,11 +501,6 @@ export function PreviewPane({ previewId }: { previewId?: string } = {}) {
       </div>
     );
   }
-
-  // v1.10.0 (DEC-056): committedUrl が localhost 系なら slot 内 iframe で表示する。
-  // CSP は tauri.conf.json で `frame-src 'self' http://localhost:* http://127.0.0.1:*
-  // http://*.localhost https:` が許可済みのため追加設定不要。
-  const isInternal = isLocalUrl(committedUrl);
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -532,13 +563,97 @@ export function PreviewPane({ previewId }: { previewId?: string } = {}) {
             src={committedUrl}
             title={`Preview: ${committedUrl}`}
             className="h-full w-full border-0"
-            sandbox="allow-same-origin allow-scripts allow-forms allow-popups"
+            // v1.22.8 (PM-980): sandbox を緩和。dev server の HMR (WebSocket) /
+            // popup / form 送信 / modal を抑制しないため allow-popups / allow-modals /
+            // allow-downloads を追加。allow-same-origin が無いと localStorage や
+            // SharedWorker が動かないため必須維持。
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads"
             referrerPolicy="no-referrer"
+            onLoad={() => {
+              // PM-980: 子 document が cross-origin の場合 onLoad は発火するが
+              // 中身を読み取れない。X-Frame-Options でブロックされた場合は
+              // about:blank で発火することがあるが、ユーザー視点では「読込成功」
+              // と区別できない。ここでは onLoad が発火した = 何かしら描画された
+              // と解釈し loaded に遷移する。完全な失敗検知は LOAD_TIMEOUT_MS の
+              // タイマー側に任せる (DEC-056 拡張)。
+              setIframeStatus("loaded");
+            }}
+            onError={() => {
+              // navigator 側のネットワーク失敗で発火するケース。
+              setIframeStatus("error");
+            }}
             // Tauri 2 の dragDropEnabled=false 下でも iframe 内の native scroll は動く。
             // NOTE: iframe 内 URL 変更を検知する方法は cross-origin 制約で無いため、
             //       URL 入力欄の onBlur / Enter で再 mount（`key={committedUrl}`）に
             //       頼る設計。
           />
+          {iframeStatus === "error" && (
+            // PM-980: ロード失敗 UI。typical な原因は:
+            //   - dev server 未起動 (ポート違い / 起動忘れ)
+            //   - dev server が `X-Frame-Options: DENY` / `frame-ancestors 'none'` を返している
+            //     (例: Next.js 15+ の middleware default、Vite preview の一部設定)
+            // どちらも Sumi 側からは復旧できないため、「外部ブラウザで開く」CTA で
+            // 回避手段を案内する。
+            <div className="absolute inset-0 flex items-center justify-center bg-background/95 p-6">
+              <div className="flex w-full max-w-md flex-col gap-3 rounded-md border border-border/50 bg-card p-4 shadow-sm">
+                <div className="flex items-start gap-2 text-sm font-medium text-foreground">
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden />
+                  <span>localhost に接続できません</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  <code className="font-mono text-[11px]">{committedUrl}</code> を
+                  iframe で読み込めませんでした。dev server が起動していないか、
+                  サーバ側の <code className="font-mono text-[11px]">X-Frame-Options</code> /
+                  <code className="font-mono text-[11px]">frame-ancestors</code> 設定により
+                  iframe 表示がブロックされている可能性があります。
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      // 再試行: iframe を再 mount するため status を loading に戻す。
+                      // committedUrl は変わらないので key 変更による再 mount は起きない
+                      // → 同じ URL で onLoad 発火を再度待つ意味では timeout のみ再起動。
+                      setIframeStatus("loading");
+                      window.setTimeout(() => {
+                        setIframeStatus((prev) =>
+                          prev === "loading" ? "error" : prev
+                        );
+                      }, LOAD_TIMEOUT_MS);
+                    }}
+                    variant="default"
+                    size="sm"
+                    className="h-8 gap-1 text-xs"
+                  >
+                    再試行
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void handleOpenExternal()}
+                    variant="outline"
+                    size="sm"
+                    aria-label="外部ブラウザで開く"
+                    className="h-8 gap-1 text-xs"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+                    外部ブラウザで開く
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void handleOpenInApp()}
+                    variant="outline"
+                    size="sm"
+                    aria-label="別ウィンドウで開く"
+                    className="h-8 gap-1 text-xs"
+                    disabled={isOpeningInApp}
+                  >
+                    <Monitor className="h-3.5 w-3.5" aria-hidden />
+                    別ウィンドウで開く
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center p-8">

@@ -369,6 +369,9 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
         term.attachCustomKeyEventHandler((ev) => {
           // keydown のみ処理 (keyup を処理すると二重発火になる)
           if (ev.type !== "keydown") return true;
+          // PM-980 (v1.22.8): macOS は Cmd+V、Windows / Linux は Ctrl+V を
+          // ペーストとして扱う。OS 判定で「accel = Ctrl OR Meta」とするのが
+          // VSCode / Cursor terminal と整合する挙動 (両 OS で同じ keymap)。
           const ctrl = ev.ctrlKey || ev.metaKey;
           const shift = ev.shiftKey;
           const key = ev.key;
@@ -384,6 +387,61 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
             ev.preventDefault();
             ev.stopPropagation();
             cycleTerminal(-1);
+            return false;
+          }
+
+          // PM-980 (v1.22.8): Ctrl+V (macOS Cmd+V) でクリップボードからペースト。
+          // xterm.js のデフォルトは Ctrl+V を SYN (0x16) として shell へ送る挙動だが、
+          // Cursor / VSCode の terminal は Ctrl+V でペーストできるためそれに合わせる。
+          // bracketed paste mode が有効なら term.paste が escape sequence を付与し、
+          // shell 側で複数行入力として安全に取り扱われる。
+          // IME composition 中はブラウザが key event を抑制するため (isComposing=true /
+          // keyCode=229) ここに到達せず、composition の確定文字列は xterm の通常
+          // 入力経路で渡される。明示的に bail out する。
+          if (
+            ctrl &&
+            !shift &&
+            (key === "v" || key === "V") &&
+            !ev.isComposing &&
+            ev.keyCode !== 229
+          ) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            void (async () => {
+              try {
+                const { readText } = await import(
+                  "@tauri-apps/plugin-clipboard-manager"
+                );
+                const text = await readText();
+                if (!text) return;
+                // term.paste は xterm.js v5 の API: bracketed paste mode を尊重し、
+                // 内部的に term.onData を発火するので pty_write 側の paste 経路に
+                // 自動的に乗る (上の term.onData listener で pty に書き込まれる)。
+                try {
+                  term.paste(text);
+                } catch (e) {
+                  // paste が落ちた場合は直接 pty_write へ fallback
+                  logger.debug(
+                    "[TerminalPane] term.paste failed, falling back to pty_write:",
+                    e
+                  );
+                  void callTauri<void>("pty_write", {
+                    ptyId,
+                    data: text,
+                  }).catch((err) => {
+                    logger.warn(
+                      "[TerminalPane] paste pty_write fallback failed:",
+                      err
+                    );
+                  });
+                }
+              } catch (e) {
+                logger.warn(
+                  "[TerminalPane] Ctrl+V clipboard read failed:",
+                  e
+                );
+              }
+            })();
             return false;
           }
 
@@ -445,25 +503,43 @@ export function TerminalPane({ ptyId }: { ptyId: string }) {
             return false;
           }
           // Ctrl+Shift+V: clipboard の text を pty に paste
+          // PM-980 (v1.22.8): navigator.clipboard は Tauri WebView2 で
+          // permissions API 経由の制約があるため、Tauri plugin-clipboard-manager
+          // の readText に統一 (Ctrl+V と同じ経路)。
           if (key === "V" || key === "v") {
             ev.preventDefault();
             ev.stopPropagation();
-            if (typeof navigator !== "undefined" && navigator.clipboard) {
-              void navigator.clipboard
-                .readText()
-                .then((text) => {
-                  if (!text) return;
+            void (async () => {
+              try {
+                const { readText } = await import(
+                  "@tauri-apps/plugin-clipboard-manager"
+                );
+                const text = await readText();
+                if (!text) return;
+                try {
+                  term.paste(text);
+                } catch (e) {
+                  logger.debug(
+                    "[TerminalPane] term.paste (Ctrl+Shift+V) failed, fallback to pty_write:",
+                    e
+                  );
                   void callTauri<void>("pty_write", {
                     ptyId,
                     data: text,
-                  }).catch((e) => {
-                    logger.warn("[TerminalPane] paste pty_write failed:", e);
+                  }).catch((err) => {
+                    logger.warn(
+                      "[TerminalPane] paste pty_write fallback failed:",
+                      err
+                    );
                   });
-                })
-                .catch((e) => {
-                  logger.warn("[TerminalPane] clipboard read failed:", e);
-                });
-            }
+                }
+              } catch (e) {
+                logger.warn(
+                  "[TerminalPane] Ctrl+Shift+V clipboard read failed:",
+                  e
+                );
+              }
+            })();
             return false;
           }
           // Ctrl+Shift+L は従来 container keydown listener (PM-921) 側で
