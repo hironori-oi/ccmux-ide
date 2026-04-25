@@ -703,7 +703,9 @@ function SessionItem({
         {/* v1.18.0 (DEC-064): session 単位 status icon。pane 切替に連動しない。
             sessionStatus は session 自身が保持する揮発状態。 */}
         <SessionStatusIcon status={sessionStatus} />
-        <span className="shrink-0 text-[10px] text-muted-foreground">
+        {/* v1.22.5: hover / focus 時に三点ボタンが現れるので、相対時刻を fade out
+            して位置の重なりを回避する。group-hover / group-focus-within に追従。 */}
+        <span className="shrink-0 text-[10px] text-muted-foreground transition-opacity group-hover:opacity-0 group-focus-within:opacity-0">
           {relative}
         </span>
       </div>

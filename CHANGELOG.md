@@ -11,6 +11,12 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.5] - 2026-04-25
+
+### Fixed
+
+- SessionList で session row の右上三点ボタンと相対時刻表示が重なる不具合を修正。hover / focus 時に時刻を fade out させて重なりを回避
+
 ## [v1.22.4] - 2026-04-25
 
 ### Fixed
