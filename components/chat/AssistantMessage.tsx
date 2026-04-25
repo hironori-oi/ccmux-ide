@@ -23,6 +23,12 @@ import "highlight.js/styles/github-dark.css";
  * - streaming 中は末尾に点滅カーソル `▍` を表示する（差別化軸 B のおしゃれポイント）。
  * - Markdown source は `normalizeMarkdownForGfm` で事前正規化し、Claude が
  *   table 直前の blank line を忘れた場合も defensive に補完する（DEC-061 真因対応）。
+ *
+ * ## v1.25.1
+ * Editor pane の Markdown プレビューでも同じ resources（remark / rehype plugins、
+ * 外部リンクの shell.open、prose 設定）を再利用できるよう、renderer 部分を
+ * `MarkdownRenderer` として export 切り出し。AssistantMessage 自体の挙動 / 見た目は
+ * 変更なし（streaming カーソル + Card 包装のみ本 component に残る）。
  */
 
 /**
@@ -92,37 +98,56 @@ const mdComponents: Components = {
   ),
 };
 
-export function AssistantMessage({ message }: { message: ChatMessage }) {
-  // DEC-061: streaming 中も毎フレーム走るので memoize。
-  // 入力が同一ならリファレンスが保たれ、ReactMarkdown の再パースを抑制できる。
+/**
+ * v1.25.1: prose 包装 + ReactMarkdown 描画を切り出した再利用可能 component。
+ *
+ * - Chat の AssistantMessage と Editor pane の MarkdownPreview から共有利用される
+ * - `normalizeMarkdownForGfm` で source を defensive 正規化
+ * - prose / dark mode / max-w-none は呼出側で `className` 上書き可能
+ *
+ * 入力 `source` の memo 化（React.memo / useMemo）は呼出側で行うこと。
+ */
+export function MarkdownRenderer({
+  source,
+  className,
+}: {
+  source: string;
+  className?: string;
+}) {
   const normalized = useMemo(
-    () => normalizeMarkdownForGfm(message.content || ""),
-    [message.content],
+    () => normalizeMarkdownForGfm(source || ""),
+    [source],
   );
 
+  return (
+    <div
+      className={cn(
+        "prose prose-sm prose-neutral max-w-none dark:prose-invert",
+        "text-[length:inherit]",
+        className,
+      )}
+    >
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        rehypePlugins={[rehypeHighlight]}
+        components={mdComponents}
+      >
+        {normalized}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+export function AssistantMessage({ message }: { message: ChatMessage }) {
   return (
     <div className="flex justify-start">
       <Card className="mr-auto max-w-[85%] border-muted-foreground/10 bg-card p-4 text-card-foreground shadow-sm">
         {/* PM-951: text-sm ではなく親 MessageList の --app-font-size を継承。
             markdown body（p / li / blockquote 等）はこの div の font-size を継ぐ。
             PRJ-012 v1.15.0 (DEC-061): prose を適用し Cursor 相当の Markdown 整形。
-            - `prose-sm` で chat UI に合う密度
-            - `max-w-none` で吹き出し幅を制限しない
-            - `dark:prose-invert` でダークテーマ対応
-            - `prose-neutral` でベース色を neutral に固定 */}
-        <div
-          className={cn(
-            "prose prose-sm prose-neutral max-w-none dark:prose-invert",
-            "text-[length:inherit]",
-          )}
-        >
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkBreaks]}
-            rehypePlugins={[rehypeHighlight]}
-            components={mdComponents}
-          >
-            {normalized}
-          </ReactMarkdown>
+            v1.25.1: MarkdownRenderer に切り出し、streaming カーソルだけ残す。 */}
+        <div className="relative">
+          <MarkdownRenderer source={message.content || ""} />
           {message.streaming && (
             <span
               aria-hidden

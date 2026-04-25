@@ -11,6 +11,19 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.25.1] - 2026-04-25
+
+### Added
+
+- エディタで Markdown ファイル (.md / .mdx / .markdown) を開いた時、上部 toolbar に「編集 / プレビュー / 分割」の 3 モード切替を追加
+- 編集中のリアルタイムプレビュー、Split モードで Monaco とプレビューを同時表示
+- 既存 AssistantMessage の renderer (prose + remark-gfm + remark-breaks + rehype-highlight) を再利用、外部リンクは Tauri shell.open で外部ブラウザ起動
+
+### Changed
+
+- components/editor/MarkdownPreview.tsx を新規追加、AssistantMessage から renderer 部分を切り出して再利用可能に
+- lib/utils/file.ts に isMarkdownPath helper を追加
+
 ## [v1.25.0] - 2026-04-25
 
 ### Fixed

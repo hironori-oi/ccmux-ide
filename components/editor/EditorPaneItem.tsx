@@ -1,7 +1,15 @@
 "use client";
 
-import { useState } from "react";
-import { X, FileText, SplitSquareHorizontal } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  X,
+  FileText,
+  SplitSquareHorizontal,
+  Pencil,
+  Eye,
+  Columns2,
+} from "lucide-react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -15,8 +23,19 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { FileViewer } from "@/components/editor/FileViewer";
+import { FileEditor } from "@/components/editor/FileEditor";
+import { MarkdownPreview } from "@/components/editor/MarkdownPreview";
 import { useEditorStore } from "@/lib/stores/editor";
 import { cn } from "@/lib/utils";
+import { isMarkdownPath } from "@/lib/utils/file";
+
+/**
+ * v1.25.1: Markdown ファイル表示時の 3 モード。
+ * - edit:    Monaco エディタのみ（既定）
+ * - preview: MarkdownPreview のみ
+ * - split:   左 Monaco + 右 MarkdownPreview を react-resizable-panels で水平分割
+ */
+type MarkdownViewMode = "edit" | "preview" | "split";
 
 /**
  * PRJ-012 PM-924 (2026-04-20): 1 pane 分の editor コンテナ。
@@ -51,6 +70,10 @@ export function EditorPaneItem({
   const saveFile = useEditorStore((s) => s.saveFile);
 
   const [confirmCloseId, setConfirmCloseId] = useState<string | null>(null);
+
+  // v1.25.1: pane 単位の Markdown view mode（edit / preview / split）。
+  // 永続化は不要（リロードで edit に戻る）。pane volatile state。
+  const [mdViewMode, setMdViewMode] = useState<MarkdownViewMode>("edit");
 
   if (!pane) {
     return null;
@@ -197,9 +220,21 @@ export function EditorPaneItem({
             })}
           </div>
 
-          <div className="min-h-0 flex-1">
-            {activeFile && <FileViewer openFileId={activeFile.id} />}
-          </div>
+          {/*
+           * v1.25.1: Markdown ファイルなら toolbar + 3 モード切替 + Split を有効化。
+           * それ以外は従来通り FileViewer を素通し。
+           */}
+          {activeFile && isMarkdownPath(activeFile.path) ? (
+            <MarkdownEditorArea
+              openFileId={activeFile.id}
+              viewMode={mdViewMode}
+              onViewModeChange={setMdViewMode}
+            />
+          ) : (
+            <div className="min-h-0 flex-1">
+              {activeFile && <FileViewer openFileId={activeFile.id} />}
+            </div>
+          )}
         </>
       )}
 
@@ -246,4 +281,168 @@ function EmptyPaneState() {
       </p>
     </div>
   );
+}
+
+/**
+ * v1.25.1: Markdown 専用 editor area。toolbar + mode 別レンダリングを担当。
+ *
+ * - toolbar: Pencil（編集）/ Eye（プレビュー）/ Columns2（分割）の 3 アイコンボタン
+ * - edit:    FileEditor（Monaco）のみ
+ * - preview: MarkdownPreview のみ（Monaco の現在 buffer を 200ms debounce して描画）
+ * - split:   左 FileEditor + 右 MarkdownPreview を react-resizable-panels で水平分割
+ *
+ * Monaco の buffer は openFiles[id].content（zustand store）から購読。
+ * MarkdownPreview への入力は 200ms debounce で過剰再レンダリングを抑制する。
+ */
+function MarkdownEditorArea({
+  openFileId,
+  viewMode,
+  onViewModeChange,
+}: {
+  openFileId: string;
+  viewMode: MarkdownViewMode;
+  onViewModeChange: (mode: MarkdownViewMode) => void;
+}) {
+  // store の content を直接 select。Monaco の onChange → updateContent が
+  // store を更新するため、preview / split mode はここで自動追従する。
+  const content = useEditorStore(
+    (s) => s.openFiles.find((f) => f.id === openFileId)?.content ?? ""
+  );
+
+  // 200ms debounce: 連打 typing 中の preview 再描画コストを抑える
+  const debouncedContent = useDebouncedValue(content, 200);
+
+  return (
+    <>
+      <MarkdownToolbar viewMode={viewMode} onViewModeChange={onViewModeChange} />
+      <div className="min-h-0 flex-1">
+        {viewMode === "edit" && <FileEditor openFileId={openFileId} />}
+        {viewMode === "preview" && <MarkdownPreview source={debouncedContent} />}
+        {viewMode === "split" && (
+          <PanelGroup
+            direction="horizontal"
+            autoSaveId="ccmux-ide-gui:markdown-split"
+            className="flex h-full min-h-0"
+          >
+            <Panel
+              id="markdown-edit"
+              order={0}
+              defaultSize={50}
+              minSize={20}
+              className="flex min-h-0 flex-col"
+            >
+              <FileEditor openFileId={openFileId} />
+            </Panel>
+            <PanelResizeHandle
+              className={cn(
+                "relative w-1 bg-border transition-colors",
+                "hover:bg-primary/40 data-[resize-handle-active]:bg-primary/60",
+                "after:absolute after:inset-y-0 after:-left-1 after:-right-1 after:content-['']"
+              )}
+              aria-label="編集とプレビューの境界をドラッグして幅を変更"
+            />
+            <Panel
+              id="markdown-preview"
+              order={1}
+              defaultSize={50}
+              minSize={20}
+              className="flex min-h-0 flex-col"
+            >
+              <MarkdownPreview source={debouncedContent} />
+            </Panel>
+          </PanelGroup>
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * v1.25.1: Markdown 表示モード切替 toolbar。3 アイコンボタンを横並び。
+ *
+ * 現在モードのボタンは ring + accent 背景でハイライト。
+ */
+function MarkdownToolbar({
+  viewMode,
+  onViewModeChange,
+}: {
+  viewMode: MarkdownViewMode;
+  onViewModeChange: (mode: MarkdownViewMode) => void;
+}) {
+  return (
+    <div
+      className="flex h-8 shrink-0 items-center gap-1 border-b bg-muted/10 px-2 text-[11px]"
+      role="toolbar"
+      aria-label="Markdown 表示モード"
+    >
+      <span className="mr-1 text-muted-foreground">表示:</span>
+      <ModeButton
+        active={viewMode === "edit"}
+        onClick={() => onViewModeChange("edit")}
+        label="編集"
+        title="編集モード（Monaco エディタのみ）"
+        icon={<Pencil className="h-3.5 w-3.5" aria-hidden />}
+      />
+      <ModeButton
+        active={viewMode === "preview"}
+        onClick={() => onViewModeChange("preview")}
+        label="プレビュー"
+        title="プレビューモード（レンダリング表示のみ）"
+        icon={<Eye className="h-3.5 w-3.5" aria-hidden />}
+      />
+      <ModeButton
+        active={viewMode === "split"}
+        onClick={() => onViewModeChange("split")}
+        label="分割"
+        title="分割モード（編集とプレビューを横に並べて表示）"
+        icon={<Columns2 className="h-3.5 w-3.5" aria-hidden />}
+      />
+    </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  label,
+  title,
+  icon,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  title: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      className={cn(
+        "inline-flex h-6 items-center gap-1 rounded px-2 text-[11px] transition-colors",
+        active
+          ? "bg-accent text-accent-foreground ring-1 ring-primary/40"
+          : "text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+      )}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
+}
+
+/**
+ * 値を debounce する小さな hook。preview への過剰再レンダリング抑制用。
+ * 入力 value が連続変化しても、最後の変化から `delay` ms 経過するまで
+ * 出力値は更新されない。
+ */
+function useDebouncedValue<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
 }
