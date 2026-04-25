@@ -682,7 +682,10 @@ jobs:
       #    自動的に署名ファイルも一緒に収集される。
       # ------------------------------------------------------------------
       - name: Upload bundle artifact
-        uses: actions/upload-artifact@v7
+        # v1.25.5: actions/upload-artifact@v7 / download-artifact@v8 で
+        # macOS runner で `ENOTFOUND` (DNS 解決失敗) が散発的に発生。
+        # @v4 (LTS) に rollback して artifact API の安定性を確保する。
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: sumi-${{ matrix.platform.label }}
@@ -735,7 +738,8 @@ jobs:
       # 1. 全 platform の artifact を単一ディレクトリに集約
       # ------------------------------------------------------------------
       - name: Download all build artifacts
-        uses: actions/download-artifact@v8
+        # v1.25.5: upload-artifact@v4 と version を揃える (v8 は v4 と互換)
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: sumi-*

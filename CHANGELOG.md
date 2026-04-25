@@ -11,6 +11,13 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.25.5] - 2026-04-25
+
+### Fixed
+
+- release.yml の actions/upload-artifact@v7 / download-artifact@v8 で macOS runner が `ENOTFOUND` (DNS 解決失敗) で fail していた問題を修正
+- LTS の actions/upload-artifact@v4 / download-artifact@v4 にダウングレードして artifact API の安定性を確保
+
 ## [v1.25.4] - 2026-04-25
 
 ### Fixed
