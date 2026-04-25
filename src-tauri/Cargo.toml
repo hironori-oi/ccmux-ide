@@ -1,6 +1,6 @@
 [package]
 name = "sumi"
-version = "1.25.5"
+version = "1.25.6"
 description = "Sumi — Japanese-first Claude Code desktop client"
 edition = "2021"
 license = "MIT"

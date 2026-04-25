@@ -35,7 +35,8 @@ import { isMarkdownPath } from "@/lib/utils/file";
  * - preview: MarkdownPreview のみ
  * - split:   左 Monaco + 右 MarkdownPreview を react-resizable-panels で水平分割
  */
-type MarkdownViewMode = "edit" | "preview" | "split";
+// v1.25.6: SlotContainer (Workspace) からも参照するため export 化
+export type MarkdownViewMode = "edit" | "preview" | "split";
 
 /**
  * PRJ-012 PM-924 (2026-04-20): 1 pane 分の editor コンテナ。
@@ -340,7 +341,13 @@ function EmptyPaneState() {
  * Monaco の buffer は openFiles[id].content（zustand store）から購読。
  * MarkdownPreview への入力は 200ms debounce で過剰再レンダリングを抑制する。
  */
-function MarkdownEditorArea({
+/**
+ * v1.25.6: SlotContainer (Workspace 4 分割等) からも再利用するため export 化。
+ * 旧仕様では EditorPaneItem 内 private function だったため、Workspace mode で
+ * editor を slot に配置すると FileViewer 直接呼びとなり MarkdownToolbar が
+ * スキップされていた。
+ */
+export function MarkdownEditorArea({
   openFileId,
   viewMode,
   onViewModeChange,

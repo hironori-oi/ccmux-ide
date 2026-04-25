@@ -11,6 +11,15 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.25.6] - 2026-04-25
+
+### Fixed
+
+- Workspace 4 分割等で editor を slot に配置した時に Markdown toolbar (編集/プレビュー/分割) が表示されない不具合を完全修正
+- 旧実装は SlotContainer.tsx:262 で `<FileViewer openFileId={...} />` を直接呼んでおり、EditorPaneItem 内 private な MarkdownEditorArea を経由しないため toolbar がスキップされていた
+- MarkdownEditorArea + MarkdownViewMode を export 化、SlotEditorRenderer wrapper で Markdown 判定 → MarkdownEditorArea / FileViewer を分岐
+- v1.25.1 / v1.25.2 / v1.25.3 / v1.25.4 / v1.25.5 で個別経路の修正を続けてきたが、Workspace slot 経路自体が toolbar 未対応だったのが真因
+
 ## [v1.25.5] - 2026-04-25
 
 ### Fixed

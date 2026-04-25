@@ -15,8 +15,13 @@ import { ChatPanel } from "@/components/chat/ChatPanel";
 import { ChatStatusIndicator } from "@/components/chat/ChatStatusIndicator";
 import { ToolDetailsToggle } from "@/components/chat/ToolDetailsToggle";
 import { FileViewer } from "@/components/editor/FileViewer";
+import {
+  MarkdownEditorArea,
+  type MarkdownViewMode,
+} from "@/components/editor/EditorPaneItem";
 import { PreviewPane } from "@/components/preview/PreviewPane";
 import { TerminalPane } from "@/components/terminal/TerminalPane";
+import { isMarkdownPath } from "@/lib/utils/file";
 import { Button } from "@/components/ui/button";
 import { CCMUX_FILE_PATH_MIME } from "@/lib/file-drag";
 import { useEditorStore } from "@/lib/stores/editor";
@@ -252,11 +257,7 @@ function SlotContentRenderer({ content }: { content: SlotContent }) {
     );
   }
   if (content.kind === "editor") {
-    return (
-      <div className="flex h-full flex-col">
-        <FileViewer openFileId={content.refId} />
-      </div>
-    );
+    return <SlotEditorRenderer openFileId={content.refId} />;
   }
   if (content.kind === "terminal") {
     // TerminalPane は 1 pane = 1 sub-tab group の責務だが、workspace slot では
@@ -286,6 +287,42 @@ function SlotTerminalRenderer({ ptyId }: { ptyId: string }) {
   return (
     <div className="flex h-full flex-col">
       <TerminalPane ptyId={ptyId} />
+    </div>
+  );
+}
+
+/**
+ * v1.25.6: Slot 内 Editor 描画のラッパ。
+ *
+ * 旧実装は `<FileViewer openFileId={...} />` を直接呼んでいたため、Workspace
+ * 4 分割等で editor を slot 配置すると EditorPaneItem の MarkdownToolbar が
+ * 完全にスキップされ、`.md` ファイルでも 編集/プレビュー/分割 切替が出ない
+ * 不具合の根本原因だった。
+ *
+ * 本 wrapper は openFile.path を見て isMarkdownPath なら MarkdownEditorArea
+ * (toolbar 付き) を、それ以外は FileViewer を呼び分ける。これで EditorPaneItem
+ * 経路と Workspace slot 経路の両方で同じ Markdown プレビュー UX が得られる。
+ */
+function SlotEditorRenderer({ openFileId }: { openFileId: string }) {
+  const openFile = useEditorStore((s) =>
+    s.openFiles.find((f) => f.id === openFileId),
+  );
+  const [mdViewMode, setMdViewMode] = useState<MarkdownViewMode>("edit");
+
+  if (openFile && isMarkdownPath(openFile.path)) {
+    return (
+      <div className="flex h-full flex-col">
+        <MarkdownEditorArea
+          openFileId={openFileId}
+          viewMode={mdViewMode}
+          onViewModeChange={setMdViewMode}
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full flex-col">
+      <FileViewer openFileId={openFileId} />
     </div>
   );
 }
