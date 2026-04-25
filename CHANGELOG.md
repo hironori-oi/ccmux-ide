@@ -11,6 +11,14 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.28.2] - 2026-04-26
+
+### Fixed
+
+- E2E test `image-paste.spec.ts` の fail を修正（v1.18.0 DEC-064 で session 単位 attachment になり「セッションが選択されていません」guard が入ったが、test が session 作成を skip していた）
+- FIXTURE_WITH_ONE_SESSION ベースに切替 + SessionList から既存 session をクリックして currentSessionId にセットする経路に変更
+- E2E 全 17 テスト passed (旧: 16/17)
+
 ## [v1.28.1] - 2026-04-26
 
 ### Fixed
