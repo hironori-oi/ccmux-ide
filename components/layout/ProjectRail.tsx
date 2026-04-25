@@ -310,6 +310,13 @@ function ProjectRailItem({
                 <motion.button
                   layout
                   type="button"
+                  onPointerDown={(e) => {
+                    // v1.22.4: Radix DropdownMenu の DropdownMenuTrigger asChild
+                    // は左クリックで自動 open する仕様のため、左クリック (button=0)
+                    // のみ preventDefault して open を抑制する。これによりクリック
+                    // = プロジェクト切替 / 右クリック = メニュー、の役割分離を維持。
+                    if (e.button === 0) e.preventDefault();
+                  }}
                   onClick={onClick}
                   onContextMenu={(e) => {
                     e.preventDefault();

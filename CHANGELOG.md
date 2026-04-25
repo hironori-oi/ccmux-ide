@@ -11,6 +11,13 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.4] - 2026-04-25
+
+### Fixed
+
+- ProjectRail のアイコンを左クリックでプロジェクト切替する代わりに右クリックメニューが表示される不具合を修正
+- DropdownMenuTrigger asChild の Radix デフォルト挙動（左クリックで自動 open）を onPointerDown の左ボタン preventDefault で抑制、クリック=切替 / 右クリック=メニューの役割分離を維持
+
 ## [v1.22.3] - 2026-04-25
 
 ### Fixed
