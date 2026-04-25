@@ -11,6 +11,20 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.25.4] - 2026-04-25
+
+### Fixed
+
+- ProjectTree の再読込ボタン押下で展開中のフォルダがすべて閉じる不具合をオーナー環境向けに完全修正
+- v1.24.3 で導入した ReloadTickContext 経路では TreeNode の expanded が local useState のままだったため、何らかの要因で TreeNode が unmount → re-mount されると初期値 false に戻り、結果として「全フォルダが閉じる」現象がオーナー環境で再発していた
+- expanded state を local useState から global Zustand store (lib/stores/file-tree-expanded.ts) に移行し、Set\<path\> で保持。TreeNode が re-mount されても store 側で展開状態が維持されるようにした
+- 再読込中も既存 entries / children を維持してちらつきを防止（loading 表示は初回展開時のみ）
+- プロジェクト切替時のみ expanded を clear し、同一プロジェクト内の再読込では絶対に clear しない
+
+### Added
+
+- lib/stores/file-tree-expanded.ts を新規追加（Set\<path\> で展開状態を global 保持、persist 無し）
+
 ## [v1.25.3] - 2026-04-25
 
 ### Fixed

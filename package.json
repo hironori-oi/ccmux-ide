@@ -1,6 +1,6 @@
 {
   "name": "sumi",
-  "version": "1.25.3",
+  "version": "1.25.4",
   "description": "Sumi — Japanese-first Claude Code desktop client (Tauri + Next.js)",
   "license": "MIT",
   "private": true,

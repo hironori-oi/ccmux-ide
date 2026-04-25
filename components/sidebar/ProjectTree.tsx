@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 
 import { useEditorStore } from "@/lib/stores/editor";
+import { useFileTreeExpandedStore } from "@/lib/stores/file-tree-expanded";
 import { useProjectStore } from "@/lib/stores/project";
 import {
   CCMUX_FILE_PATH_MIME,
@@ -44,6 +45,20 @@ import { Button } from "@/components/ui/button";
  *  - **ファイル click → `useEditorStore.openFile`** で Monaco エディタ open
  *  - **ファイル dblclick → FilePreviewDialog** で read-only プレビュー
  *  - 右上に再読込ボタン（ツリー全体を破棄 + 再 fetch）
+ *
+ * ## v1.25.4 修正
+ *
+ * 「再読込ボタン押下で全フォルダが閉じる」不具合の **根本修正**。
+ * v1.24.3 では `ReloadTickContext` + `useEffect` deps で再 fetch を起こす
+ * 経路に変えたが、TreeNode の `expanded` 自体は **local `useState(false)`**
+ * のままだったため、何らかの要因で TreeNode が unmount → re-mount されると
+ * 初期値 `false` に戻り、結果としてオーナー環境で同不具合が再発していた。
+ *
+ * v1.25.4 では expanded 状態を `lib/stores/file-tree-expanded.ts` の
+ * **global Zustand store**（`Set<string>` で path 集合保持）に移行し、
+ * re-mount しても state が維持されるようにする。さらに再 fetch 中も
+ * 既存 entries / children を維持してちらつきを防止。プロジェクト切替時は
+ * `clearExpanded()` で展開状態を初期化する。
  */
 
 /** 無視するディレクトリ名（常時非表示）。 */
@@ -171,8 +186,11 @@ async function loadDirEntries(parentPath: string): Promise<Entry[]> {
  * フォルダの expanded state がリセットされる問題を修正。reloadKey を
  * `key={...}` で伝えて子孫を全 unmount する旧設計から、Context 経由で
  * tick 値を伝播 → 各層が useEffect deps で再 fetch を行う設計に変更。
- * これにより component instance は維持され、TreeNode の expanded local
- * state が refresh 越しに保持される。
+ *
+ * v1.25.4: 上記設計でも TreeNode の local `useState(false)` が
+ * re-mount でリセットされる挙動が残っていたため、expanded state を
+ * `useFileTreeExpandedStore` (global) に移行。Context は children 再 fetch
+ * トリガとして引き続き使用する。
  */
 const ReloadTickContext = createContext(0);
 
@@ -182,6 +200,8 @@ export function ProjectTree() {
   const activeProjectPath =
     projects.find((p) => p.id === activeProjectId)?.path ?? null;
 
+  const clearExpanded = useFileTreeExpandedStore((s) => s.clearExpanded);
+
   const [reloadKey, setReloadKey] = useState(0);
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewLabel, setPreviewLabel] = useState<string | undefined>(
@@ -189,6 +209,16 @@ export function ProjectTree() {
   );
 
   const openInEditor = useEditorStore((s) => s.openFile);
+
+  // v1.25.4: プロジェクト切替時のみ expanded をリセット。同一プロジェクト内の
+  // 再読込（reloadKey 増加）では絶対に clear しないこと（ボタン押下で全フォルダ
+  // が閉じる現象の再発を防ぐ）。
+  useEffect(() => {
+    if (!activeProjectPath) return;
+    clearExpanded();
+    // activeProjectPath が変わった時のみ発火、clearExpanded は zustand action で
+    // 安定参照なので deps から除外しても無害だが eslint 規約に従い同梱する。
+  }, [activeProjectPath, clearExpanded]);
 
   /**
    * v3.4.6 修正: 画像ファイルは click で直接プレビュー Dialog を開く。
@@ -252,10 +282,10 @@ export function ProjectTree() {
         role="tree"
         aria-label="プロジェクトファイル"
       >
-        {/* v1.24.3: reloadKey は Context で子孫に伝播し useEffect deps で
+        {/* v1.24.3 / v1.25.4: reloadKey は Context で子孫に伝播し useEffect deps で
             再 fetch を起こす。key には activeProjectPath のみを使い、
             プロジェクト切替時のみ unmount するようにして、ボタン押下では
-            expanded state を保持する。 */}
+            expanded state（global store 側）を保持する。 */}
         <ReloadTickContext.Provider value={reloadKey}>
           <RootChildren
             key={activeProjectPath}
@@ -300,29 +330,38 @@ function RootChildren({
   const [error, setError] = useState<string | null>(null);
   // v1.24.3: 再読込 tick。変化で entries を再 fetch するが entries 配列は
   // 既存表示を維持しながら裏で差し替えるため、TreeNode の expanded state は
-  // 影響を受けない（component instance が維持されれば local state も維持）。
+  // 影響を受けない（global store 側で維持）。
   const reloadTick = useContext(ReloadTickContext);
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
+    // v1.25.4: 再 fetch 中もちらつき防止のため既存 entries は保持する。
+    // ただし初回 mount（entries === null）時のみ loading skeleton を出す。
+    setLoading((prev) => (entries === null ? true : prev));
     setError(null);
     (async () => {
       try {
         const built = await loadDirEntries(path);
-        if (!cancelled) setEntries(built);
+        if (!cancelled) {
+          setEntries(built);
+          setLoading(false);
+        }
       } catch (e) {
-        if (!cancelled) setError(String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) {
+          setError(String(e));
+          setLoading(false);
+        }
       }
     })();
     return () => {
       cancelled = true;
     };
+    // entries は意図的に deps から除外（fetch 自身が entries を更新するため、
+    // 含めると無限ループになる）。再 fetch トリガは path / reloadTick の変化のみ。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, reloadTick]);
 
-  if (loading) {
+  if (loading && entries === null) {
     return (
       <div className="flex items-center gap-1.5 px-2 py-1 text-muted-foreground">
         <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
@@ -330,7 +369,7 @@ function RootChildren({
       </div>
     );
   }
-  if (error) {
+  if (error && entries === null) {
     return (
       <div className="px-2 py-1 text-destructive">
         エラー: {error}
@@ -370,7 +409,13 @@ function TreeNode({
   onFileClick: (path: string, name: string) => void;
   onFileDblClick: (path: string, name: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  // v1.25.4: 旧 `useState(false)` を撤去し、global store の `Set<path>` から
+  // 展開状態を読む。re-mount しても store 側で状態が維持されるため、再読込
+  // ボタン押下で TreeNode が一瞬でも unmount → re-mount される経路でも
+  // expanded が失われない。
+  const expanded = useFileTreeExpandedStore((s) => s.expandedPaths.has(entry.path));
+  const toggleExpanded = useFileTreeExpandedStore((s) => s.toggleExpanded);
+
   const [children, setChildren] = useState<Entry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -378,7 +423,7 @@ function TreeNode({
   // 除去し、state update で effect が re-run される loop を断つ）。
   const fetchedRef = useRef(false);
   // v1.24.3: 再読込 tick。変化で expanded 中のディレクトリは children を再 fetch
-  // するが、expanded local state は維持されるため UI の展開状態は保持される。
+  // するが、expanded state は store 側で維持されるため UI の展開状態は保持される。
   const reloadTick = useContext(ReloadTickContext);
 
   useEffect(() => {
@@ -387,7 +432,9 @@ function TreeNode({
     if (fetchedRef.current) return;
     fetchedRef.current = true;
     let cancelled = false;
-    setLoading(true);
+    // v1.25.4: 既存 children があれば保持してちらつき防止、
+    // 初回展開（children === null）時のみ loading を立てる。
+    setLoading(children === null);
     setError(null);
     (async () => {
       try {
@@ -411,22 +458,24 @@ function TreeNode({
     return () => {
       cancelled = true;
     };
+    // children は意図的に deps から除外（loading 判定用にしか参照しないため、
+    // fetch 自身の setChildren で effect が re-run されるのを防ぐ）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, entry.isDirectory, entry.path, entry.name]);
 
-  // v1.24.3: 再読込 tick が変わったら fetchedRef をリセットして次の expanded
-  // (or 既に expanded 中) で再 fetch を発動させる。effect の依存は分離して
-  // 既存の fetch loop に影響しない。
+  // v1.24.3 / v1.25.4: 再読込 tick が変わったら fetchedRef をリセットして次の
+  // expanded（or 既に expanded 中）で再 fetch を発動させる。expanded state
+  // 自体は store 側で維持されるためここでは触れない。
   useEffect(() => {
     if (!entry.isDirectory) return;
     if (reloadTick === 0) return; // 初回 mount は skip
     fetchedRef.current = false;
     if (expanded) {
       // expanded 中なら即座に再 fetch をトリガするため、children を保持しつつ
-      // ref reset 後に setExpanded を一度同値で呼び directly fetch を起動。
-      // 直接の callback で fetch を再実行する代わりに、setLoading(true) を
-      // 先に立てておき、次の render での useEffect 再評価に乗せる。
+      // 裏で差し替える（ちらつき防止のため setChildren(null) はしない）。
       void (async () => {
         try {
+          // v1.25.4: 既存 children を消さずに loading を立てるだけ。
           setLoading(true);
           setError(null);
           fetchedRef.current = true;
@@ -471,7 +520,7 @@ function TreeNode({
             );
             e.dataTransfer.effectAllowed = "copy";
           }}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => toggleExpanded(entry.path)}
           className="flex w-full items-center gap-1 rounded-sm px-1 py-0.5 text-left hover:bg-accent/60"
           style={{ paddingLeft: indent }}
           aria-label={`${entry.name} フォルダ`}
@@ -490,7 +539,10 @@ function TreeNode({
         </button>
         {expanded && (
           <div role="group">
-            {loading && (
+            {/* v1.25.4: 既存 children がある時の再 fetch 中は children を表示
+                したまま loading 表記を出さない（ちらつき防止）。children が
+                まだ無い初回展開時のみ loading skeleton を出す。 */}
+            {loading && children === null && (
               <div
                 className="flex items-center gap-1.5 py-0.5 text-muted-foreground"
                 style={{ paddingLeft: indent + 16 }}
@@ -499,7 +551,7 @@ function TreeNode({
                 読込中…
               </div>
             )}
-            {error && (
+            {error && children === null && (
               <div
                 className="py-0.5 text-destructive"
                 style={{ paddingLeft: indent + 16 }}
