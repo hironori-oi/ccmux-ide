@@ -11,6 +11,18 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.3] - 2026-04-25
+
+### Fixed
+
+- tauri.conf.json の pubkey が二段 base64 encoded されていた根本 bug を修正。これが v1.20.5 以降 10 リリース連続で自動更新が「Invalid encoding in minisign data」で失敗していた真因
+- tauri-plugin-updater が期待する 1 段 base64 形式に正規化、minisign parser が公開鍵を正常に decode できるようになった
+
+### Breaking
+
+- v1.22.2 以前のインストール環境からの自動更新は技術的に不可能。GitHub Releases から v1.22.3 installer を**最後の手動ダウンロード + 上書きインストール**で適用してください
+- v1.22.3 以降は自動更新が完全動作します
+
 ## [v1.22.2] - 2026-04-25
 
 ### Added
