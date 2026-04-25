@@ -158,6 +158,15 @@ export interface WorkspaceLayoutState {
    * `layouts[projectId]` を丸ごと削除する。inner の全 session layout も同時消滅。
    */
   removeProject: (projectId: string) => void;
+
+  /**
+   * v1.27.0: リロード後の slot.refId 検証 + 修復。
+   *
+   * Rust `list_active_terminals` の生存 pty 一覧を受け、`kind === "terminal"`
+   * の slot のうち `refId` がそのリストに含まれていない slot を `null` に戻す。
+   * 戻り値: 修復された slot 数（toast 通知 / debug 用）。
+   */
+  repairDeadTerminalRefs: (livePtyIds: ReadonlyArray<string>) => number;
 }
 
 const STORAGE_KEY = "sumi:workspace-layout";
@@ -419,6 +428,31 @@ export const useWorkspaceLayoutStore = create<WorkspaceLayoutState>()(
           delete next[projectId];
           return { layouts: next };
         }),
+
+      repairDeadTerminalRefs: (livePtyIds) => {
+        const live = new Set(livePtyIds);
+        let repaired = 0;
+        set((s) => {
+          const nextLayouts: Record<string, Record<string, SessionLayout>> = {};
+          for (const [pk, inner] of Object.entries(s.layouts)) {
+            const nextInner: Record<string, SessionLayout> = {};
+            for (const [sid, layout] of Object.entries(inner)) {
+              const nextSlots = layout.slots.map((c) => {
+                if (c && c.kind === "terminal" && !live.has(c.refId)) {
+                  repaired++;
+                  return null;
+                }
+                return c;
+              });
+              nextInner[sid] = { ...layout, slots: nextSlots };
+            }
+            nextLayouts[pk] = nextInner;
+          }
+          if (repaired === 0) return s;
+          return { layouts: nextLayouts };
+        });
+        return repaired;
+      },
     }),
     {
       name: STORAGE_KEY,

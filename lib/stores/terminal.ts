@@ -154,6 +154,26 @@ interface TerminalStoreState {
 
   /** `pty:{id}:exit` event を受けて state を更新 (useTerminalListener から呼ぶ)。 */
   markExited: (ptyId: string, exitCode: number | null) => void;
+
+  /**
+   * v1.27.0: Sumi リロード後の hydration 経路。
+   *
+   * Rust `list_active_terminals` の結果を受け、Frontend の terminals map に
+   * **既知でない pty を補充** する。既存 entry (project / pane / title 等) は
+   * そのまま保持し、まだ store に居ない pty だけを最低限の placeholder で追加
+   * する（projectId は引数 `defaultProjectId`、paneId は default pane）。
+   *
+   * **戻り値**: 追加された pty 数（toast 通知に使う）。
+   */
+  hydrateFromActive: (
+    list: ReadonlyArray<{
+      ptyId: string;
+      cwd: string;
+      shell: string;
+      startedAt: number;
+    }>,
+    defaultProjectId: string | null,
+  ) => number;
 }
 
 /** crypto.randomUUID fallback (title 連番用 id)。 */
@@ -487,5 +507,47 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         },
       };
     });
+  },
+
+  hydrateFromActive: (list, defaultProjectId) => {
+    if (!Array.isArray(list) || list.length === 0) return 0;
+    let added = 0;
+    set((state) => {
+      const nextTerminals = { ...state.terminals };
+      for (const info of list) {
+        if (!info || !info.ptyId) continue;
+        if (nextTerminals[info.ptyId]) continue; // 既知 entry は保持
+        // 未知 pty: shell からタイトル生成、project は引数 fallback、pane は default。
+        const title = makeTitle(
+          Object.values(nextTerminals).filter(
+            (t) =>
+              t.projectId === (defaultProjectId ?? "") &&
+              (t.paneId ?? TERMINAL_DEFAULT_PANE_ID) === TERMINAL_DEFAULT_PANE_ID,
+          ).length + 1,
+          info.shell,
+        );
+        nextTerminals[info.ptyId] = {
+          ptyId: info.ptyId,
+          // defaultProjectId が null の場合は空文字（filter から外れる）に倒す。
+          // 後で workspace-layout slot.refId が拾うため store に entry を残すのが目的。
+          projectId: defaultProjectId ?? "",
+          paneId: TERMINAL_DEFAULT_PANE_ID,
+          title,
+          startedAt: info.startedAt ?? Date.now(),
+          exitCode: null,
+          exited: false,
+          creatingSessionId: null,
+        };
+        added++;
+      }
+      if (added === 0) return state;
+      logger.debug("[terminal-store] hydrateFromActive", {
+        added,
+        total: Object.keys(nextTerminals).length,
+        defaultProjectId,
+      });
+      return { terminals: nextTerminals };
+    });
+    return added;
   },
 }));

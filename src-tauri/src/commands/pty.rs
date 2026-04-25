@@ -77,6 +77,10 @@ pub struct PtyHandle {
     pub pty_id: String,
     /// 起動時刻 (UNIX epoch milliseconds)。
     pub started_at: i64,
+    /// 起動時の cwd（v1.27.0: list_active_terminals が hydration 用に返す）。
+    pub cwd: String,
+    /// 起動時に解決された shell の絶対パス or 名前（v1.27.0）。
+    pub shell: String,
 }
 
 /// Tauri state: 全 pty の HashMap。
@@ -134,6 +138,24 @@ impl Drop for PtyState {
 #[serde(rename_all = "camelCase")]
 pub struct PtyInfo {
     pub pty_id: String,
+    pub started_at: i64,
+}
+
+/// `list_active_terminals` の 1 要素 (v1.27.0)。
+///
+/// Frontend のリロード耐性 hydration で利用する詳細情報。
+/// `project_id` / `session_id` は Rust 側では持たないため Option で常に `None` を返す
+/// (frontend 側で localStorage 上の terminal store と突き合わせて補完する設計)。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalInfo {
+    pub pty_id: String,
+    /// frontend 側で照合するための project id placeholder (現状常に `None`)。
+    pub project_id: Option<String>,
+    /// frontend 側で照合するための session id placeholder (現状常に `None`)。
+    pub session_id: Option<String>,
+    pub cwd: String,
+    pub shell: String,
     pub started_at: i64,
 }
 
@@ -239,6 +261,10 @@ pub fn pty_spawn(
                 killer: killer_arc.clone(),
                 pty_id: pty_id.clone(),
                 started_at: now_unix_ms(),
+                // v1.27.0: hydration 経路で Frontend に返すため保持。空 cwd は
+                // 親プロセスの cwd を継承するので空文字でもそのまま記録する。
+                cwd: cwd.clone(),
+                shell: shell_cmd.clone(),
             },
         );
     }
@@ -420,6 +446,38 @@ pub fn list_active_ptys(state: State<'_, PtyState>) -> Result<Vec<PtyInfo>, Stri
     Ok(out)
 }
 
+/// v1.27.0: Frontend hydration 用の詳細 pty 一覧。
+///
+/// `list_active_ptys` が pty_id + started_at しか返さないのに対し、本 command は
+/// cwd / shell も合わせて返すので、Sumi のリロード後に Frontend が
+///   1. pty が生きているか (= リロード前にユーザが置いていた terminal が残存しているか)
+///   2. workspace-layout の slot.refId が有効か
+/// を 1 度の round trip で判定できる。`project_id` / `session_id` は Rust 側に
+/// 永続化していないので常に `None` を返す（frontend 側で localStorage の
+/// terminal store と照合して補完する）。
+#[tauri::command(rename_all = "camelCase")]
+pub fn list_active_terminals(
+    state: State<'_, PtyState>,
+) -> Result<Vec<TerminalInfo>, String> {
+    let guard = state
+        .ptys
+        .lock()
+        .map_err(|e| format!("lock poisoned: {e}"))?;
+    let mut out: Vec<TerminalInfo> = guard
+        .values()
+        .map(|h| TerminalInfo {
+            pty_id: h.pty_id.clone(),
+            project_id: None,
+            session_id: None,
+            cwd: h.cwd.clone(),
+            shell: h.shell.clone(),
+            started_at: h.started_at,
+        })
+        .collect();
+    out.sort_by_key(|p| p.started_at);
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
@@ -455,6 +513,53 @@ mod tests {
         assert!(s.contains("\"startedAt\""));
         assert!(!s.contains("pty_id"));
         assert!(!s.contains("started_at"));
+    }
+
+    /// v1.27.0: TerminalInfo は camelCase で serialize され、`projectId` /
+    /// `sessionId` は `null` (Rust 側未保持の placeholder) になる。
+    #[test]
+    fn terminal_info_serializes_as_camel_case() {
+        let info = TerminalInfo {
+            pty_id: "abc".into(),
+            project_id: None,
+            session_id: None,
+            cwd: "C:\\workspace".into(),
+            shell: "cmd.exe".into(),
+            started_at: 123,
+        };
+        let s = serde_json::to_string(&info).unwrap();
+        assert!(s.contains("\"ptyId\":\"abc\""));
+        assert!(s.contains("\"projectId\":null"));
+        assert!(s.contains("\"sessionId\":null"));
+        assert!(s.contains("\"cwd\":"));
+        assert!(s.contains("\"shell\":\"cmd.exe\""));
+        assert!(s.contains("\"startedAt\":123"));
+        // snake_case が leak していないこと
+        assert!(!s.contains("pty_id"));
+        assert!(!s.contains("project_id"));
+        assert!(!s.contains("session_id"));
+        assert!(!s.contains("started_at"));
+    }
+
+    /// v1.27.0: 空 PtyState に対して list_active_terminals 相当の collect が空 Vec
+    /// を返す（command 関数自体は Tauri State<'_> が要るので、core ロジックの
+    /// 「空 map → 空 Vec」だけ確認する代理テスト）。
+    #[test]
+    fn terminal_info_collect_empty_state_yields_empty_vec() {
+        let s = PtyState::default();
+        let map = s.ptys.lock().unwrap();
+        let collected: Vec<TerminalInfo> = map
+            .values()
+            .map(|h| TerminalInfo {
+                pty_id: h.pty_id.clone(),
+                project_id: None,
+                session_id: None,
+                cwd: h.cwd.clone(),
+                shell: h.shell.clone(),
+                started_at: h.started_at,
+            })
+            .collect();
+        assert!(collected.is_empty());
     }
 
     #[test]

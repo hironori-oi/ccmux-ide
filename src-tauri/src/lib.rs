@@ -52,7 +52,10 @@ use commands::{
     fs_util::{list_dir_children, read_file_bytes},
     // PRJ-012 v1.0 / PM-920 / DEC-045 (2026-04-21): 組込ターミナル (xterm.js + Rust PTY)。
     // portable-pty で cmd.exe / bash / vim / python REPL 等の interactive command を起動。
-    pty::{list_active_ptys, pty_kill, pty_resize, pty_spawn, pty_write, PtyState},
+    pty::{
+        list_active_ptys, list_active_terminals, pty_kill, pty_resize, pty_spawn, pty_write,
+        PtyState,
+    },
     // PRJ-012 v1.1 / PM-944 (2026-04-20): Preview window の Rust spawn。
     // PM-943 の JS API 経路は Windows WebView2 user data dir 競合で spawn 直後に
     // process が死ぬ問題が解消せず、`WebviewWindowBuilder::data_directory` を
@@ -66,6 +69,11 @@ use commands::{
     // Settings の「ブラウザ操作」section で `--chrome` 機能の前提条件 (CLI 2.0.73+)
     // を確認するため `claude --version` を spawn して semver を抽出する。
     cli_version::claude_version,
+    // PRJ-012 v1.26.0 / DEC-070 Phase 2 (2026-04-25): chrome-devtools-mcp 統合。
+    // ~/.claude/settings.json の mcpServers フィールドに対する CRUD。Settings UI
+    // から 1 click で MCP server を install / uninstall するため。Anthropic Bridge
+    // 経由 (`/chrome`) が別 PC の Chrome を選んでしまう問題の根本対策。
+    mcp_install::{install_mcp_server, list_installed_mcp_servers, uninstall_mcp_server},
 };
 use events::monitor::{self, MonitorHandle};
 
@@ -213,6 +221,10 @@ pub fn run() {
             pty_resize,
             pty_kill,
             list_active_ptys,
+            // PRJ-012 v1.27.0 (2026-04-26): リロード耐性のための詳細 pty 一覧 command。
+            // pty_id + cwd + shell + started_at を返し、Sumi リロード後に Frontend が
+            // 既存 pty に再 attach + workspace-layout の slot.refId 検証ができるようにする。
+            list_active_terminals,
             // PRJ-012 v1.1 / PM-944 (2026-04-20): Preview window を Rust 側で
             // `WebviewWindowBuilder::data_directory` 付きで spawn する command。
             // frontend は `invoke("spawn_preview_window", { label, url, title })`。
@@ -225,6 +237,12 @@ pub fn run() {
             // PRJ-012 v1.24.0 / DEC-070 (2026-04-25): Claude Code CLI のバージョン検出。
             // Settings の「ブラウザ操作」section が起動時に呼び、2.0.73 未満なら warning。
             claude_version,
+            // PRJ-012 v1.26.0 / DEC-070 Phase 2 (2026-04-25): chrome-devtools-mcp 統合。
+            // ~/.claude/settings.json の mcpServers に対する install / list / uninstall。
+            // Settings の「ブラウザ操作」section から呼ばれる。
+            install_mcp_server,
+            list_installed_mcp_servers,
+            uninstall_mcp_server,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

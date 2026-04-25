@@ -11,6 +11,31 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.27.0] - 2026-04-26
+
+### Added
+
+- リロード耐性のあるターミナル: page reload 後も pty / 配置 / 履歴が完全復元
+- Rust command `list_active_terminals` で既存 pty 一覧を pty_id + cwd + shell + startedAt 込みで取得
+- terminal-buffer を localStorage persist 化 (key: `sumi:terminal-buffers`、256 KiB / pty、総容量 5 MiB ガード)
+- Frontend mount 時の hydration hook (`useTerminalHydration`) で生きている pty を terminal store に補充、useTerminalListener の reconcile 経路が data + exit listener を即時 attach、buffer は xterm mount 時に replay
+- 復元時に「N 個のターミナルを復元しました」toast を 3 秒だけ表示
+
+### Fixed
+
+- リロードすると Terminal slot が解除され、再 D&D で新規 pty が spawn されてしまう不具合を修正
+- リロード後に過去のターミナル出力が消える不具合を修正
+- 既存 pty プロセスは生きていたが Frontend が forget して dead pty を指す slot.refId が残っていた構造的問題を解消
+
+### Changed
+
+- lib/stores/terminal-buffer.ts: zustand persist middleware を追加 (memory only → localStorage)
+- 各 pty buffer 上限 1 MiB → 256 KiB (localStorage size 制約のため)
+- 全 pty 合計 5 MiB を超える場合は最古 pty から evict する LRU 風ガードを追加
+- lib/stores/terminal.ts: `hydrateFromActive(list, defaultProjectId)` action を追加（既知 entry は保持、未知 pty を補充）
+- lib/stores/workspace-layout.ts: `repairDeadTerminalRefs(livePtyIds)` action を追加（生存していない pty を refId に持つ slot を null に戻す）
+- src-tauri/src/commands/pty.rs: `PtyHandle` に `cwd` / `shell` field を追加し、`list_active_terminals` command で frontend に返す
+
 ## [v1.26.1] - 2026-04-26
 
 ### Fixed

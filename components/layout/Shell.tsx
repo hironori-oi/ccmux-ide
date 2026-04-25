@@ -52,6 +52,7 @@ import { useAllProjectsSidecarListener } from "@/hooks/useAllProjectsSidecarList
 import { useClaudeMonitor } from "@/hooks/useClaudeMonitor";
 import { useClaudeOAuthUsage } from "@/hooks/useClaudeOAuthUsage";
 import { useTerminalListener } from "@/hooks/useTerminalListener";
+import { useTerminalHydration } from "@/hooks/useTerminalHydration";
 import { useChatStore, MAX_PANES } from "@/lib/stores/chat";
 import {
   useEditorStore,
@@ -104,6 +105,10 @@ export function Shell({ children }: { children?: ReactNode }) {
   // PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル exit event listener。
   // data event は TerminalPane が自前で subscribe、ここは exit 集約のみ。
   useTerminalListener();
+  // PRJ-012 v1.27.0 (2026-04-26): リロード耐性のためのターミナル hydration。
+  // Rust list_active_terminals を 1 回呼び、生存 pty を terminal store に補充
+  // + slot.refId 修復 + buffer evict + 復元 toast 通知を実行する singleton。
+  useTerminalHydration();
 
   const activeProjectId = useProjectStore((s) => s.activeProjectId);
   const reduceMotion = useReducedMotion();
