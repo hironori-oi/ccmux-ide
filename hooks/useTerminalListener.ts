@@ -148,7 +148,37 @@ export function useTerminalListener(): void {
   const subscribedRef = useRef<Map<string, () => void>>(new Map());
 
   useEffect(() => {
-    const unsubscribeStore = useTerminalStore.subscribe((state) => {
+    /**
+     * v1.26.1 (hotfix): 現在の terminals state に対して listener を reconcile する。
+     *
+     * - 新規 pty: exit + data listener を登録
+     * - 消えた pty: listener 解除 + buffer / active registry cleanup
+     *
+     * 旧実装は `useTerminalStore.subscribe()` の change callback でしか reconcile
+     * せず、Zustand の `subscribe` は **登録時に初回 callback を呼ばない** 仕様の
+     * ため、以下の条件で listener が永久に attach されない致命的 bug が発生する:
+     *
+     *   1. page reload / Tauri WebView refresh: terminals store は persist しない
+     *      ため通常空だが、HMR や React.StrictMode の二重 mount 等で本 useEffect の
+     *      cleanup → 再 mount が走った場合、cleanup で全 listener 解除されたのに
+     *      再 mount 時の subscribe 登録だけでは現在の terminals に listener が
+     *      attach されない。
+     *   2. Sumi UI の通常リロード経路でも、auto-spawn / restore 処理が
+     *      `useTerminalListener` の mount より早く完了した場合に同様の経路。
+     *
+     * v1.26.0 で buffer 経路を Zustand store 化した際の sub-symptom として、
+     * 「リロード後に terminal 入力が一切届かない / scrollback も復元しない」
+     * 報告があった。listener (exit + data) が一切 attach されないため、
+     * pty の存続自体は OK だが UI 側で全く反応しない状態になる。
+     * （term.onData → pty_write の経路自体は TerminalPane.tsx 内で attach されており
+     *  生きているが、pty:{id}:data / exit の listener が無いため画面更新もない。
+     *  ただ、attach 直後の term は既に scroll 済の状態で、入力結果が画面に反映
+     *  されないためユーザには「入力もできない」ように見える。）
+     *
+     * 修正: subscribe 登録の直後に **初回明示的に reconcile を 1 回呼ぶ**。
+     * これで mount 時点で既に store にある全 pty に listener を確実に attach する。
+     */
+    const reconcile = (state: { terminals: Record<string, unknown> }) => {
       const current = subscribedRef.current;
       const liveIds = new Set(Object.keys(state.terminals));
 
@@ -256,6 +286,15 @@ export function useTerminalListener(): void {
           activeTerminals.delete(id);
         }
       }
+    };
+
+    // v1.26.1 hotfix: 初回明示 reconcile（store 既存 entry に listener attach する）。
+    // Zustand subscribe は変化検知のみで初回 callback を発火しないため必須。
+    reconcile(useTerminalStore.getState());
+
+    // 以降の terminals 変化は subscribe で reconcile する。
+    const unsubscribeStore = useTerminalStore.subscribe((state) => {
+      reconcile(state);
     });
 
     return () => {

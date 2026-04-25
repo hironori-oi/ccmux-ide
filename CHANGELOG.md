@@ -11,6 +11,15 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.26.1] - 2026-04-26
+
+### Fixed
+
+- v1.26.0 リリース後に「リロード後ターミナルへの入力ができない / 履歴も復元しない」という致命的不具合を緊急修正
+- 真因: useTerminalListener が `useTerminalStore.subscribe()` の change callback でしか listener reconcile しておらず、Zustand subscribe は登録時に初回 callback を発火しない仕様のため、HMR / React StrictMode / 再 mount 経路で既存 terminals に対する `pty:{id}:data` / `pty:{id}:exit` listener が永久に attach されない
+- 修正: subscribe 登録の直後に **初回明示的な reconcile** を 1 回呼ぶことで mount 時点で既に store にある全 pty に listener を確実に attach
+- buffer 永続化（rolling buffer）と PreviewPane 診断強化は維持
+
 ## [v1.26.0] - 2026-04-26
 
 ### Added
