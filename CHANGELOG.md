@@ -11,6 +11,12 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.7] - 2026-04-25
+
+### Fixed
+
+- PermissionDialog の 4 ボタンが横一列で dialog の枠からはみ出る不具合を修正。2x2 grid 配置に変更し、左右で 拒否/許可、上下で 常時/今回 のグルーピングで視認性向上
+
 ## [v1.22.6] - 2026-04-25
 
 ### Fixed

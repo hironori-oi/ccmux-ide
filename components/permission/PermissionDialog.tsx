@@ -205,7 +205,9 @@ export function PermissionDialog(): React.ReactElement | null {
           )}
         </div>
 
-        <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+        {/* v1.22.7: 4 ボタンを 2x2 grid で配置し dialog 枠からはみ出ないよう調整。
+            左右で 拒否/許可、上下で 常時/今回 のグルーピング。 */}
+        <DialogFooter className="grid grid-cols-2 gap-2 sm:space-x-0">
           <Button
             variant="outline"
             onClick={() => void handleClick(current, "deny", "session")}
@@ -216,18 +218,18 @@ export function PermissionDialog(): React.ReactElement | null {
           </Button>
           <Button
             variant="outline"
-            onClick={() => void handleClick(current, "deny", "once")}
-            aria-label="今回のみ拒否"
-          >
-            今回のみ拒否
-          </Button>
-          <Button
-            variant="outline"
             onClick={() => void handleClick(current, "allow", "session")}
             aria-label="このセッションで常に許可"
           >
             <Check className="mr-1.5 h-4 w-4" aria-hidden />
             セッション常時許可
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => void handleClick(current, "deny", "once")}
+            aria-label="今回のみ拒否"
+          >
+            今回のみ拒否
           </Button>
           <Button
             onClick={() => void handleClick(current, "allow", "once")}
