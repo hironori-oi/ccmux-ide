@@ -69,11 +69,10 @@ use commands::{
     // Settings の「ブラウザ操作」section で `--chrome` 機能の前提条件 (CLI 2.0.73+)
     // を確認するため `claude --version` を spawn して semver を抽出する。
     cli_version::claude_version,
-    // PRJ-012 v1.26.0 / DEC-070 Phase 2 (2026-04-25): chrome-devtools-mcp 統合。
-    // ~/.claude/settings.json の mcpServers フィールドに対する CRUD。Settings UI
-    // から 1 click で MCP server を install / uninstall するため。Anthropic Bridge
-    // 経由 (`/chrome`) が別 PC の Chrome を選んでしまう問題の根本対策。
-    mcp_install::{install_mcp_server, list_installed_mcp_servers, uninstall_mcp_server},
+    // v1.28.1: DEC-070 Phase 2 (chrome-devtools-mcp 統合) の use 文を一旦削除。
+    // mcp_install モジュール本体は v1.26.0 stash 由来で untracked のまま残置されており、
+    // CI runner では `mcp_install` シンボル不在のため build fail していた。
+    // Phase 2 は別 sprint で完全実装する想定 (オーナー指示で保留)。
 };
 use events::monitor::{self, MonitorHandle};
 
@@ -237,12 +236,9 @@ pub fn run() {
             // PRJ-012 v1.24.0 / DEC-070 (2026-04-25): Claude Code CLI のバージョン検出。
             // Settings の「ブラウザ操作」section が起動時に呼び、2.0.73 未満なら warning。
             claude_version,
-            // PRJ-012 v1.26.0 / DEC-070 Phase 2 (2026-04-25): chrome-devtools-mcp 統合。
-            // ~/.claude/settings.json の mcpServers に対する install / list / uninstall。
-            // Settings の「ブラウザ操作」section から呼ばれる。
-            install_mcp_server,
-            list_installed_mcp_servers,
-            uninstall_mcp_server,
+            // v1.28.1: DEC-070 Phase 2 (chrome-devtools-mcp 統合) は別 sprint で再着手。
+            // install_mcp_server / list_installed_mcp_servers / uninstall_mcp_server は
+            // v1.26.0 stash 由来で本格コミットしていないため、invoke_handler から削除。
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

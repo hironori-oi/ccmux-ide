@@ -91,3 +91,8 @@ pub mod mcp;
 // を確認するために `claude --version` を spawn して semver を抽出する。末尾
 // append で他 module と排他。
 pub mod cli_version;
+
+// v1.28.1: DEC-070 Phase 2 (chrome-devtools-mcp 統合) は別 sprint で再着手予定。
+// mcp_install モジュール本体は v1.26.0 stash 由来で local untracked のまま残置されており、
+// CI runner には存在しないため `pub mod mcp_install;` を削除して build を green に戻す。
+// 再開時は mcp_install.rs を本格コミット + 再有効化する。

@@ -11,6 +11,15 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.28.1] - 2026-04-26
+
+### Fixed
+
+- CI build (Linux / macOS / Windows) で `unresolved import 'commands::mcp_install'` エラーで fail していた不具合を修正
+- 真因: v1.26.0 stash 由来の `mcp_install.rs` が local untracked のまま残置されていたが、`lib.rs` の use 文 + invoke_handler 登録だけが既に commit されていた整合性破綻
+- DEC-070 Phase 2 (chrome-devtools-mcp 統合) の参照を `lib.rs` / `commands/mod.rs` から削除して CI を green に戻す
+- `mcp_install.rs` 自体は local 残置、Phase 2 再開時に本格コミット
+
 ## [v1.28.0] - 2026-04-26
 
 ### Added
