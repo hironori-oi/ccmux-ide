@@ -86,19 +86,12 @@ export function useAllProjectsSidecarListener(): void {
           const u2 = await onTauriEvent<string>(stderrEvent, (payload) => {
             const trimmed = payload.trim();
             if (!trimmed) return;
+            // v1.22.6: sidecar の stderr は技術 log のためユーザー通知しない。
+            // 旧実装は "sidecar starting: mode=Bundled, entry=..." 等の英語 debug
+            // メッセージをそのまま toast 表示していたが、UX 上ノイズなので console
+            // のみに留める (DevTools で確認可能)。
             // eslint-disable-next-line no-console
             console.warn(`[sidecar stderr:${sessionId}]`, trimmed);
-            const activeProjectId = useProjectStore.getState().activeProjectId;
-            const projectId = projectIdOf(sessionId);
-            if (
-              projectId &&
-              activeProjectId === projectId &&
-              /ready$|sidecar starting|parent disconnected|stdin closed/i.test(
-                trimmed
-              )
-            ) {
-              toast.message(`sidecar: ${trimmed.slice(0, 120)}`);
-            }
           });
           const u3 = await onTauriEvent<number | null>(termEvent, (code) => {
             const activeProjectId = useProjectStore.getState().activeProjectId;
@@ -109,8 +102,17 @@ export function useAllProjectsSidecarListener(): void {
               .getState()
               .setSessionActivity(sessionId, { kind: "idle" });
             useSessionStore.getState().setSessionStatus(sessionId, "idle");
-            if (projectId && activeProjectId === projectId) {
-              toast.error(`Claude sidecar が終了しました: ${code ?? "unknown"}`);
+            // v1.22.6: 異常終了 (非ゼロ exit code) のみユーザーに日本語通知。
+            // 正常終了 (code===0 / null) はサイレント。技術詳細は console のみ。
+            if (
+              projectId &&
+              activeProjectId === projectId &&
+              typeof code === "number" &&
+              code !== 0
+            ) {
+              toast.error(
+                "エージェントが予期せず停止しました。次の送信で再起動します。"
+              );
             }
           });
 

@@ -11,6 +11,17 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.6] - 2026-04-25
+
+### Fixed
+
+- sidecar の stderr 技術 log（「sidecar starting: mode=Bundled, entry=...」等の英語デバッグ情報）を toast 表示しないよう変更。技術 log は DevTools console のみで確認可能
+- sidecar の正常終了時（exit code 0）に通知を出さないよう抑制。異常終了時のみ「エージェントが予期せず停止しました」を日本語で通知
+
+### Changed
+
+- ユーザー向け通知を日本語のわかりやすいメッセージのみに統一
+
 ## [v1.22.5] - 2026-04-25
 
 ### Fixed
