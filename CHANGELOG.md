@@ -11,6 +11,13 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.1] - 2026-04-25
+
+### Fixed
+
+- ProjectRail の右クリック「色を変更」メニューで Popover が瞬時に閉じて色選択ができない不具合を修正
+- DropdownMenu と Popover の競合を解消、DropdownMenuSub (submenu) で 19 色グリッドを安定表示
+
 ## [v1.22.0] - 2026-04-25
 
 ### Fixed

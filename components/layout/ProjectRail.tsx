@@ -2,14 +2,17 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { AlertTriangle, Palette, Plus, Sparkles } from "lucide-react";
+import { AlertTriangle, Check, Palette, Plus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuPortal,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -18,7 +21,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ProjectAccentColorPicker } from "@/components/layout/ProjectAccentColorPicker";
 import { useProjectStore } from "@/lib/stores/project";
 import { useChatStore } from "@/lib/stores/chat";
 import { useSessionStore } from "@/lib/stores/session";
@@ -29,7 +31,9 @@ import {
 } from "@/lib/sidecar-status";
 import type { ProjectStatus } from "@/lib/project-status";
 import {
+  ACCENT_COLORS,
   getAccentBgClass,
+  getAccentChipBgClass,
   getAccentRingClass,
   getAccentTextClass,
   normalizeAccentColor,
@@ -56,6 +60,16 @@ import { cn } from "@/lib/utils";
  *     completed 状態が残る。
  *  4. プロジェクトごとの accentColor (19 色プリセット) を右クリックメニュー
  *     から変更可能。選択は即 localStorage に永続化される。
+ *
+ * ## v1.22.1 patch — 色変更メニューが即閉じする不具合の修正
+ *
+ *  v1.20.0 で導入した「右クリック → DropdownMenuItem『色を変更』をクリック →
+ *  setTimeout(30ms) で別の Popover を open」する設計には、DropdownMenu の close
+ *  時 focus 復元 と Popover の outside-click detection が衝突して Popover が
+ *  瞬時に閉じる race condition が存在した。本 patch では Radix 標準の
+ *  `DropdownMenuSub` / `DropdownMenuSubContent` を使い、19 色 grid を親
+ *  DropdownMenu の **submenu** として展開する。Popover 経由を廃止することで、
+ *  親メニューが開いている限り submenu も維持され、選択時に親も自然に close する。
  */
 
 /** 10 project 超えの warning 発火閾値（DEC-033 から継続）。 */
@@ -264,15 +278,11 @@ function ProjectRailItem({
   const statusVisual = SIDECAR_STATUS_VISUAL[sidecarStatus];
   const statusLabel = PROJECT_STATUS_LABEL[projectStatus];
 
-  // 色選択 Popover の状態 (Dropdown menu から開く)
-  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  // v1.22.1: 色変更は DropdownMenuSub に統合したため、Popover open state は
+  // 不要になった。menuOpen は右クリック起動と DropdownMenu 制御のために保持。
   const [menuOpen, setMenuOpen] = useState(false);
 
-  const handleOpenColorPicker = useCallback(() => {
-    setMenuOpen(false);
-    // 少し遅延させて menu の focus release と競合させない
-    setTimeout(() => setColorPickerOpen(true), 30);
-  }, []);
+  const currentAccent = normalizeAccentColor(project.accentColor);
 
   const handlePickColor = useCallback(
     (color: AccentColor) => {
@@ -361,31 +371,66 @@ function ProjectRailItem({
                 align="start"
                 className="w-48"
               >
-                <DropdownMenuItem onSelect={handleOpenColorPicker}>
-                  <Palette className="mr-2 h-3.5 w-3.5" aria-hidden />
-                  色を変更
-                </DropdownMenuItem>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Palette className="mr-2 h-3.5 w-3.5" aria-hidden />
+                    色を変更
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuPortal>
+                    <DropdownMenuSubContent
+                      sideOffset={4}
+                      className="w-auto max-w-[220px] p-3"
+                    >
+                      <div className="mb-2 text-[11px] font-semibold text-muted-foreground">
+                        プロジェクトの色
+                      </div>
+                      <div
+                        role="radiogroup"
+                        aria-label="プロジェクトの色を選択"
+                        className="grid grid-cols-5 gap-1.5"
+                      >
+                        {ACCENT_COLORS.map((c) => {
+                          const selected = currentAccent === c.id;
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              role="radio"
+                              aria-checked={selected}
+                              aria-label={c.label}
+                              title={c.label}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePickColor(c.id);
+                                setMenuOpen(false);
+                              }}
+                              className={cn(
+                                "relative flex h-7 w-7 items-center justify-center rounded-md transition",
+                                "hover:ring-2 hover:ring-primary/50 hover:ring-offset-1 hover:ring-offset-background",
+                                getAccentChipBgClass(c.id),
+                                selected &&
+                                  "ring-2 ring-primary ring-offset-1 ring-offset-background"
+                              )}
+                            >
+                              {selected && (
+                                <Check
+                                  className="h-3.5 w-3.5 text-white drop-shadow"
+                                  aria-hidden
+                                />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuPortal>
+                </DropdownMenuSub>
                 <DropdownMenuSeparator />
                 <div className="px-2 py-1 text-[10px] text-muted-foreground">
                   右クリックでこのメニューを開きます
                 </div>
               </DropdownMenuContent>
             </DropdownMenu>
-
-            {/* Popover の anchor 用 (非表示 0-size span)。 */}
-            <ProjectAccentColorPicker
-              value={project.accentColor}
-              onChange={handlePickColor}
-              open={colorPickerOpen}
-              onOpenChange={setColorPickerOpen}
-              side="right"
-              trigger={
-                <span
-                  aria-hidden
-                  className="pointer-events-none absolute inset-0"
-                />
-              }
-            />
           </span>
         </TooltipTrigger>
         <TooltipContent side="right" className="flex flex-col gap-1 text-xs">
