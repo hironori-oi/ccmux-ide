@@ -11,6 +11,14 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.9] - 2026-04-25
+
+### Changed
+
+- /clear スラッシュコマンドの挙動を「新規セッション作成のみ」から「**現在のセッションを削除して新しいセッションを作成**」に変更
+- ClearSessionDialog のタイトル / 説明 / ボタン文言を「リセット」から「削除して新規開始」に統一
+- 旧セッションは sidecar / 会話履歴 / 添付 / preferences すべて DEC-058 cascade で完全削除されるため、明示的な sidecar 再起動が不要に
+
 ## [v1.22.8] - 2026-04-25
 
 ### Added

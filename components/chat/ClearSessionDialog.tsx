@@ -90,56 +90,35 @@ export function ClearSessionDialog() {
   async function handleConfirm() {
     setBusy(true);
     try {
-      // まず activeProjectId を capture（createNewSession の subscribe 副作用で
-      // 非同期に fetchSessions が走るため、read は確定タイミングで先に行う）。
-      const activeProjectId = useProjectStore.getState().activeProjectId;
+      // v1.22.9: オーナー指示で「新規作成のみ」から「現セッション削除 + 新規作成」
+      // に変更。旧 session id を capture → 新 session 作成（active 切替）→
+      // 旧 session を deleteSession で完全 cascade 削除 (DB / sidecar / chat /
+      // preferences すべて DEC-058 経路で清掃)。
+      const oldSessionId = useSessionStore.getState().currentSessionId;
 
-      // 1) 新セッションを作成。内部で:
-      //   - Rust `create_session` (activeProjectId 自動 attach)
-      //   - useChatStore.clearSession() で現 pane の messages / activity を空に
-      //     （PM-910 で activity: idle も含めるよう chat.ts 側を修正）
-      //   - useChatStore.setSessionId(newId) で currentSessionId を切替
-      //     + useProjectStore.lastSessionId を新 session に書き戻し
+      // 新 session 作成（内部で activeProjectId 自動 attach、setSessionId で active 切替）
       const newSession = await useSessionStore.getState().createNewSession();
 
-      // v1.18.0 (DEC-064): messages / attachments / streaming / activity は
-      // session 単位 store に移行したため、snapshot 側に残留する問題はなくなった。
-      // (createNewSession が hydrateSessionMessages([]) で新 session の空 entry を
-      //  既に作成している。他 pane が指している旧 session はそのまま保持される)。
-      //
-      // 念のため新 session の attachments を明示的に空にする（hydrate 時点で
-      // clearAttachments と同等状態になるが、send 中に発生した attachment の
-      // 取りこぼし対策として冪等に走らせる）。
+      // 新 session の attachments を冪等に空にする
       useChatStore.getState().clearAttachments(newSession.id);
-      void activeProjectId; // reserved: project 単位の cleanup が必要になった場合に使用
 
-      // 3) PM-910 (H3 対応): sidecar プロセスを silent 再起動して Claude 側
-      // context を完全消去する。resume=undefined で送っても CLI / SDK の
-      // 長命プロセス静的状態により context が残留するケースがあるため、
-      // プロセス再起動が最も確実（Claude Desktop の「新しいチャット」相当）。
-      //
-      // await するので UI は restart 完了まで busy 表示。通常 1-3 秒。
-      // restart 失敗時 (start_agent_sidecar throw) は status=error + silent warn、
-      // 呼出側 catch で toast.error を出す。chat store / session は既にリセット
-      // 済なので部分成功として容認（次回送信時に起動リトライ可能）。
-      if (activeProjectId) {
+      // 旧 session を完全削除（cascade で sidecar / messages / preferences クリーンアップ）
+      if (oldSessionId && oldSessionId !== newSession.id) {
         try {
-          await useProjectStore
-            .getState()
-            .restartSidecarForClear(activeProjectId);
-          logger.debug("[clear] sidecar restarted", {
-            projectId: activeProjectId,
-            newSessionId: newSession.id,
-          });
+          await useSessionStore.getState().deleteSession(oldSessionId);
+          logger.debug("[clear] old session deleted", { oldSessionId });
         } catch (e) {
-          // restart 失敗は致命でない（UI state は既に reset 済、次送信で retry 可能）
+          // 削除失敗は致命でない（UI state は既に新 session に切替済）
           // eslint-disable-next-line no-console
-          console.warn("[clear] restartSidecarForClear failed:", e);
+          console.warn("[clear] deleteSession failed:", e);
         }
       }
 
+      // sidecar restart は不要：deleteSession で旧 sidecar が kill され、
+      // 新 session の sidecar は次回送信時に lazy spawn される (DEC-063)。
+
       toast.success(
-        "会話をリセットしました。Claude プロセスも再起動され、新規会話として扱われます"
+        "現在のセッションを削除し、新しいセッションを開始しました"
       );
       close();
     } catch (e) {
@@ -158,14 +137,12 @@ export function ClearSessionDialog() {
     <AlertDialog open={open} onOpenChange={(next) => (next ? null : close())}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>会話をリセットしますか？</AlertDialogTitle>
+          <AlertDialogTitle>このセッションを削除しますか？</AlertDialogTitle>
           <AlertDialogDescription>
-            新しいセッションを作成し、Claude プロセスも再起動して完全に新規会話として扱います。
+            現在のセッションを完全に削除し、新しいセッションを開始します。
             <br />
-            これまでの会話は履歴として残り、セッション一覧からいつでも閲覧できます。
-            <br />
-            <span className="text-[11px] text-muted-foreground">
-              ※ Claude プロセスの再起動に 1〜3 秒かかります。
+            <span className="text-destructive">
+              この操作は取り消せません。会話履歴・添付ファイル・関連設定がすべて削除されます。
             </span>
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -179,7 +156,7 @@ export function ClearSessionDialog() {
             disabled={busy}
           >
             {busy && <Loader2 className="h-3 w-3 animate-spin" aria-hidden />}
-            リセットする
+            削除して新規開始
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
