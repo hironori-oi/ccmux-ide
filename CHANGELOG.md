@@ -11,6 +11,22 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.26.0] - 2026-04-26
+
+### Added
+
+- ターミナル出力の buffer 永続化（page reload / Tauri WebView 再描画でも履歴維持）
+- 1MB rolling buffer をメモリ保持、pty mount 時に replay
+- プレビュー error UI に診断情報を追加（dev server 未起動 / X-Frame-Options / ファイアウォールの 3 候補を提示）
+- Next.js / Vite の解決策リンクを追加（外部ブラウザで公式 docs を開く）
+
+### Changed
+
+- lib/stores/terminal-buffer.ts 新規（1MB rolling buffer、pty 単位、メモリ保持）
+- useTerminalListener.ts の shadow buffer (PM-941, 256KB / module-level Map) を terminal-buffer store に移行（1MB に拡張）
+- closeTerminal / purgeProject / removeTerminalPane (DEC-058) で buffer を即時 cascade clear
+- PreviewPane の error カードのレイアウトと文言を診断重視に刷新
+
 ## [v1.25.6] - 2026-04-25
 
 ### Fixed

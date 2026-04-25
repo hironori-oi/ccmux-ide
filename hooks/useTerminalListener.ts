@@ -7,6 +7,7 @@ import { logger } from "@/lib/logger";
 import { onTauriEvent } from "@/lib/tauri-api";
 import { resetTerminalViewport } from "@/components/terminal/terminal-reset-registry";
 import { useTerminalStore } from "@/lib/stores/terminal";
+import { useTerminalBufferStore } from "@/lib/stores/terminal-buffer";
 
 /**
  * PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル singleton listener。
@@ -23,8 +24,8 @@ import { useTerminalStore } from "@/lib/stores/terminal";
  *
  * これを解消するため本 hook を以下のように拡張する:
  *
- * 1. `pty:{id}:data` event を **singleton で常時購読** し、module-level の
- *    shadow ring buffer (`ptyBuffers`, 上限 256KB / pty) に追記する。Terminal
+ * 1. `pty:{id}:data` event を **singleton で常時購読** し、shadow buffer
+ *    (1MB / pty, `useTerminalBufferStore` 管理) に追記する。Terminal
  *    tab が closed (TerminalView unmount) の間も listener は生存し続けるため、
  *    再 mount 時に buffer を再現できる。
  * 2. subscriber pattern: `activeTerminals` map に **現在描画中の xterm instance**
@@ -43,35 +44,30 @@ import { useTerminalStore } from "@/lib/stores/terminal";
  * （`pty:*:exit` という glob listen は Tauri 2.x では提供されていないので、
  *  store の terminals map を subscribe して「新しく増えた pty_id に対応する
  *  listener を per-pty で動的 register + cleanup」する戦略を取る。）
+ *
+ * ## v1.26.0 (2026-04-26): buffer を Zustand store に移行 + 1MB 化
+ *
+ * PM-941 では module-level の `Map<string, string>` を 256KB 上限で管理して
+ * いたが、以下の理由で `useTerminalBufferStore` (1MB / pty) に移管した。
+ *
+ *   1. PM-941 の 256KB は実セッションでは早期 trim され、ユーザーが「少し前の
+ *      コマンド出力」を確認したいケースで欠落することがあった。1MB に増量。
+ *   2. devtools / store snapshot で buffer 状態を観察可能にし、debug 性を向上。
+ *   3. `purgeProject` (DEC-058) と `closeTerminal` の cascade を一元化し、pty
+ *      削除時の buffer cleanup を store の action として明示的に呼ぶ経路に統一。
+ *
+ * `activeTerminals` map (現在描画中の xterm instance のレジストリ) は
+ * 引き続き module-level で持つ。store には xterm instance を入れない方が
+ * subscribe 経路の余計な re-render を避けられるため。
  */
 
 // ---------------------------------------------------------------------------
-// PM-941: scrollback buffer + active terminal registry (module-level singleton)
+// PM-941 / v1.26.0: active terminal registry (module-level singleton)。
+// scrollback buffer 自体は `useTerminalBufferStore` に移管済 (v1.26.0)。
 // ---------------------------------------------------------------------------
-
-/**
- * ring buffer 上限。UTF-16 char 長ベースで conservative に 256KB (≒ 26 万文字)。
- * 実 byte では ASCII なら 256KB、multibyte でも概ね 512KB 以内に収まる。
- * pty あたり最大でも 1MB 未満なので pty 10 本でも 10MB 以内、実用上問題ない。
- */
-const MAX_BUFFER_CHARS = 256 * 1024;
-
-/** pty_id -> shadow scrollback buffer (TerminalView unmount 中も保持)。 */
-const ptyBuffers = new Map<string, string>();
 
 /** pty_id -> 現在画面に描画中の xterm instance (= subscriber)。 */
 const activeTerminals = new Map<string, XTermTerminal>();
-
-/** buffer に追記 (ring buffer trim 付き)。 */
-function appendToBuffer(ptyId: string, chunk: string): void {
-  if (!chunk) return;
-  const prev = ptyBuffers.get(ptyId) ?? "";
-  let next = prev + chunk;
-  if (next.length > MAX_BUFFER_CHARS) {
-    next = next.slice(next.length - MAX_BUFFER_CHARS);
-  }
-  ptyBuffers.set(ptyId, next);
-}
 
 /**
  * TerminalPane が mount し term.open() が成功した直後に呼ぶ。
@@ -88,7 +84,7 @@ export function registerActiveTerminal(
   ptyId: string,
   term: XTermTerminal,
 ): void {
-  const buf = ptyBuffers.get(ptyId);
+  const buf = useTerminalBufferStore.getState().getBuffer(ptyId);
   if (buf) {
     try {
       term.write(buf);
@@ -99,7 +95,7 @@ export function registerActiveTerminal(
   activeTerminals.set(ptyId, term);
   logger.debug("[terminal-listener] register active", {
     ptyId,
-    replayChars: buf?.length ?? 0,
+    replayChars: buf.length,
   });
 }
 
@@ -126,12 +122,12 @@ export function unregisterActiveTerminal(
  * 本 hook 内部からは store 購読の cleanup で自動呼び出しされるため、通常は
  * 外部から呼ぶ必要はない。デバッグや将来の「terminal clear」UI 拡張用に
  * export しておく。
+ *
+ * v1.26.0: buffer 実体は `useTerminalBufferStore` に移管。本 API は後方互換の
+ * ラッパとして維持（既存呼び出し箇所がない場合でもデバッグ用に export 維持）。
  */
 export function clearPtyScrollback(ptyId: string): void {
-  if (ptyBuffers.has(ptyId)) {
-    ptyBuffers.delete(ptyId);
-    logger.debug("[terminal-listener] clear scrollback", { ptyId });
-  }
+  useTerminalBufferStore.getState().clearBuffer(ptyId);
 }
 
 /**
@@ -139,7 +135,7 @@ export function clearPtyScrollback(ptyId: string): void {
  * registerActiveTerminal 経由で透過に再現されるため本 API を直接使う必要はない。
  */
 export function getPtyScrollback(ptyId: string): string {
-  return ptyBuffers.get(ptyId) ?? "";
+  return useTerminalBufferStore.getState().getBuffer(ptyId);
 }
 
 // ---------------------------------------------------------------------------
@@ -217,11 +213,12 @@ export function useTerminalListener(): void {
             logger.warn("[terminal-listener] listen exit failed", { id, e });
           });
 
-        // PM-941: data listener (scrollback 保持用)。
-        // buffer 追記 + active term への forward を 1 handler で atomic に実行。
+        // PM-941 / v1.26.0: data listener (scrollback 保持用)。
+        // buffer 追記 (terminal-buffer store) + active term への forward を
+        // 1 handler で atomic に実行。
         void onTauriEvent<string>(`pty:${id}:data`, (payload) => {
           if (typeof payload !== "string") return;
-          appendToBuffer(id, payload);
+          useTerminalBufferStore.getState().appendOutput(id, payload);
           const term = activeTerminals.get(id);
           if (term) {
             try {
@@ -253,9 +250,9 @@ export function useTerminalListener(): void {
         if (!liveIds.has(id)) {
           cleanup();
           current.delete(id);
-          // PM-941: memory leak 防止。pty が store から消えた = kill 済 /
-          // removeTerminalPane 済のため、buffer も保持する意味がない。
-          ptyBuffers.delete(id);
+          // PM-941 / v1.26.0: memory leak 防止。pty が store から消えた =
+          // kill 済 / removeTerminalPane 済のため、buffer も保持する意味がない。
+          useTerminalBufferStore.getState().clearBuffer(id);
           activeTerminals.delete(id);
         }
       }
@@ -267,10 +264,11 @@ export function useTerminalListener(): void {
         cleanup();
       }
       subscribedRef.current.clear();
-      // PM-941: Shell unmount (= アプリ終了相当) で全 buffer / active registry
-      // を cleanup しておく。通常 Shell は singleton で unmount されないが、
-      // StrictMode / test 環境で再 mount される場合の衛生のため。
-      ptyBuffers.clear();
+      // PM-941 / v1.26.0: Shell unmount (= アプリ終了相当) で active registry を
+      // cleanup しておく。buffer 自体は store に残置（StrictMode 二重 mount 等で
+      // 一旦 unmount されたが直後に再 mount された場合に履歴を維持するため）。
+      // pty が完全に kill された場合は上の subscribe 内で per-pty に
+      // `clearBuffer` 済なので、ここでは触らない。
       activeTerminals.clear();
     };
   }, []);

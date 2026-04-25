@@ -5,6 +5,11 @@ import { toast } from "sonner";
 
 import { logger } from "@/lib/logger";
 import { callTauri } from "@/lib/tauri-api";
+// v1.26.0: pty 削除時に scrollback buffer も即時 clear するため store を import。
+// useTerminalListener の store subscribe cleanup 経路でも最終的に clear されるが、
+// closeTerminal / purgeProject / removeTerminalPane の同期実行内で確定的に
+// memory を解放するため、ここでも明示的に clear する（idempotent）。
+import { useTerminalBufferStore } from "@/lib/stores/terminal-buffer";
 
 /**
  * PRJ-012 v1.0 / PM-920 / DEC-045: 組込ターミナル (xterm.js + Rust PTY) 用 store。
@@ -286,6 +291,14 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         terminalPanes: nextTerminalPanes,
       };
     });
+    // v1.26.0: scrollback buffer を即時 clear（DEC-058 cascade と同じ意図）。
+    // useTerminalListener の subscribe cleanup でも clear されるが、メモリ
+    // 解放を確定的にするためここでも明示的に呼ぶ（idempotent）。
+    try {
+      useTerminalBufferStore.getState().clearBuffer(ptyId);
+    } catch (e) {
+      logger.debug("[terminal-store] clearBuffer (close) failed:", e);
+    }
     // kill は fire-and-forget (失敗しても UI は既に削除済)。
     void callTauri<void>("pty_kill", { ptyId }).catch((e) => {
       logger.warn("[terminal-store] kill failed (UI は既に削除済):", e);
@@ -374,6 +387,13 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       };
     });
 
+    // v1.26.0: scrollback buffer を一括 clear（DEC-058 cascade）。
+    try {
+      useTerminalBufferStore.getState().clearBuffers(targetIds);
+    } catch (e) {
+      logger.debug("[terminal-store] clearBuffers (purge) failed:", e);
+    }
+
     // pty_kill は fire-and-forget（Rust 側 idempotent）
     for (const id of targetIds) {
       void callTauri<void>("pty_kill", { ptyId: id }).catch((e) => {
@@ -431,6 +451,13 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       terminals: nextTerminals,
       activeTerminalId: nextActiveTerminalId,
     });
+
+    // v1.26.0: scrollback buffer も一括 clear。
+    try {
+      useTerminalBufferStore.getState().clearBuffers(ptysToKill);
+    } catch (e) {
+      logger.debug("[terminal-store] clearBuffers (paneRemove) failed:", e);
+    }
 
     // pty_kill は fire-and-forget
     ptysToKill.forEach((id) => {

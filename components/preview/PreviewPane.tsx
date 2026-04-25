@@ -588,25 +588,148 @@ export function PreviewPane({ previewId }: { previewId?: string } = {}) {
             //       頼る設計。
           />
           {iframeStatus === "error" && (
-            // PM-980: ロード失敗 UI。typical な原因は:
-            //   - dev server 未起動 (ポート違い / 起動忘れ)
-            //   - dev server が `X-Frame-Options: DENY` / `frame-ancestors 'none'` を返している
-            //     (例: Next.js 15+ の middleware default、Vite preview の一部設定)
-            // どちらも Sumi 側からは復旧できないため、「外部ブラウザで開く」CTA で
-            // 回避手段を案内する。
-            <div className="absolute inset-0 flex items-center justify-center bg-background/95 p-6">
-              <div className="flex w-full max-w-md flex-col gap-3 rounded-md border border-border/50 bg-card p-4 shadow-sm">
+            // PM-980 / v1.26.0: ロード失敗 UI。
+            // v1.22.8 (PM-980) で導入したエラーカードを v1.26.0 で診断情報強化。
+            // ユーザーが「何が起きているのか」を切り分けられるよう、典型的な
+            // 3 つの原因と Next.js / Vite の解決策リンクを提示する。
+            <div className="absolute inset-0 flex items-center justify-center overflow-auto bg-background/95 p-6">
+              <div className="flex w-full max-w-lg flex-col gap-3 rounded-md border border-border/50 bg-card p-4 shadow-sm">
                 <div className="flex items-start gap-2 text-sm font-medium text-foreground">
                   <Info className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden />
-                  <span>localhost に接続できません</span>
+                  <span>プレビューを表示できません</span>
                 </div>
                 <p className="text-xs text-muted-foreground">
                   <code className="font-mono text-[11px]">{committedUrl}</code> を
-                  iframe で読み込めませんでした。dev server が起動していないか、
-                  サーバ側の <code className="font-mono text-[11px]">X-Frame-Options</code> /
-                  <code className="font-mono text-[11px]">frame-ancestors</code> 設定により
-                  iframe 表示がブロックされている可能性があります。
+                  iframe で読み込めませんでした。原因として以下の 3 つが考えられます。
                 </p>
+
+                {/* v1.26.0: 原因の切り分けを支援する診断情報 (順序は確認しやすい順)。 */}
+                <ol className="ml-1 list-decimal space-y-2 pl-4 text-xs text-muted-foreground">
+                  <li>
+                    <span className="font-medium text-foreground">
+                      dev server が起動していない
+                    </span>
+                    <br />
+                    プロジェクトのターミナルで{" "}
+                    <code className="font-mono text-[11px]">npm run dev</code> /{" "}
+                    <code className="font-mono text-[11px]">pnpm dev</code> /{" "}
+                    <code className="font-mono text-[11px]">yarn dev</code>{" "}
+                    などが動いているか、ポート番号が一致しているかをご確認ください。
+                  </li>
+                  <li>
+                    <span className="font-medium text-foreground">
+                      dev server が iframe をブロックしている
+                    </span>
+                    <br />
+                    サーバが{" "}
+                    <code className="font-mono text-[11px]">
+                      X-Frame-Options: DENY
+                    </code>{" "}
+                    /{" "}
+                    <code className="font-mono text-[11px]">SAMEORIGIN</code>{" "}
+                    や{" "}
+                    <code className="font-mono text-[11px]">
+                      Content-Security-Policy: frame-ancestors &apos;none&apos;
+                    </code>{" "}
+                    を返している可能性があります。Next.js の dev server は既定で{" "}
+                    <code className="font-mono text-[11px]">SAMEORIGIN</code>{" "}
+                    を返すため、Sumi の iframe からの埋め込みはブロックされます。
+                  </li>
+                  <li>
+                    <span className="font-medium text-foreground">
+                      ファイアウォール / VPN がポートをブロックしている
+                    </span>
+                    <br />
+                    社内ネットワークやセキュリティソフトが localhost 以外の
+                    バインド (0.0.0.0 / 127.0.0.1 以外) をブロックしている
+                    場合があります。dev server の bind アドレスをご確認ください。
+                  </li>
+                </ol>
+
+                {/* v1.26.0: フレームワーク別の解決策リンク (Tauri shell.open で外部ブラウザに飛ばす)。 */}
+                <div className="flex flex-col gap-1 rounded-sm border border-border/40 bg-muted/30 p-2 text-[11px] text-muted-foreground">
+                  <div className="font-medium text-foreground">
+                    解決策のヒント
+                  </div>
+                  <div>
+                    <span className="font-medium">Next.js の場合:</span>{" "}
+                    <code className="font-mono text-[10px]">next.config.js</code>{" "}
+                    の{" "}
+                    <code className="font-mono text-[10px]">headers()</code>{" "}
+                    で{" "}
+                    <code className="font-mono text-[10px]">
+                      X-Frame-Options
+                    </code>{" "}
+                    を{" "}
+                    <code className="font-mono text-[10px]">ALLOWALL</code>{" "}
+                    などに上書きしてください。
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const { open } = await import(
+                            "@tauri-apps/plugin-shell"
+                          );
+                          await open(
+                            "https://nextjs.org/docs/app/api-reference/config/next-config-js/headers"
+                          );
+                        } catch (e) {
+                          logger.warn(
+                            "[preview] open Next.js docs failed:",
+                            e
+                          );
+                          toast.error(
+                            `ドキュメントを開けませんでした: ${String(e)}`
+                          );
+                        }
+                      }}
+                      className="ml-1 inline-flex items-center gap-0.5 underline underline-offset-2 hover:text-foreground"
+                      aria-label="Next.js headers ドキュメントを外部ブラウザで開く"
+                    >
+                      公式ドキュメント
+                      <ExternalLink className="h-3 w-3" aria-hidden />
+                    </button>
+                  </div>
+                  <div>
+                    <span className="font-medium">Vite の場合:</span>{" "}
+                    <code className="font-mono text-[10px]">
+                      vite.config.ts
+                    </code>{" "}
+                    の{" "}
+                    <code className="font-mono text-[10px]">
+                      server.headers
+                    </code>{" "}
+                    に{" "}
+                    <code className="font-mono text-[10px]">
+                      {"{ \"X-Frame-Options\": \"ALLOWALL\" }"}
+                    </code>{" "}
+                    を設定してください。
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const { open } = await import(
+                            "@tauri-apps/plugin-shell"
+                          );
+                          await open(
+                            "https://vitejs.dev/config/server-options.html#server-headers"
+                          );
+                        } catch (e) {
+                          logger.warn("[preview] open Vite docs failed:", e);
+                          toast.error(
+                            `ドキュメントを開けませんでした: ${String(e)}`
+                          );
+                        }
+                      }}
+                      className="ml-1 inline-flex items-center gap-0.5 underline underline-offset-2 hover:text-foreground"
+                      aria-label="Vite server.headers ドキュメントを外部ブラウザで開く"
+                    >
+                      公式ドキュメント
+                      <ExternalLink className="h-3 w-3" aria-hidden />
+                    </button>
+                  </div>
+                </div>
+
                 <div className="flex flex-wrap gap-2 pt-1">
                   <Button
                     type="button"
