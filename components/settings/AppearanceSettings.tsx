@@ -12,6 +12,7 @@ import {
   Sun,
 } from "lucide-react";
 
+import { AboutSection } from "@/components/settings/AboutSection";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { triggerManualUpdateCheck } from "@/components/updates/UpdateNotifier";
@@ -741,6 +742,9 @@ export function AppearanceSettings() {
           </div>
         )}
       </Card>
+
+      {/* v1.22.2: Sumi について（バージョン / ライセンス / GitHub リポジトリ） */}
+      <AboutSection />
 
       <div>
         <Button

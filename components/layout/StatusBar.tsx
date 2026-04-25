@@ -3,6 +3,7 @@
 import { Cpu, GitBranch, Zap } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { VersionLabel } from "@/components/layout/VersionLabel";
 import { useMonitorStore } from "@/lib/stores/monitor";
 import { useOAuthUsageStore } from "@/lib/stores/oauth-usage";
 import { useProjectStore } from "@/lib/stores/project";
@@ -131,6 +132,8 @@ export function StatusBar() {
           </kbd>
           <span>ヘルプ</span>
         </span>
+        {/* v1.22.2: アプリのバージョン番号（Tauri getVersion() で動的取得） */}
+        <VersionLabel />
       </div>
     </footer>
     </TooltipProvider>

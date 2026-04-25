@@ -11,6 +11,13 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.22.2] - 2026-04-25
+
+### Added
+
+- StatusBar 右端に Sumi のバージョン番号を表示するよう追加
+- Settings に About セクションを追加し、バージョン / ライセンス / GitHub リポジトリのリンクを表示
+
 ## [v1.22.1] - 2026-04-25
 
 ### Fixed
