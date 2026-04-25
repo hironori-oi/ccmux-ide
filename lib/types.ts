@@ -838,6 +838,8 @@ export const DEFAULT_PERMISSION_MODE: PermissionMode = "default";
  * - `cpuPercent`: CPU 使用率 (%, 0.0..100.0 *コア合算ではない*)
  * - `memoryMb`: 物理メモリ使用量 (MB, 整数)
  * - `isSelf`: Sumi 自身の pid なら true。frontend は kill 候補から除外する判定に使う。
+ * - `isSumiSpawned` (v1.28.0): Sumi の組込ターミナル (pty) で起動した process ツリー
+ *   に含まれるなら true。「Sumi 起動分のみ」filter および 「Sumi」バッジ表示に使う。
  */
 export interface LocalServer {
   pid: number;
@@ -849,4 +851,5 @@ export interface LocalServer {
   cpuPercent: number;
   memoryMb: number;
   isSelf: boolean;
+  isSumiSpawned: boolean;
 }

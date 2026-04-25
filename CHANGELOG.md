@@ -11,6 +11,21 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.28.0] - 2026-04-26
+
+### Added
+
+- LocalServersPanel に「Sumi 起動分のみ / すべて」の表示切替を追加 (既定: Sumi 起動分のみ)
+- Rust の list_local_servers に filter_by_sumi_only パラメータを追加
+- Sumi の pty プロセスツリーに含まれる pid のみ filter (子孫プロセスも再帰的に展開)
+- 各 row に「Sumi」バッジを表示し、すべてモードでも Sumi 起動分を識別可能に
+- localStorage で toggle 状態を persist
+
+### Fixed
+
+- 他アプリの dev server や OS の listen port が混在表示される不具合を修正
+- Sumi 経由で起動した npm run dev / python -m http.server 等のみ既定表示
+
 ## [v1.27.0] - 2026-04-26
 
 ### Added

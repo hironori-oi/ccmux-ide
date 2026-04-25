@@ -19,6 +19,21 @@
 //!    `[::]:3000` のような重複は **同 pid + 同 port** で 1 行に集約。代表 host は
 //!    優先順位 (`127.0.0.1` > `::1` > `0.0.0.0` > その他) で 1 つ選ぶ。
 //!
+//! ## v1.28.0: Sumi 起動分の絞り込み
+//!
+//! v1.23.0 では OS 上の **全 LISTEN port** を返していたが、他アプリの dev
+//! server や OS 自身の listen port (例: macOS mDNSResponder, Windows svchost) が
+//! 混在し、開発者の認知負荷が高かった。v1.28.0 で:
+//!
+//! 1. `PtyState` から全 pty の pid を取得 (portable-pty Child::process_id)。
+//! 2. sysinfo で全プロセスを 1 回 refresh し、`Process::parent()` 逆引きで
+//!    pty pid を root とした **子孫プロセス pid 集合**を BFS で構築。
+//! 3. `LocalServer` に `is_sumi_spawned: bool` を付与し、`filter_by_sumi_only=true`
+//!    のときは Set に含まれる pid のみ返す。
+//!
+//! 自プロセス pid (Sumi 自身) は引き続き `is_self=true` で識別され、kill 候補から
+//! 除外される。
+//!
 //! ## kill 方針
 //!
 //! - `force=false`: SIGTERM (Unix) / Process::kill_with(Signal::Term) (sysinfo は
@@ -32,9 +47,10 @@
 //! - LISTEN 以外の状態は frontend に出さない (TIME_WAIT 大量発生時の noise 抑制)。
 //! - 権限不足 / pid 既存しないは Err 文字列で返し、frontend 側で toast.error。
 //! - Sumi 自身の pty 子プロセス由来 (例: pty 内で `npm run dev` した process) は
-//!   `is_self=false` で扱う (Sumi 本体と pid が異なるため)。
+//!   `is_self=false` で扱う (Sumi 本体と pid が異なるため) が、`is_sumi_spawned=true`
+//!   で識別できる。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use netstat2::{
@@ -42,6 +58,9 @@ use netstat2::{
 };
 use serde::Serialize;
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
+use tauri::State;
+
+use crate::commands::pty::PtyState;
 
 /// Frontend へ返す 1 サーバー行。
 ///
@@ -69,17 +88,98 @@ pub struct LocalServer {
     pub memory_mb: u64,
     /// **Sumi 自身の pid なら true**。Frontend で kill 候補から除外する判定に使う。
     pub is_self: bool,
+    /// **Sumi の pty (組込ターミナル) で起動した process ツリーに含まれる**なら true
+    /// (v1.28.0)。frontend は `Sumi` バッジ表示と「Sumi 起動分のみ」filter に使う。
+    pub is_sumi_spawned: bool,
 }
 
 /// LISTEN 中の localhost サーバー一覧を返す。
 ///
+/// # Args
+/// - `filter_by_sumi_only`: true なら Sumi の pty プロセスツリーに含まれる
+///   pid のみ返す (v1.28.0)。false (= 既存挙動) なら全 LISTEN port を返す。
+///
 /// 失敗 (権限不足 / OS API エラー) は `Err(String)` で返す。
-#[tauri::command]
-pub fn list_local_servers() -> Result<Vec<LocalServer>, String> {
-    list_local_servers_impl().map_err(|e| format!("list_local_servers failed: {e}"))
+#[tauri::command(rename_all = "camelCase")]
+pub fn list_local_servers(
+    pty_state: State<'_, PtyState>,
+    filter_by_sumi_only: bool,
+) -> Result<Vec<LocalServer>, String> {
+    // Sumi の pty pid 集合 (空の場合もあり)。
+    let pty_root_pids = collect_pty_root_pids(&pty_state);
+    list_local_servers_impl(&pty_root_pids, filter_by_sumi_only)
+        .map_err(|e| format!("list_local_servers failed: {e}"))
 }
 
-fn list_local_servers_impl() -> anyhow::Result<Vec<LocalServer>> {
+/// `PtyState::ptys` から portable-pty Child の pid を集める。
+///
+/// pty が一つも無い時は空 Set。Child::process_id は Option<u32> なので、None
+/// (= 既に exit した child) は除外する。
+fn collect_pty_root_pids(pty_state: &State<'_, PtyState>) -> HashSet<u32> {
+    let mut roots = HashSet::new();
+    if let Ok(map) = pty_state.ptys.lock() {
+        for handle in map.values() {
+            if let Ok(child) = handle.child.lock() {
+                if let Some(pid) = child.process_id() {
+                    roots.insert(pid);
+                }
+            }
+        }
+    }
+    roots
+}
+
+/// pty pid を root とした子孫プロセスの pid 集合を BFS で構築する。
+///
+/// # ロジック
+/// 1. sysinfo の全プロセス map を 1 回 build (`refresh_processes`)。
+/// 2. parent_pid → children list の逆引き map を build (O(N))。
+/// 3. 各 root から BFS で descendant を集める (cycle 不在前提だが念のため
+///    visited set で防御)。
+///
+/// # 計算量
+/// O(N) (N=システムの全プロセス数)、繰り返し呼び出さないこと。
+fn collect_sumi_descendant_pids(roots: &HashSet<u32>, sys: &System) -> HashSet<u32> {
+    if roots.is_empty() {
+        return HashSet::new();
+    }
+
+    // parent_pid → children pid list の逆引き map を build。
+    let mut children_map: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::new();
+    for (pid, proc_) in sys.processes() {
+        if let Some(parent) = proc_.parent() {
+            children_map
+                .entry(parent.as_u32())
+                .or_default()
+                .push(pid.as_u32());
+        }
+    }
+
+    // BFS で root + descendant を集める。
+    let mut result: HashSet<u32> = HashSet::new();
+    let mut queue: VecDeque<u32> = VecDeque::new();
+    for r in roots {
+        if result.insert(*r) {
+            queue.push_back(*r);
+        }
+    }
+    while let Some(pid) = queue.pop_front() {
+        if let Some(children) = children_map.get(&pid) {
+            for c in children {
+                if result.insert(*c) {
+                    queue.push_back(*c);
+                }
+            }
+        }
+    }
+    result
+}
+
+fn list_local_servers_impl(
+    pty_root_pids: &HashSet<u32>,
+    filter_by_sumi_only: bool,
+) -> anyhow::Result<Vec<LocalServer>> {
     // 1. netstat2 で LISTEN 中の TCP socket を列挙。UDP は対象外 (HTTP / dev サーバ用途)。
     let af_flags = AddressFamilyFlags::IPV4 | AddressFamilyFlags::IPV6;
     let proto_flags = ProtocolFlags::TCP;
@@ -87,8 +187,6 @@ fn list_local_servers_impl() -> anyhow::Result<Vec<LocalServer>> {
         .map_err(|e| anyhow::anyhow!("netstat2: {e}"))?;
 
     // 2. (pid, port) 単位で集約するため一旦中間 map に集める。
-    //    値は (host_priority, host, raw_pid)。同 (pid, port) で複数 host が来たら
-    //    priority が高い (= 数値が小さい) 方を採用。
     let mut acc: BTreeMap<(u32, u16), AggEntry> = BTreeMap::new();
     let self_pid: u32 = std::process::id();
 
@@ -123,19 +221,28 @@ fn list_local_servers_impl() -> anyhow::Result<Vec<LocalServer>> {
 
     // 3. sysinfo で pid → metadata 解決。一括 refresh で必要 pid だけ refresh する
     //    (全プロセス refresh は重い)。
-    let pids: Vec<Pid> = acc.values().map(|e| Pid::from_u32(e.pid)).collect();
     let mut sys = System::new_with_specifics(
         RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
     );
-    // 全プロセスを 1 度 refresh (cpu / memory 用)。
+    // 全プロセスを 1 度 refresh (cpu / memory 用、parent_pid 逆引き用にも必要)。
     sys.refresh_processes();
-    // 念のため named pids 再 refresh (cpu_usage は 2 回 refresh で値が安定するが、
-    // Phase 1 MVP では initial value で割り切る)。
-    let _ = pids; // marker: 必要なら refresh_pids で絞り込み可能。
 
-    // 4. struct LocalServer に変換。
+    // 4. v1.28.0: Sumi の pty 子孫 pid 集合を build。
+    //    pty が空なら descendants も空 (filter_by_sumi_only=true で全件除外される)。
+    let sumi_descendants = collect_sumi_descendant_pids(pty_root_pids, &sys);
+
+    // 5. struct LocalServer に変換。
     let mut out: Vec<LocalServer> = Vec::with_capacity(acc.len());
     for ((pid, port), entry) in acc {
+        // v1.28.0: Sumi 自身は filter から除外 (既存 is_self ガード維持)。
+        let is_self = pid == self_pid;
+        let is_sumi_spawned = !is_self && sumi_descendants.contains(&pid);
+
+        // filter モード: Sumi 起動分のみ表示する場合、is_sumi_spawned=false は skip。
+        if filter_by_sumi_only && !is_sumi_spawned {
+            continue;
+        }
+
         let proc = sys.process(Pid::from_u32(pid));
         let (process_name, command_line, started_at, cpu_percent, memory_mb) = match proc {
             Some(p) => {
@@ -170,7 +277,8 @@ fn list_local_servers_impl() -> anyhow::Result<Vec<LocalServer>> {
             started_at,
             cpu_percent,
             memory_mb,
-            is_self: pid == self_pid,
+            is_self,
+            is_sumi_spawned,
         });
     }
 
@@ -341,13 +449,14 @@ fn force_kill(pid: u32) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// list_local_servers は LISTEN socket が 1 つも無い場合は空を返す
-    /// (panic しないことを確認)。
+    /// list_local_servers_impl は LISTEN socket が 1 つも無い場合は空を返す
+    /// (panic しないことを確認)。filter_by_sumi_only=false で従来挙動。
     #[test]
     fn list_returns_ok_or_skips_when_no_listen_sockets() {
         // CI / 通常環境では LISTEN port が存在する保証がない。
         // 失敗時は (Linux user namespace 等で) Err になりうるので Result を緩く受ける。
-        let res = list_local_servers_impl();
+        let empty_roots: HashSet<u32> = HashSet::new();
+        let res = list_local_servers_impl(&empty_roots, false);
         match res {
             Ok(v) => {
                 // 全 entry の pid > 0 / port > 0 を invariant で確認。
@@ -361,6 +470,57 @@ mod tests {
                 // は許容。手元 / GitHub Actions では走らないので xfail 扱い。
             }
         }
+    }
+
+    /// v1.28.0: filter_by_sumi_only=true で root pid 集合が空のとき、
+    /// 結果は **常に空** (= LISTEN socket が何個あっても全件 skip される)。
+    #[test]
+    fn list_with_sumi_only_filter_and_no_pty_yields_empty() {
+        let empty_roots: HashSet<u32> = HashSet::new();
+        let res = list_local_servers_impl(&empty_roots, true);
+        match res {
+            Ok(v) => {
+                assert!(
+                    v.is_empty(),
+                    "filter_by_sumi_only=true with empty pty roots should yield empty, got {} entries",
+                    v.len()
+                );
+            }
+            Err(_) => {
+                // netstat2 が permission 不足のときは xfail 扱い。
+            }
+        }
+    }
+
+    /// v1.28.0: collect_sumi_descendant_pids は空 root 集合に対して空を返す。
+    #[test]
+    fn collect_descendants_empty_roots_yields_empty() {
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+        );
+        sys.refresh_processes();
+        let empty: HashSet<u32> = HashSet::new();
+        let result = collect_sumi_descendant_pids(&empty, &sys);
+        assert!(result.is_empty());
+    }
+
+    /// v1.28.0: collect_sumi_descendant_pids は **自プロセス pid を root に渡せば
+    /// 少なくとも自分自身を含む** (自プロセスは sysinfo に必ず存在するため)。
+    /// これで BFS の起点動作と「root を結果に含める」契約を確認する。
+    #[test]
+    fn collect_descendants_includes_self_root() {
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+        );
+        sys.refresh_processes();
+        let self_pid = std::process::id();
+        let mut roots = HashSet::new();
+        roots.insert(self_pid);
+        let result = collect_sumi_descendant_pids(&roots, &sys);
+        assert!(
+            result.contains(&self_pid),
+            "result should contain root pid {self_pid}"
+        );
     }
 
     /// host_priority は文書化された優先度どおりに sort される。
@@ -410,7 +570,83 @@ mod tests {
             cpu_percent: 0.0,
             memory_mb: 0,
             is_self: self_pid == std::process::id(),
+            is_sumi_spawned: false,
         };
         assert!(s.is_self);
+        assert!(!s.is_sumi_spawned);
+    }
+
+    /// v1.28.0: 実機 LISTEN port に対する filter 動作を end-to-end で検証する
+    /// integration test。事前条件 (テスト caller が外部で http-server を 18080 で
+    /// 起動している) を要求するため `#[ignore]` 扱い。手動実行:
+    ///   cargo test --lib commands::local_servers::tests::real_filter_excludes_external_listen -- --ignored --nocapture
+    ///
+    /// シナリオ:
+    /// 1. roots=空 + filter=false で 18080 を含む全 LISTEN port が見える
+    /// 2. roots=空 + filter=true で 18080 は **見えない** (Sumi 起動でないため)
+    #[test]
+    #[ignore = "実機 http-server :18080 を別途起動した状態でのみ走る"]
+    fn real_filter_excludes_external_listen() {
+        let empty: HashSet<u32> = HashSet::new();
+        // 1. filter OFF: 全件
+        let all = list_local_servers_impl(&empty, false).expect("OS netstat ok");
+        let saw_18080 = all.iter().any(|s| s.port == 18080);
+        eprintln!(
+            "[real_filter] all={} entries, contains :18080 = {saw_18080}",
+            all.len()
+        );
+        assert!(
+            saw_18080,
+            "expected to see :18080 from external http-server in unfiltered list"
+        );
+
+        // 2. filter ON + roots 空: Sumi 起動分が無い前提で空集合
+        let filtered = list_local_servers_impl(&empty, true).expect("OS netstat ok");
+        eprintln!("[real_filter] filtered={} entries", filtered.len());
+        assert!(
+            filtered.is_empty(),
+            "expected empty list when roots empty and filter=true, got {} entries",
+            filtered.len()
+        );
+
+        // 3. filter ON + 18080 の pid を root に渡す: 18080 が見える
+        let pid_18080 = all.iter().find(|s| s.port == 18080).map(|s| s.pid);
+        if let Some(pid) = pid_18080 {
+            let mut roots = HashSet::new();
+            roots.insert(pid);
+            let with_root = list_local_servers_impl(&roots, true).expect("OS netstat ok");
+            let saw = with_root.iter().any(|s| s.port == 18080 && s.is_sumi_spawned);
+            eprintln!(
+                "[real_filter] with_root_pid={pid}: {} entries, sees :18080 with is_sumi_spawned=true: {saw}",
+                with_root.len()
+            );
+            assert!(
+                saw,
+                "expected :18080 to appear with is_sumi_spawned=true when its pid is in roots"
+            );
+        }
+    }
+
+    /// v1.28.0: LocalServer が camelCase で serialize され、is_sumi_spawned が
+    /// `isSumiSpawned` として frontend に届く。
+    #[test]
+    fn local_server_serializes_is_sumi_spawned_camel_case() {
+        let s = LocalServer {
+            pid: 1000,
+            port: 3000,
+            host: "127.0.0.1".to_string(),
+            process_name: "node".to_string(),
+            command_line: None,
+            started_at: None,
+            cpu_percent: 0.0,
+            memory_mb: 0,
+            is_self: false,
+            is_sumi_spawned: true,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"isSumiSpawned\":true"), "json: {json}");
+        assert!(json.contains("\"isSelf\":false"), "json: {json}");
+        assert!(!json.contains("is_sumi_spawned"));
+        assert!(!json.contains("is_self"));
     }
 }

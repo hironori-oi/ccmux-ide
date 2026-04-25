@@ -3,7 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { ExternalLink, Loader2, RefreshCw, Server, Square, SquarePlus } from "lucide-react";
+import {
+  ExternalLink,
+  Filter,
+  Globe,
+  Loader2,
+  RefreshCw,
+  Server,
+  Square,
+  SquarePlus,
+} from "lucide-react";
 
 import {
   AlertDialog,
@@ -32,6 +41,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * PRJ-012 v1.23.0 / DEC-069: localhost サーバー管理パネル (Phase 1 MVP)。
+ * v1.28.0: 「Sumi 起動分のみ / すべて」filter toggle + 「Sumi」バッジ表示を追加。
  *
  * ## 概要
  * 開発者が起動した dev server (next dev :3000 / vite :5173 / python :8000 等) を
@@ -40,9 +50,18 @@ import { cn } from "@/lib/utils";
  * 状態を逐一 ps / taskkill で探す必要があったが、本 panel で 1 クリック解決する。
  *
  * ## データソース
- * Rust command `list_local_servers()` (sysinfo + netstat2) を **5 秒間隔で polling**。
+ * Rust command `list_local_servers({ filterBySumiOnly })` (sysinfo + netstat2) を
+ * **5 秒間隔で polling**。
  * tab 非アクティブ時 (document.visibilityState !== "visible") は polling 停止して
  * 無駄な OS API 呼び出しを抑制。component unmount 時に cleanup で interval clear。
+ *
+ * ## v1.28.0: Sumi 起動分のみ filter
+ * - header の toggle button で「Sumi 起動分のみ」 ON/OFF を切替。既定 ON。
+ * - 状態は `localStorage` (`sumi:local-servers:sumi-only`) に persist。
+ * - ON のときは Rust 側で Sumi の pty プロセスツリー (子孫含む) に含まれる
+ *   pid のみ返るので、他アプリ dev server / OS listen port が混ざらない。
+ * - OFF のときは v1.23.0 と同じく **全 LISTEN port** を表示し、各 row に
+ *   「Sumi」バッジ (緑) で Sumi 起動分を識別可能に。
  *
  * ## 操作
  * - 外部で開く : `@tauri-apps/plugin-shell` の open() で OS デフォルトブラウザに `http://{host}:{port}`
@@ -53,19 +72,52 @@ import { cn } from "@/lib/utils";
  * Sumi 自身の pid は `is_self=true` で返ってくるので、停止ボタンは disable。
  * （Rust 側でも self-pid 拒否を二重ガード）
  */
+
+const SUMI_ONLY_LS_KEY = "sumi:local-servers:sumi-only";
+
+/**
+ * localStorage から「Sumi 起動分のみ」設定を読む。SSR 安全 (typeof window check)。
+ * 未設定 / parse エラー時は **既定 true** (オーナー要望優先)。
+ */
+function readSumiOnlyPref(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    const v = window.localStorage.getItem(SUMI_ONLY_LS_KEY);
+    if (v === null) return true;
+    return v === "1" || v === "true";
+  } catch {
+    return true;
+  }
+}
+
+function writeSumiOnlyPref(value: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SUMI_ONLY_LS_KEY, value ? "1" : "0");
+  } catch {
+    // localStorage 書込失敗 (容量超過 / private browse 等) は無視。
+  }
+}
+
 export function LocalServersPanel() {
   const [servers, setServers] = useState<LocalServer[]>([]);
   // v1.25.0: 「初回 / 手動 refresh の in-flight」と「自動 polling 中」を区別。
-  // - loading: 初回 fetch でデータが何もない状態
-  // - manualRefreshing: 明示的な再取得ボタンが in-flight (spinner 表示用)
-  // - polling は header の緑 dot で常時可視化
   const [loading, setLoading] = useState(true);
   const [manualRefreshing, setManualRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [killTarget, setKillTarget] = useState<LocalServer | null>(null);
   const [killing, setKilling] = useState(false);
   const [pollingActive, setPollingActive] = useState(false);
+  // v1.28.0: 「Sumi 起動分のみ」 toggle (既定 true、localStorage persist)。
+  // useState の initializer で同期的に localStorage を読むことで、再 mount 時に
+  // 直前の選択を即時復元する (hydration 後に値が変わる flash を回避)。
+  const [sumiOnly, setSumiOnly] = useState<boolean>(() => readSumiOnlyPref());
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 最新の sumiOnly を polling callback から参照するための ref (closure 鮮度問題回避)。
+  const sumiOnlyRef = useRef(sumiOnly);
+  useEffect(() => {
+    sumiOnlyRef.current = sumiOnly;
+  }, [sumiOnly]);
 
   /**
    * 取得処理本体。
@@ -73,12 +125,21 @@ export function LocalServersPanel() {
    * - `mode === "auto"` (polling): spinner は出さない、結果だけ更新
    * - `mode === "manual"` (手動 refresh): manualRefreshing を立てて spinner 表示
    * - `mode === "initial"` (mount): loading を立てて初回 skeleton 表示
+   *
+   * v1.28.0: filterBySumiOnly を Rust に渡す。`overrideSumiOnly` 指定時は
+   * toggle 切替の即時 fetch で「state 反映前の最新値」を渡すために使う。
    */
   const fetchServers = useCallback(
-    async (mode: "auto" | "manual" | "initial" = "auto") => {
+    async (
+      mode: "auto" | "manual" | "initial" = "auto",
+      overrideSumiOnly?: boolean,
+    ) => {
       if (mode === "manual") setManualRefreshing(true);
       try {
-        const list = await invoke<LocalServer[]>("list_local_servers");
+        const filterBySumiOnly = overrideSumiOnly ?? sumiOnlyRef.current;
+        const list = await invoke<LocalServer[]>("list_local_servers", {
+          filterBySumiOnly,
+        });
         setServers(list);
         setError(null);
       } catch (e) {
@@ -144,6 +205,18 @@ export function LocalServersPanel() {
         document.removeEventListener("visibilitychange", handleVisibility);
       }
     };
+  }, [fetchServers]);
+
+  // toggle 切替: state + localStorage 更新 + 即時再 fetch。
+  const handleSumiOnlyToggle = useCallback(() => {
+    setSumiOnly((prev) => {
+      const next = !prev;
+      writeSumiOnlyPref(next);
+      // 切替後の最新値で即 fetch (state 反映を待たず override で渡す)。
+      sumiOnlyRef.current = next;
+      void fetchServers("manual", next);
+      return next;
+    });
   }, [fetchServers]);
 
   // 外部ブラウザで開く。
@@ -212,14 +285,20 @@ export function LocalServersPanel() {
     });
   }, [servers]);
 
+  // 空状態文言: toggle に応じて切替。
+  const emptyMessage = sumiOnly
+    ? "Sumi が起動したサーバーはありません。ターミナルで `npm run dev` 等を実行すると表示されます"
+    : "稼働中の localhost サーバーはありません";
+
   return (
     <TooltipProvider delayDuration={300}>
       <section
         className="flex min-h-0 flex-1 flex-col"
         aria-label="localhost サーバー一覧"
       >
-        {/* ヘッダ: 件数 + polling dot + 手動 refresh
-            v1.25.0: spinner は手動再取得 in-flight 時のみ。自動 polling は緑 pulse dot で常時可視化。 */}
+        {/* ヘッダ: 件数 + polling dot + filter toggle + 手動 refresh
+            v1.25.0: spinner は手動再取得 in-flight 時のみ。自動 polling は緑 pulse dot で常時可視化。
+            v1.28.0: 「Sumi 起動分のみ / すべて」 toggle button を追加。 */}
         <header className="flex shrink-0 items-center justify-between border-b px-2 py-1.5">
           <div className="flex items-center gap-1.5 text-xs">
             <Server className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
@@ -251,33 +330,65 @@ export function LocalServersPanel() {
               </TooltipContent>
             </Tooltip>
           </div>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-6 w-6"
-                onClick={() => void fetchServers("manual")}
-                disabled={manualRefreshing || loading}
-                aria-label="再取得"
-              >
-                <RefreshCw
+          <div className="flex items-center gap-0.5">
+            {/* v1.28.0: filter toggle (Sumi 起動分のみ / すべて) */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
                   className={cn(
-                    "h-3 w-3",
-                    // v1.25.0: spinner は manual refresh in-flight 時のみ立てる。
-                    // 5 秒間隔の auto polling 中は spinner 不要 (header の緑 dot で表現)。
-                    manualRefreshing && "animate-spin text-muted-foreground",
+                    "h-6 w-6",
+                    sumiOnly && "text-emerald-600 hover:text-emerald-700",
                   )}
-                  aria-hidden
-                />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs">
-              {manualRefreshing
-                ? "再取得中..."
-                : "今すぐ再取得 (5 秒ごと自動更新中)"}
-            </TooltipContent>
-          </Tooltip>
+                  onClick={handleSumiOnlyToggle}
+                  aria-label={
+                    sumiOnly
+                      ? "Sumi 起動分のみ表示中（クリックですべて表示に切替）"
+                      : "すべて表示中（クリックで Sumi 起動分のみに切替）"
+                  }
+                  aria-pressed={sumiOnly}
+                >
+                  {sumiOnly ? (
+                    <Filter className="h-3 w-3" aria-hidden />
+                  ) : (
+                    <Globe className="h-3 w-3" aria-hidden />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {sumiOnly
+                  ? "Sumi 起動分のみ表示中。クリックで OS の全 LISTEN port を表示"
+                  : "すべての LISTEN port を表示中。クリックで Sumi 起動分のみに絞る"}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6"
+                  onClick={() => void fetchServers("manual")}
+                  disabled={manualRefreshing || loading}
+                  aria-label="再取得"
+                >
+                  <RefreshCw
+                    className={cn(
+                      "h-3 w-3",
+                      // v1.25.0: spinner は manual refresh in-flight 時のみ立てる。
+                      manualRefreshing && "animate-spin text-muted-foreground",
+                    )}
+                    aria-hidden
+                  />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {manualRefreshing
+                  ? "再取得中..."
+                  : "今すぐ再取得 (5 秒ごと自動更新中)"}
+              </TooltipContent>
+            </Tooltip>
+          </div>
         </header>
 
         {/* 本体 */}
@@ -292,7 +403,7 @@ export function LocalServersPanel() {
           </div>
         ) : servers.length === 0 ? (
           <div className="flex flex-1 items-center justify-center px-3 text-center text-xs text-muted-foreground">
-            稼働中の localhost サーバーはありません
+            {emptyMessage}
           </div>
         ) : (
           <ScrollArea className="flex-1">
@@ -395,7 +506,7 @@ function ServerRow({
           aria-hidden
         />
         <div className="min-w-0 flex-1">
-          {/* 1 行目: port + process name + pid */}
+          {/* 1 行目: port + process name + (Sumi バッジ) + pid */}
           <div className="flex items-center gap-1.5 text-xs">
             <span className="font-mono font-semibold tabular-nums">
               {server.port}
@@ -403,6 +514,15 @@ function ServerRow({
             <span className="truncate font-medium" title={server.processName}>
               {server.processName}
             </span>
+            {/* v1.28.0: Sumi 起動分バッジ。「すべて」モードでも識別できる。 */}
+            {server.isSumiSpawned && !server.isSelf && (
+              <span
+                className="shrink-0 rounded bg-emerald-500/15 px-1 py-px text-[9px] font-medium text-emerald-700 dark:text-emerald-400"
+                title="Sumi の組込ターミナルで起動したプロセス"
+              >
+                Sumi
+              </span>
+            )}
             <span className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
               PID:{server.pid}
             </span>
