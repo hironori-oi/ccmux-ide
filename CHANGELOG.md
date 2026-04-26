@@ -11,6 +11,14 @@ Release body 自動生成は `.github/workflows/release.yml` が awk でタグ c
 
 ## [Unreleased]
 
+## [v1.28.3] - 2026-04-26
+
+### Fixed
+
+- 画像添付してチャット送信時に「送信に失敗しました: invalid args 'attachments' for command 'send_agent_prompt': invalid type: map, expected a string」エラーになる致命的不具合を修正
+- 真因: Frontend が `attachments.map((a) => ({ path: a.path }))` で object 配列を送っていたが、Rust 側 send_agent_prompt は `Vec<String>` (string 配列、各要素は path) を期待していた型不一致
+- `attachments.map((a) => a.path)` に変更して string 配列を送信するよう修正
+
 ## [v1.28.2] - 2026-04-26
 
 ### Fixed

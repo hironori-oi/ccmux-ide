@@ -477,7 +477,11 @@ export function InputArea({
         sessionId,
         id,
         prompt,
-        attachments: attachments.map((a) => ({ path: a.path })),
+        // v1.28.3: Rust side `send_agent_prompt(attachments: Vec<String>)` が
+        // string 配列 (path のみ) を期待しているため、object 配列 [{ path }] から
+        // string 配列に変換する。旧実装は object 配列を送って serde で
+        // "invalid type: map, expected a string" エラーになっていた。
+        attachments: attachments.map((a) => a.path),
         resume: sdkSessionId,
         options: perQueryOptions,
       });
